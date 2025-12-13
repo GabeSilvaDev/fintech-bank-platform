@@ -1,0 +1,382 @@
+name: fintech-platform
+
+services:
+  kafka:
+    image: apache/kafka:latest
+    container_name: fintech-kafka
+    environment:
+      - CLUSTER_ID=5L6g3nShT-eMCtK--X86sw
+      - KAFKA_NODE_ID=1
+      - KAFKA_PROCESS_ROLES=controller,broker
+      - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+
+      - KAFKA_LISTENERS=PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:29092
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092,EXTERNAL://localhost:29092
+      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      - KAFKA_INTER_BROKER_LISTENER_NAME=PLAINTEXT
+
+      - KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
+      - KAFKA_NUM_PARTITIONS=3
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1
+      - KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS=0
+    ports:
+      - "29092:29092"
+      - "9092:9092"
+    volumes:
+      - kafka_data:/tmp/kraft-combined-logs
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks:
+      - fintech-net
+
+    profiles:
+      - infra
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: fintech-kafka-ui
+    environment:
+      - KAFKA_CLUSTERS_0_NAME=fintech
+      - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:9092
+    ports:
+      - "8090:8080"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    networks:
+      - fintech-net
+    profiles:
+      - infra
+
+  cassandra:
+    image: cassandra:4.1
+    container_name: fintech-cassandra
+    environment:
+      - CASSANDRA_CLUSTER_NAME=fintech
+      - CASSANDRA_DC=dc1
+      - CASSANDRA_RACK=rack1
+      - MAX_HEAP_SIZE=512M
+      - HEAP_NEWSIZE=128M
+    ports:
+      - "9042:9042"
+    volumes:
+      - cassandra_data:/var/lib/cassandra
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'DESCRIBE KEYSPACES' 127.0.0.1 9042 >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      retries: 20
+    networks:
+      - fintech-net
+
+    profiles:
+      - infra
+
+  golang:
+    build:
+      context: ..
+      dockerfile: deployments/docker/golang/Dockerfile
+    container_name: fintech-golang
+    working_dir: /workspace
+    volumes:
+      - ..:/workspace:cached
+      - go_mod_cache:/go/pkg/mod
+      - go_build_cache:/root/.cache/go-build
+    environment:
+      - GOPATH=/go
+    depends_on:
+      kafka:
+        condition: service_healthy
+      cassandra:
+        condition: service_healthy
+    networks:
+      - fintech-net
+
+    profiles:
+      - dev
+
+  api-gateway:
+    build:
+      context: ../api-gateway
+      dockerfile: Dockerfile
+    container_name: fintech-api-gateway
+    working_dir: /app
+    volumes:
+      - ../api-gateway:/app
+      - go_mod_cache:/go/pkg/mod
+      - go_build_cache:/root/.cache/go-build
+    environment:
+      - HTTP_PORT=8080
+      - KAFKA_BROKERS=kafka:9092
+      - CASSANDRA_HOST=cassandra
+      - CASSANDRA_PORT=9042
+    depends_on:
+      kafka:
+        condition: service_healthy
+      cassandra:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    networks:
+      - fintech-net
+    profiles:
+      - app
+
+  auth-service:
+    build:
+      context: ../services/auth-service
+      dockerfile: Dockerfile
+    container_name: fintech-auth-service
+    working_dir: /app
+    volumes:
+      - ../services/auth-service:/app
+      - go_mod_cache:/go/pkg/mod
+      - go_build_cache:/root/.cache/go-build
+    environment:
+      - HTTP_PORT=8081
+      - KAFKA_BROKERS=kafka:9092
+      - CASSANDRA_HOST=cassandra
+      - CASSANDRA_PORT=9042
+    depends_on:
+      kafka:
+        condition: service_healthy
+      cassandra:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    networks:
+      - fintech-net
+    profiles:
+      - app
+
+  customer-service:
+    build:
+      context: ../services/customer-service
+      dockerfile: Dockerfile
+    container_name: fintech-customer-service
+    working_dir: /app
+    volumes:
+      - ../services/customer-service:/app
+      - go_mod_cache:/go/pkg/mod
+      - go_build_cache:/root/.cache/go-build
+    environment:
+      - HTTP_PORT=8082
+      - KAFKA_BROKERS=kafka:9092
+      - CASSANDRA_HOST=cassandra
+      - CASSANDRA_PORT=9042
+    depends_on:
+      kafka:
+        condition: service_healthy
+      cassandra:
+        condition: service_healthy
+    ports:
+      - "8082:8082"
+    networks:
+      - fintech-net
+    profiles:
+      - app
+
+  account-service:
+    build:
+      context: ../services/account-service
+      dockerfile: Dockerfile
+    container_name: fintech-account-service
+    working_dir: /app
+    volumes:
+      - ../services/account-service:/app
+      - go_mod_cache:/go/pkg/mod
+      - go_build_cache:/root/.cache/go-build
+    environment:
+      - HTTP_PORT=8083
+      - KAFKA_BROKERS=kafka:9092
+      - CASSANDRA_HOST=cassandra
+      - CASSANDRA_PORT=9042
+    depends_on:
+      kafka:
+        condition: service_healthy
+      cassandra:
+        condition: service_healthy
+    ports:
+      - "8083:8083"
+    networks:
+      - fintech-net
+    profiles:
+      - app
+
+  transaction-service:
+    build:
+      context: ../services/transaction-service
+      dockerfile: Dockerfile
+    container_name: fintech-transaction-service
+    working_dir: /app
+    volumes:
+      - ../services/transaction-service:/app
+      - go_mod_cache:/go/pkg/mod
+      - go_build_cache:/root/.cache/go-build
+    environment:
+      - HTTP_PORT=8084
+      - KAFKA_BROKERS=kafka:9092
+      - CASSANDRA_HOST=cassandra
+      - CASSANDRA_PORT=9042
+    depends_on:
+      kafka:
+        condition: service_healthy
+      cassandra:
+        condition: service_healthy
+    ports:
+      - "8084:8084"
+    networks:
+      - fintech-net
+    profiles:
+      - app
+
+  ledger-service:
+    build:
+      context: ../services/ledger-service
+      dockerfile: Dockerfile
+    container_name: fintech-ledger-service
+    working_dir: /app
+    volumes:
+      - ../services/ledger-service:/app
+      - go_mod_cache:/go/pkg/mod
+      - go_build_cache:/root/.cache/go-build
+    environment:
+      - HTTP_PORT=8085
+      - KAFKA_BROKERS=kafka:9092
+      - CASSANDRA_HOST=cassandra
+      - CASSANDRA_PORT=9042
+    depends_on:
+      kafka:
+        condition: service_healthy
+      cassandra:
+        condition: service_healthy
+    ports:
+      - "8085:8085"
+    networks:
+      - fintech-net
+    profiles:
+      - app
+
+  anti-fraud-service:
+    build:
+      context: ../services/anti-fraud-service
+      dockerfile: Dockerfile
+    container_name: fintech-anti-fraud-service
+    working_dir: /app
+    volumes:
+      - ../services/anti-fraud-service:/app
+      - go_mod_cache:/go/pkg/mod
+      - go_build_cache:/root/.cache/go-build
+    environment:
+      - HTTP_PORT=8086
+      - KAFKA_BROKERS=kafka:9092
+      - CASSANDRA_HOST=cassandra
+      - CASSANDRA_PORT=9042
+    depends_on:
+      kafka:
+        condition: service_healthy
+      cassandra:
+        condition: service_healthy
+    ports:
+      - "8086:8086"
+    networks:
+      - fintech-net
+    profiles:
+      - app
+
+  payment-service:
+    build:
+      context: ../services/payment-service
+      dockerfile: Dockerfile
+    container_name: fintech-payment-service
+    working_dir: /app
+    volumes:
+      - ../services/payment-service:/app
+      - go_mod_cache:/go/pkg/mod
+      - go_build_cache:/root/.cache/go-build
+    environment:
+      - HTTP_PORT=8087
+      - KAFKA_BROKERS=kafka:9092
+      - CASSANDRA_HOST=cassandra
+      - CASSANDRA_PORT=9042
+    depends_on:
+      kafka:
+        condition: service_healthy
+      cassandra:
+        condition: service_healthy
+    ports:
+      - "8087:8087"
+    networks:
+      - fintech-net
+    profiles:
+      - app
+
+  notification-service:
+    build:
+      context: ../services/notification-service
+      dockerfile: Dockerfile
+    container_name: fintech-notification-service
+    working_dir: /app
+    volumes:
+      - ../services/notification-service:/app
+      - go_mod_cache:/go/pkg/mod
+      - go_build_cache:/root/.cache/go-build
+    environment:
+      - HTTP_PORT=8088
+      - KAFKA_BROKERS=kafka:9092
+      - CASSANDRA_HOST=cassandra
+      - CASSANDRA_PORT=9042
+    depends_on:
+      kafka:
+        condition: service_healthy
+      cassandra:
+        condition: service_healthy
+    ports:
+      - "8088:8088"
+    networks:
+      - fintech-net
+    profiles:
+      - app
+
+  analytics-service:
+    build:
+      context: ../services/analytics-service
+      dockerfile: Dockerfile
+    container_name: fintech-analytics-service
+    working_dir: /app
+    volumes:
+      - ../services/analytics-service:/app
+      - go_mod_cache:/go/pkg/mod
+      - go_build_cache:/root/.cache/go-build
+    environment:
+      - HTTP_PORT=8089
+      - KAFKA_BROKERS=kafka:9092
+      - CASSANDRA_HOST=cassandra
+      - CASSANDRA_PORT=9042
+    depends_on:
+      kafka:
+        condition: service_healthy
+      cassandra:
+        condition: service_healthy
+    ports:
+      - "8089:8089"
+    networks:
+      - fintech-net
+    profiles:
+      - app
+
+networks:
+  fintech-net:
+    driver: bridge
+
+volumes:
+  kafka_data:
+  cassandra_data:
+  go_mod_cache:
+  go_build_cache:
