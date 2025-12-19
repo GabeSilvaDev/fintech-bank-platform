@@ -1,466 +1,481 @@
-# 🏦 Fintech Event-Driven Platform
+# 🏦 Fintech Bank Platform
 
-[![Go](https://img.shields.io/badge/Go-1.23+-00ADD8?style=flat&logo=go&logoColor=white)](https://golang.org/)
-[![Kafka](https://img.shields.io/badge/Apache%20Kafka-4.0-231F20?style=flat&logo=apachekafka&logoColor=white)](https://kafka.apache.org/)
-[![Cassandra](https://img.shields.io/badge/Cassandra-4.1-1287B1?style=flat&logo=apachecassandra&logoColor=white)](https://cassandra.apache.org/)
-[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=flat&logo=docker&logoColor=white)](https://www.docker.com/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+A modern banking platform built with microservices architecture in Go, using Kafka for asynchronous communication (event-driven) and Cassandra for distributed persistence.
 
-> A production-grade **educational fintech platform** built with **event-driven architecture**, **microservices**, and real-world banking patterns using **Golang** and **Apache Kafka**.
-
----
+🇧🇷 [Leia em Português](#-fintech-bank-platform-1)
 
 ## 📋 Table of Contents
 
-- [Overview](#-overview)
 - [Architecture](#-architecture)
-- [Tech Stack](#-tech-stack)
-- [Microservices](#-microservices)
-- [Getting Started](#-getting-started)
+- [Technologies](#-technologies)
+- [Prerequisites](#-prerequisites)
+- [Quick Start](#-quick-start)
 - [Project Structure](#-project-structure)
-- [Kafka Topics](#-kafka-topics)
-- [Data Model](#-data-model)
+- [Services](#-services)
+- [Infrastructure](#-infrastructure)
+- [Roadmap](#-roadmap-sprints)
 - [Contributing](#-contributing)
-- [License](#-license)
-- [Português](#-português)
 
----
-
-## 🎯 Overview
-
-This project simulates a **digital bank** with:
-
-- 👤 Customer registration (KYC)
-- 💳 Bank accounts management
-- 💸 Financial transactions
-- 📒 Double-entry ledger accounting
-- 🛡️ Anti-fraud system
-- 📧 Notifications
-- 📊 Analytics & reporting
-
-### Architectural Principles
-
-- ✅ Event-Driven Architecture (EDA)
-- ✅ Domain-Driven Design (DDD)
-- ✅ Clean Architecture
-- ✅ Decoupled Microservices
-- ✅ Observability by Default
-- ✅ Infrastructure as Code
-
----
-
-## 🏗️ Architecture
+## 🏗 Architecture
 
 ```
-┌─────────┐     ┌─────────────┐     ┌──────────────────┐
-│ Client  │────▶│ API Gateway │────▶│ Auth (Keycloak)  │
-└─────────┘     └──────┬──────┘     └────────┬─────────┘
-                       │                     │
-                       ▼                     ▼
-              ┌────────────────────────────────────────┐
-              │           Microservices                │
-              │  ┌─────────┐  ┌─────────┐  ┌────────┐  │
-              │  │Customer │  │Account  │  │  Tx    │  │
-              │  │ Service │  │ Service │  │Service │  │
-              │  └────┬────┘  └────┬────┘  └───┬────┘  │
-              └───────┼───────────┼───────────┼───────┘
-                      │           │           │
-                      ▼           ▼           ▼
-              ┌────────────────────────────────────────┐
-              │            Apache Kafka                │
-              │     (Event Bus / Message Broker)       │
-              └───────────────────┬────────────────────┘
-                                  │
-                      ┌───────────┼───────────┐
-                      ▼           ▼           ▼
-              ┌──────────┐ ┌──────────┐ ┌──────────┐
-              │  Ledger  │ │AntiFraud │ │Notifier  │
-              │ Service  │ │ Service  │ │ Service  │
-              └────┬─────┘ └──────────┘ └──────────┘
-                   │
-                   ▼
-              ┌──────────┐
-              │Cassandra │
-              │(Database)│
-              └──────────┘
+                    ┌─────────────────┐
+                    │   API Gateway   │
+                    │  (HTTP → Kafka) │
+                    └────────┬────────┘
+                             │
+                    ┌────────▼────────┐
+                    │      Kafka      │
+                    │  (KRaft Mode)   │
+                    └────────┬────────┘
+                             │
+        ┌────────────────────┼────────────────────┐
+        │                    │                    │
+    ┌───▼───────┐    ┌──────▼──────┐    ┌───────▼─────┐
+    │  Account  │    │ Transaction │    │   Payment   │
+    │  Service  │    │   Service   │    │   Service   │
+    │(Consumer) │    │ (Consumer)  │    │ (Consumer)  │
+    └─────┬─────┘    └──────┬──────┘    └───────┬─────┘
+          │                 │                    │
+          └─────────────────┼────────────────────┘
+                            │
+                    ┌───────▼────────┐
+                    │   Cassandra    │
+                    │  (Single Node) │
+                    └────────────────┘
 ```
 
-### Business Flow — Transfer
+### Data Flow
 
-```
-Client → API Gateway → Transaction Service → Kafka (transaction.initiated)
-    → AntiFraud → Kafka (validated) → Ledger → Kafka (entry_written)
-    → Account → Kafka (balance_updated) → Notification
-```
+1. **API Gateway** receives HTTP requests and converts them to Kafka commands
+2. **Kafka** distributes messages to consumer services
+3. **Microservices** process commands and persist to Cassandra
+4. **Redis** provides cache for frequent queries
 
----
+## 🛠 Technologies
 
-## 🛠️ Tech Stack
+| Category | Technology | Version | Description |
+|----------|------------|---------|-------------|
+| **Language** | Go | 1.21+ | Main language |
+| **Message Broker** | Apache Kafka | 3.7.1 | Async communication (KRaft mode) |
+| **Database** | Apache Cassandra | 4.1 | Distributed persistence |
+| **Cache** | Redis | 7.2-alpine | Cache and rate limiting |
+| **HTTP Router** | Chi | 5.x | HTTP router for Go |
+| **Containerization** | Docker Compose | 2.0+ | Local orchestration |
 
-| Layer | Technology |
-|-------|------------|
-| **Language** | Go 1.23+ |
-| **API Gateway** | Go + Fiber |
-| **Messaging** | Apache Kafka (KRaft) |
-| **Database** | Apache Cassandra |
-| **Auth** | Keycloak (OIDC) |
-| **Observability** | OpenTelemetry |
-| **Logs** | Grafana Loki |
-| **Tracing** | Grafana Tempo |
-| **Metrics** | Prometheus |
-| **Containers** | Docker |
-| **Orchestration** | Kubernetes (optional) |
-| **Testing** | Go testing + Testcontainers |
+## 📋 Prerequisites
 
----
+- [Docker](https://docs.docker.com/get-docker/) (v20.10+)
+- [Docker Compose](https://docs.docker.com/compose/install/) (v2.0+)
+- [Go](https://golang.org/dl/) (v1.21+)
+- Minimum **4GB RAM** available for Docker
 
-## 🔧 Microservices
+## 🚀 Quick Start
 
-| Service | Responsibility | Port |
-|---------|---------------|------|
-| `api-gateway` | Routing, auth, rate limiting | 8080 |
-| `auth-service` | Authentication & tokens | 8081 |
-| `customer-service` | Users & KYC | 8082 |
-| `account-service` | Accounts & balance | 8083 |
-| `transaction-service` | Transfers | 8084 |
-| `ledger-service` | Double-entry accounting | 8085 |
-| `anti-fraud-service` | Fraud rules & alerts | 8086 |
-| `payment-service` | External payments | 8087 |
-| `notification-service` | Emails & push | 8088 |
-| `analytics-service` | Metrics & reports | 8089 |
-
----
-
-## 🚀 Getting Started
-
-### Prerequisites
-
-- [Docker](https://www.docker.com/) & Docker Compose
-- [Go 1.23+](https://golang.org/) (for development)
-
-### Quick Start
-
-1. **Clone the repository**
+### 1. Clone the repository
 
 ```bash
-git clone https://github.com/your-username/fintech-bank-platform.git
+git clone https://github.com/GabeSilvaDev/fintech-bank-platform.git
 cd fintech-bank-platform
 ```
 
-2. **Start infrastructure** (Kafka, Cassandra, Kafka UI)
+### 2. Configure the environment
 
 ```bash
-docker compose -f deployments/docker-compose.yml --profile infra up -d
+# Copy the environment variables file
+cp .env.example .env
 ```
 
-3. **Start microservices**
+### 3. Start the infrastructure
 
 ```bash
-docker compose -f deployments/docker-compose.yml --profile infra --profile app up -d --build
+# Start Kafka, Cassandra and Redis
+docker compose up -d
+
+# Wait for services to become healthy (~1-2 minutes)
+docker compose ps
 ```
 
-4. **Access services**
-
-| Service | URL |
-|---------|-----|
-| API Gateway | http://localhost:8080 |
-| Kafka UI | http://localhost:8090 |
-| Kafka (broker) | localhost:29092 |
-| Cassandra (CQL) | localhost:9042 |
-
-### Stop & Cleanup
+### 4. (Optional) Start debug UIs
 
 ```bash
-# Stop all containers
-docker compose -f deployments/docker-compose.yml down
-
-# Stop and remove volumes (reset data)
-docker compose -f deployments/docker-compose.yml down -v
+# Kafka UI + Cassandra Web
+docker compose --profile ui up -d
 ```
-
----
 
 ## 📁 Project Structure
 
 ```
 fintech-bank-platform/
 │
-├── api-gateway/                 # API Gateway service
-│   └── Dockerfile
+├── docker-compose.yml          # Container orchestration
+├── .env.example                # Environment variables template
+├── README.md                   # This file
 │
-├── services/
-│   ├── auth-service/            # Authentication service
-│   ├── customer-service/        # Customer/KYC service
-│   ├── account-service/         # Account management
-│   ├── transaction-service/     # Transaction processing
-│   ├── ledger-service/          # Double-entry ledger
-│   ├── anti-fraud-service/      # Fraud detection
-│   ├── payment-service/         # External payments
-│   ├── notification-service/    # Notifications
-│   └── analytics-service/       # Analytics & reporting
+├── pkg/                        # 📦 Shared packages
+│   ├── logger/                 # Structured logger (zerolog)
+│   ├── errors/                 # Standardized error handling
+│   ├── response/               # HTTP response helpers
+│   ├── validation/             # Shared validators
+│   ├── events/                 # Kafka event definitions
+│   ├── auth/                   # JWT helpers
+│   └── dto/                    # Shared DTOs
 │
-├── shared/                      # Shared libraries
-│   ├── events/                  # Event definitions
-│   ├── kafka/                   # Kafka utilities
-│   ├── logger/                  # Logging utilities
-│   ├── otel/                    # OpenTelemetry setup
-│   └── config/                  # Configuration
+├── scripts/                    # 🔧 Utility scripts
 │
-├── deployments/
-│   ├── docker-compose.yml       # Docker Compose config
-│   ├── docker/                  # Dockerfiles
-│   └── k8s/                     # Kubernetes manifests
-│
-├── docs/                        # Documentation
-│
-├── SRS.md                       # Software Requirements Spec
-└── README.md
+└── services/                   # 🎯 Microservices
+    ├── api-gateway/            # HTTP → Kafka Gateway
+    ├── account-service/        # Account management
+    ├── transaction-service/    # Transaction processing
+    ├── payment-service/        # Payments (PIX, TED, Boleto)
+    └── notification-service/   # Notifications
 ```
 
-### Microservice Internal Structure
+### Microservice Structure
 
 ```
 service-name/
 ├── cmd/
-│   └── service-name/
-│       └── main.go              # Entry point
-│
+│   └── main.go                 # Entry point
 ├── internal/
-│   ├── domain/                  # Domain models & events
-│   ├── usecase/                 # Business logic
-│   ├── repository/              # Data access (Cassandra)
-│   ├── events/                  # Kafka producer/consumer
-│   ├── http/                    # HTTP handlers & routes
-│   ├── observability/           # Tracing & logging
-│   └── config/                  # Service configuration
-│
-├── test/
-│   ├── unit/
-│   └── integration/
-│
-├── Dockerfile
-└── go.mod
+│   ├── app/
+│   │   ├── controllers/        # HTTP handlers
+│   │   ├── services/           # Business logic
+│   │   ├── repositories/       # Data access
+│   │   ├── models/             # Domain models
+│   │   ├── dto/                # DTOs
+│   │   ├── validators/         # Validators
+│   │   └── enums/              # Enumerations
+│   ├── infrastructure/
+│   │   ├── http/               # Router and server
+│   │   ├── messaging/          # Kafka consumer/producer
+│   │   └── database/           # Cassandra connection
+│   └── config/                 # Configuration
+├── migrations/                 # CQL migrations
+└── tests/                      # Tests
+    ├── unit/
+    ├── integration/
+    └── features/
 ```
 
----
+## 🔧 Services (Planned)
 
-## 📨 Kafka Topics
+| Service | Description | Port | Status |
+|---------|-------------|------|--------|
+| **API Gateway** | Receives HTTP and publishes to Kafka | 8081 | 🔜 Sprint 1 |
+| **Account Service** | Account and user CRUD | 8082 | 🔜 Sprint 2 |
+| **Transaction Service** | Transfer processing | 8083 | 🔜 Sprint 3 |
+| **Payment Service** | PIX, TED, Boletos | 8084 | 🔜 Sprint 4 |
+| **Notification Service** | Email, SMS, Push | 8085 | 🔜 Sprint 5 |
 
-| Topic | Description |
-|-------|-------------|
-| `customer.created` | New customer registered |
-| `customer.verified` | Customer KYC verified |
-| `account.created` | New account created |
-| `account.balance.updated` | Account balance changed |
-| `transaction.initiated` | Transaction started |
-| `transaction.validated` | Transaction passed anti-fraud |
-| `transaction.completed` | Transaction finished |
-| `transaction.failed` | Transaction failed |
-| `ledger.entry_written` | Ledger entry recorded |
-| `payment.processed` | External payment processed |
-| `fraud.alert` | Fraud detected |
-| `notification.send` | Notification requested |
-| `analytics.event` | Analytics event |
-| `dlq.*` | Dead letter queues |
+## 🏗️ Infrastructure
 
-### Kafka Patterns
+### Base Services
 
-- ✅ Idempotent producers
-- ✅ Consumer groups per service
-- ✅ Dead Letter Queue (DLQ) per topic
-- ✅ At-least-once delivery
+| Component | Container | Port | Description |
+|-----------|-----------|------|-------------|
+| Kafka | fintech-kafka | 9092 | Message broker (KRaft mode) |
+| Cassandra | fintech-cassandra | 9042 | Database |
+| Redis | fintech-redis | 6379 | Cache |
 
----
+### Debug UIs (profile: ui)
 
-## 🗃️ Data Model (Cassandra)
+| Component | Container | URL |
+|-----------|-----------|-----|
+| Kafka UI | fintech-kafka-ui | http://localhost:8080 |
+| Cassandra Web | fintech-cassandra-web | http://localhost:3000 |
 
-### `customers_by_id`
-| Column | Type |
-|--------|------|
-| customer_id (PK) | UUID |
-| name | TEXT |
-| email | TEXT |
-| document | TEXT |
-| verified | BOOLEAN |
-| created_at | TIMESTAMP |
+### Environment Variables
 
-### `accounts_by_id`
-| Column | Type |
-|--------|------|
-| account_id (PK) | UUID |
-| customer_id | UUID |
-| balance | DECIMAL |
-| blocked | BOOLEAN |
-| created_at | TIMESTAMP |
+Copy the `.env.example` file to `.env`:
 
-### `transactions_by_id`
-| Column | Type |
-|--------|------|
-| tx_id (PK) | UUID |
-| from_account | UUID |
-| to_account | UUID |
-| amount | DECIMAL |
-| status | TEXT |
-| created_at | TIMESTAMP |
+```bash
+cp .env.example .env
+```
 
-### `ledger_entries`
-| Column | Type |
-|--------|------|
-| entry_id (PK) | UUID |
-| tx_id | UUID |
-| account_id | UUID |
-| type | TEXT (debit\|credit) |
-| amount | DECIMAL |
-| created_at | TIMESTAMP |
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `KAFKA_BROKERS` | Kafka address | `localhost:9092` |
+| `CASSANDRA_HOSTS` | Cassandra address | `localhost:9042` |
+| `CASSANDRA_KEYSPACE` | Main keyspace | `fintech` |
+| `REDIS_HOST` | Redis address | `localhost` |
+| `REDIS_PORT` | Redis port | `6379` |
 
----
+## 📅 Roadmap (Sprints)
 
-## 🔐 Security
-
-- OAuth2 / OIDC via Keycloak
-- JWT with scopes
-- Rate limiting at gateway
-- Auditable logs
-- Encrypted sensitive data
-
----
-
-## 📊 Observability
-
-| Type | Tool | Description |
-|------|------|-------------|
-| **Logs** | Grafana Loki | Structured JSON logs |
-| **Tracing** | Grafana Tempo | OpenTelemetry spans per request & Kafka event |
-| **Metrics** | Prometheus | Latency, Kafka consumption, errors per service |
-
----
-
-## 🧪 Testing
-
-| Type | Tool |
-|------|------|
-| Unit | Go `testing` |
-| Integration | Testcontainers |
-| Contract | Pact (optional) |
-| Load | k6 |
-
----
+| Sprint | Duration | Focus |
+|--------|----------|-------|
+| 0 | 1 week | ✅ Infrastructure + Docker Compose |
+| 1 | 2 weeks | 🔜 API Gateway |
+| 2 | 2 weeks | 🔜 Account Service |
+| 3 | 2 weeks | 🔜 Transaction Service |
+| 4 | 1.5 weeks | 🔜 Payment Service |
+| 5 | 1 week | 🔜 Notification Service |
+| 6 | 1.5 weeks | 🔜 E2E Tests + Performance |
+| 7 | 1 week | 🔜 Docs + Observability |
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please read our contributing guidelines before submitting PRs.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
+1. Fork the project
+2. Create a branch for your feature (`git checkout -b feature/AmazingFeature`)
+3. Commit your changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
 
----
+### Code Standards
+
+- Follow [Effective Go](https://golang.org/doc/effective_go) conventions
+- Keep test coverage above 95%
+- Document public functions
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
----
-
-# 🇧🇷 Português
-
-## 🏦 Plataforma Fintech Event-Driven
-
-> Uma **plataforma fintech educacional** de nível de produção, construída com **arquitetura orientada a eventos**, **microsserviços** e padrões bancários reais usando **Golang** e **Apache Kafka**.
-
----
-
-## 🎯 Visão Geral
-
-Este projeto simula um **banco digital** com:
-
-- 👤 Cadastro de clientes (KYC)
-- 💳 Gestão de contas bancárias
-- 💸 Transações financeiras
-- 📒 Ledger contábil (dupla entrada)
-- 🛡️ Sistema antifraude
-- 📧 Notificações
-- 📊 Analytics e relatórios
-
-### Princípios Arquiteturais
-
-- ✅ Arquitetura Orientada a Eventos (EDA)
-- ✅ Domain-Driven Design (DDD)
-- ✅ Clean Architecture
-- ✅ Microsserviços Desacoplados
-- ✅ Observabilidade por Padrão
-- ✅ Infraestrutura como Código
-
----
-
-## 🚀 Começando
-
-### Pré-requisitos
-
-- [Docker](https://www.docker.com/) & Docker Compose
-- [Go 1.23+](https://golang.org/) (para desenvolvimento)
-
-### Início Rápido
-
-1. **Clone o repositório**
-
-```bash
-git clone https://github.com/your-username/fintech-bank-platform.git
-cd fintech-bank-platform
-```
-
-2. **Inicie a infraestrutura** (Kafka, Cassandra, Kafka UI)
-
-```bash
-docker compose -f deployments/docker-compose.yml --profile infra up -d
-```
-
-3. **Inicie os microsserviços**
-
-```bash
-docker compose -f deployments/docker-compose.yml --profile infra --profile app up -d --build
-```
-
-4. **Acesse os serviços**
-
-| Serviço | URL |
-|---------|-----|
-| API Gateway | http://localhost:8080 |
-| Kafka UI | http://localhost:8090 |
-| Kafka (broker) | localhost:29092 |
-| Cassandra (CQL) | localhost:9042 |
-
-### Parar e Limpar
-
-```bash
-# Parar todos os containers
-docker compose -f deployments/docker-compose.yml down
-
-# Parar e remover volumes (resetar dados)
-docker compose -f deployments/docker-compose.yml down -v
-```
-
----
-
-## 🔧 Microsserviços
-
-| Serviço | Responsabilidade | Porta |
-|---------|-----------------|-------|
-| `api-gateway` | Roteamento, auth, rate limit | 8080 |
-| `auth-service` | Autenticação e tokens | 8081 |
-| `customer-service` | Usuários e KYC | 8082 |
-| `account-service` | Contas e saldo | 8083 |
-| `transaction-service` | Transferências | 8084 |
-| `ledger-service` | Contabilidade (dupla entrada) | 8085 |
-| `anti-fraud-service` | Regras de fraude | 8086 |
-| `payment-service` | Pagamentos externos | 8087 |
-| `notification-service` | Emails e push | 8088 |
-| `analytics-service` | Métricas e relatórios | 8089 |
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
 ---
 
 <p align="center">
-  Made with ❤️ for the developer community
+  Developed with ❤️ by <a href="https://github.com/GabeSilvaDev">Gabriel Silva</a>
+</p>
+
+---
+
+# 🏦 Fintech Bank Platform
+
+Uma plataforma bancária moderna construída com arquitetura de microserviços em Go, utilizando Kafka para comunicação assíncrona (event-driven) e Cassandra para persistência distribuída.
+
+🇺🇸 [Read in English](#-fintech-bank-platform)
+
+## 📋 Índice
+
+- [Arquitetura](#-arquitetura)
+- [Tecnologias](#-tecnologias)
+- [Pré-requisitos](#-pré-requisitos)
+- [Quick Start](#-quick-start-1)
+- [Estrutura do Projeto](#-estrutura-do-projeto)
+- [Serviços](#-serviços-planejados)
+- [Infraestrutura](#-infraestrutura)
+- [Roadmap](#-roadmap-sprints-1)
+- [Contribuição](#-contribuição)
+
+## 🏗 Arquitetura
+
+```
+                    ┌─────────────────┐
+                    │   API Gateway   │
+                    │  (HTTP → Kafka) │
+                    └────────┬────────┘
+                             │
+                    ┌────────▼────────┐
+                    │      Kafka      │
+                    │  (KRaft Mode)   │
+                    └────────┬────────┘
+                             │
+        ┌────────────────────┼────────────────────┐
+        │                    │                    │
+    ┌───▼───────┐    ┌──────▼──────┐    ┌───────▼─────┐
+    │  Account  │    │ Transaction │    │   Payment   │
+    │  Service  │    │   Service   │    │   Service   │
+    │(Consumer) │    │ (Consumer)  │    │ (Consumer)  │
+    └─────┬─────┘    └──────┬──────┘    └───────┬─────┘
+          │                 │                    │
+          └─────────────────┼────────────────────┘
+                            │
+                    ┌───────▼────────┐
+                    │   Cassandra    │
+                    │  (Single Node) │
+                    └────────────────┘
+```
+
+### Fluxo de Dados
+
+1. **API Gateway** recebe requisições HTTP e converte em comandos Kafka
+2. **Kafka** distribui mensagens para os serviços consumidores
+3. **Microserviços** processam comandos e persistem no Cassandra
+4. **Redis** provê cache para consultas frequentes
+
+## 🛠 Tecnologias
+
+| Categoria | Tecnologia | Versão | Descrição |
+|-----------|------------|--------|-----------|
+| **Linguagem** | Go | 1.21+ | Linguagem principal |
+| **Message Broker** | Apache Kafka | 3.7.1 | Comunicação assíncrona (KRaft mode) |
+| **Banco de Dados** | Apache Cassandra | 4.1 | Persistência distribuída |
+| **Cache** | Redis | 7.2-alpine | Cache e rate limiting |
+| **HTTP Router** | Chi | 5.x | Router HTTP para Go |
+| **Containerização** | Docker Compose | 2.0+ | Orquestração local |
+
+## 📋 Pré-requisitos
+
+- [Docker](https://docs.docker.com/get-docker/) (v20.10+)
+- [Docker Compose](https://docs.docker.com/compose/install/) (v2.0+)
+- [Go](https://golang.org/dl/) (v1.21+)
+- Mínimo de **4GB RAM** disponível para Docker
+
+## 🚀 Quick Start
+
+### 1. Clone o repositório
+
+```bash
+git clone https://github.com/GabeSilvaDev/fintech-bank-platform.git
+cd fintech-bank-platform
+```
+
+### 2. Configure o ambiente
+
+```bash
+# Copie o arquivo de variáveis de ambiente
+cp .env.example .env
+```
+
+### 3. Inicie a infraestrutura
+
+```bash
+# Inicia Kafka, Cassandra e Redis
+docker compose up -d
+
+# Aguarde os serviços ficarem healthy (~1-2 minutos)
+docker compose ps
+```
+
+### 4. (Opcional) Inicie as UIs de debug
+
+```bash
+# Kafka UI + Cassandra Web
+docker compose --profile ui up -d
+```
+
+## 📁 Estrutura do Projeto
+
+```
+fintech-bank-platform/
+│
+├── docker-compose.yml          # Orquestração de containers
+├── .env.example                # Template de variáveis de ambiente
+├── README.md                   # Este arquivo
+│
+├── pkg/                        # 📦 Pacotes compartilhados
+│   ├── logger/                 # Logger estruturado (zerolog)
+│   ├── errors/                 # Error handling padronizado
+│   ├── response/               # HTTP response helpers
+│   ├── validation/             # Validadores compartilhados
+│   ├── events/                 # Definições de eventos Kafka
+│   ├── auth/                   # JWT helpers
+│   └── dto/                    # DTOs compartilhados
+│
+├── scripts/                    # 🔧 Scripts utilitários
+│
+└── services/                   # 🎯 Microserviços
+    ├── api-gateway/            # Gateway HTTP → Kafka
+    ├── account-service/        # Gerenciamento de contas
+    ├── transaction-service/    # Processamento de transações
+    ├── payment-service/        # Pagamentos (PIX, TED, Boleto)
+    └── notification-service/   # Notificações
+```
+
+### Estrutura de cada Microserviço
+
+```
+service-name/
+├── cmd/
+│   └── main.go                 # Entry point
+├── internal/
+│   ├── app/
+│   │   ├── controllers/        # HTTP handlers
+│   │   ├── services/           # Business logic
+│   │   ├── repositories/       # Data access
+│   │   ├── models/             # Domain models
+│   │   ├── dto/                # DTOs
+│   │   ├── validators/         # Validadores
+│   │   └── enums/              # Enumerações
+│   ├── infrastructure/
+│   │   ├── http/               # Router e server
+│   │   ├── messaging/          # Kafka consumer/producer
+│   │   └── database/           # Cassandra connection
+│   └── config/                 # Configurações
+├── migrations/                 # CQL migrations
+└── tests/                      # Testes
+    ├── unit/
+    ├── integration/
+    └── features/
+```
+
+## 🔧 Serviços (Planejados)
+
+| Serviço | Descrição | Porta | Status |
+|---------|-----------|-------|--------|
+| **API Gateway** | Recebe HTTP e publica no Kafka | 8081 | 🔜 Sprint 1 |
+| **Account Service** | CRUD de contas e usuários | 8082 | 🔜 Sprint 2 |
+| **Transaction Service** | Processamento de transferências | 8083 | 🔜 Sprint 3 |
+| **Payment Service** | PIX, TED, Boletos | 8084 | 🔜 Sprint 4 |
+| **Notification Service** | Email, SMS, Push | 8085 | 🔜 Sprint 5 |
+
+## 🏗️ Infraestrutura
+
+### Serviços Base
+
+| Componente | Container | Porta | Descrição |
+|------------|-----------|-------|-----------|
+| Kafka | fintech-kafka | 9092 | Message broker (KRaft mode) |
+| Cassandra | fintech-cassandra | 9042 | Banco de dados |
+| Redis | fintech-redis | 6379 | Cache |
+
+### UIs de Debug (profile: ui)
+
+| Componente | Container | URL |
+|------------|-----------|-----|
+| Kafka UI | fintech-kafka-ui | http://localhost:8080 |
+| Cassandra Web | fintech-cassandra-web | http://localhost:3000 |
+
+### Variáveis de Ambiente
+
+Copie o arquivo `.env.example` para `.env`:
+
+```bash
+cp .env.example .env
+```
+
+| Variável | Descrição | Default |
+|----------|-----------|---------|
+| `KAFKA_BROKERS` | Endereço do Kafka | `localhost:9092` |
+| `CASSANDRA_HOSTS` | Endereço do Cassandra | `localhost:9042` |
+| `CASSANDRA_KEYSPACE` | Keyspace principal | `fintech` |
+| `REDIS_HOST` | Endereço do Redis | `localhost` |
+| `REDIS_PORT` | Porta do Redis | `6379` |
+
+## 📅 Roadmap (Sprints)
+
+| Sprint | Duração | Foco |
+|--------|---------|------|
+| 0 | 1 sem | ✅ Infraestrutura + Docker Compose |
+| 1 | 2 sem | 🔜 API Gateway |
+| 2 | 2 sem | 🔜 Account Service |
+| 3 | 2 sem | 🔜 Transaction Service |
+| 4 | 1.5 sem | 🔜 Payment Service |
+| 5 | 1 sem | 🔜 Notification Service |
+| 6 | 1.5 sem | 🔜 Testes E2E + Performance |
+| 7 | 1 sem | 🔜 Docs + Observabilidade |
+
+## 🤝 Contribuição
+
+1. Fork o projeto
+2. Crie uma branch para sua feature (`git checkout -b feature/AmazingFeature`)
+3. Commit suas mudanças (`git commit -m 'Add some AmazingFeature'`)
+4. Push para a branch (`git push origin feature/AmazingFeature`)
+5. Abra um Pull Request
+
+### Padrões de Código
+
+- Siga as convenções do [Effective Go](https://golang.org/doc/effective_go)
+- Mantenha cobertura de testes acima de 95%
+- Documente funções públicas
+
+## 📄 Licença
+
+Este projeto está sob a licença MIT. Veja o arquivo [LICENSE](LICENSE) para mais detalhes.
+
+---
+
+<p align="center">
+  Desenvolvido com ❤️ por <a href="https://github.com/GabeSilvaDev">Gabriel Silva</a>
 </p>
