@@ -1,0 +1,76 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# Fintech Bank Platform - CI Pipeline
+# ═══════════════════════════════════════════════════════════════════════════
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ═══════════════════════════════════════════════════════════════════════════
+  # API Gateway Tests
+  # ═══════════════════════════════════════════════════════════════════════════
+  api-gateway:
+    name: API Gateway Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/api-gateway
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache-dependency-path: services/api-gateway/go.sum
+
+      - name: Download dependências
+        run: go mod download
+
+      - name: Verificar formatação
+        run: |
+          if [ -n "$(gofmt -l .)" ]; then
+            echo "❌ Código não formatado. Execute 'gofmt -w .'"
+            gofmt -l .
+            exit 1
+          fi
+          echo "✅ Código formatado corretamente"
+
+      - name: Rodar testes
+        run: |
+          go test ./tests/... -v -coverprofile=coverage.out -coverpkg=./internal/...
+          echo "✅ Testes executados com sucesso"
+
+      - name: Gerar relatório de cobertura
+        run: |
+          echo "## 📊 Relatório de Cobertura - API Gateway" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          go tool cover -func=coverage.out >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Extrair porcentagem total
+          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}')
+          echo "### Total: **${COVERAGE}**" >> $GITHUB_STEP_SUMMARY
+          
+          # Verificar se cobertura é 100%
+          if [ "$COVERAGE" = "100.0%" ]; then
+            echo "✅ Cobertura em 100%!" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Cobertura abaixo de 100%" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload relatório de cobertura
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report-api-gateway
+          path: services/api-gateway/coverage.out
+          retention-days: 30
