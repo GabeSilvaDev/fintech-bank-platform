@@ -27,7 +27,7 @@ help:
 # Roda todos os testes com cobertura
 test:
 	@echo "🧪 Rodando todos os testes..."
-	@go test ./tests/... -coverprofile=coverage.out -coverpkg=./internal/...
+	@go test ./tests/... ./cmd/... -coverprofile=coverage.out -coverpkg=./internal/...
 	@go tool cover -func=coverage.out | tail -1
 
 # Roda apenas testes unitários
@@ -43,12 +43,12 @@ test-feature:
 # Roda testes com output verbose
 test-verbose:
 	@echo "📝 Rodando testes com output detalhado..."
-	@go test ./tests/... -v -coverprofile=coverage.out -coverpkg=./internal/...
+	@go test ./tests/... ./cmd/... -v -coverprofile=coverage.out -coverpkg=./internal/...
 
 # Gera relatório HTML de cobertura
 test-coverage:
 	@echo "📊 Gerando relatório de cobertura..."
-	@go test ./tests/... -coverprofile=coverage.out -coverpkg=./internal/...
+	@go test ./tests/... ./cmd/... -coverprofile=coverage.out -coverpkg=./internal/...
 	@go tool cover -html=coverage.out -o coverage.html
 	@go tool cover -func=coverage.out
 	@echo ""
@@ -74,12 +74,12 @@ build:
 
 # Roda testes no container Docker
 docker-test:
-	@docker exec fintech-api-gateway go test ./tests/... -coverprofile=coverage.out -coverpkg=./internal/...
+	@docker exec fintech-api-gateway go test ./tests/... ./cmd/... -coverprofile=coverage.out -coverpkg=./internal/...
 	@docker exec fintech-api-gateway go tool cover -func=coverage.out | tail -1
 
 # Roda testes com cobertura HTML no Docker
 docker-coverage:
-	@docker exec fintech-api-gateway go test ./tests/... -coverprofile=coverage.out -coverpkg=./internal/...
+	@docker exec fintech-api-gateway go test ./tests/... ./cmd/... -coverprofile=coverage.out -coverpkg=./internal/...
 	@docker exec fintech-api-gateway go tool cover -func=coverage.out
 
 # ═══════════════════════════════════════════════════════════════════════════
