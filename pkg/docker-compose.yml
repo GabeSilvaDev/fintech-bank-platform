@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  pkg:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fintech-pkg
+    volumes:
+      - .:/app
+      - pkg-go-mod-cache:/go/pkg/mod
+    working_dir: /app
+    command: tail -f /dev/null
+    environment:
+      - GOPROXY=https://proxy.golang.org,direct
+      - CGO_ENABLED=0
+    tty: true
+    stdin_open: true
+
+volumes:
+  pkg-go-mod-cache:
