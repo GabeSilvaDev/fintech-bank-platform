@@ -44,8 +44,12 @@ func (s *Server) Router() *chi.Mux {
 }
 
 func (s *Server) Start() error {
+	return s.StartWithSignals(syscall.SIGINT, syscall.SIGTERM)
+}
+
+func (s *Server) StartWithSignals(signals ...os.Signal) error {
 	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(quit, signals...)
 
 	serverErrors := make(chan error, 1)
 
@@ -72,4 +76,12 @@ func (s *Server) Start() error {
 
 	s.logger.Info().Msg("Server stopped")
 	return nil
+}
+
+func (s *Server) Shutdown(ctx context.Context) error {
+	return s.server.Shutdown(ctx)
+}
+
+func (s *Server) Address() string {
+	return s.config.Server.Address()
 }
