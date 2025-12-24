@@ -46,7 +46,7 @@ func (tc *TestCase) SetupTest() {
 }
 
 func (tc *TestCase) TearDownTest() {
-	// 
+	//
 }
 
 func (tc *TestCase) TearDownSuite() {

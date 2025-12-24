@@ -26,7 +26,7 @@ type TestResponse struct {
 
 func newTestResponse(t *testing.T, rec *httptest.ResponseRecorder) *TestResponse {
 	body := rec.Body.Bytes()
-	
+
 	tr := &TestResponse{
 		t:        t,
 		recorder: rec,
@@ -101,7 +101,7 @@ func (r *TestResponse) AssertServerError() *TestResponse {
 }
 
 func (r *TestResponse) AssertSuccessful() *TestResponse {
-	assert.True(r.t, r.recorder.Code >= 200 && r.recorder.Code < 300, 
+	assert.True(r.t, r.recorder.Code >= 200 && r.recorder.Code < 300,
 		"Expected successful status (2xx) but got %d", r.recorder.Code)
 	return r
 }
@@ -118,7 +118,7 @@ func (r *TestResponse) AssertRedirect() *TestResponse {
 
 func (r *TestResponse) AssertJson(expected map[string]interface{}) *TestResponse {
 	assert.NotNil(r.t, r.json, "Response is not valid JSON")
-	
+
 	for key, expectedValue := range expected {
 		actualValue, exists := r.json[key]
 		assert.True(r.t, exists, "JSON key '%s' not found in response", key)

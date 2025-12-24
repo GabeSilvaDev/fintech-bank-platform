@@ -79,7 +79,7 @@ func TestServerAddress(t *testing.T) {
 	logger := zerolog.Nop()
 
 	server := appHttp.NewServer(cfg, logger)
-	
+
 	assert.Equal(t, "localhost:9090", server.Address())
 }
 
