@@ -1,8 +1,9 @@
 module github.com/fintech-bank-platform/api-gateway
 
-go 1.23.0
+go 1.25
 
 require (
+	github.com/fintech-bank-platform/pkg v0.0.0
 	github.com/go-chi/chi/v5 v5.2.0
 	github.com/go-chi/cors v1.2.1
 	github.com/go-chi/httprate v0.14.1
@@ -22,3 +23,5 @@ require (
 	golang.org/x/sys v0.28.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/fintech-bank-platform/pkg => ../../pkg
