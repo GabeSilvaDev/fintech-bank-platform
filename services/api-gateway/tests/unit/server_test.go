@@ -84,7 +84,7 @@ func TestServerShutdown(t *testing.T) {
 	logger := zerolog.Nop()
 
 	server := appHttp.NewServer(cfg, logger)
-	appHttp.SetupRouter(server.Router(), cfg)
+	appHttp.SetupRouter(server.Router(), cfg, testDependencies())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -114,7 +114,7 @@ func TestServerStartWithSignals(t *testing.T) {
 	logger := zerolog.Nop()
 
 	server := appHttp.NewServer(cfg, logger)
-	appHttp.SetupRouter(server.Router(), cfg)
+	appHttp.SetupRouter(server.Router(), cfg, testDependencies())
 
 	done := make(chan error, 1)
 
@@ -197,7 +197,7 @@ func TestServerStart(t *testing.T) {
 	logger := zerolog.Nop()
 
 	server := appHttp.NewServer(cfg, logger)
-	appHttp.SetupRouter(server.Router(), cfg)
+	appHttp.SetupRouter(server.Router(), cfg, testDependencies())
 
 	done := make(chan error, 1)
 
@@ -244,7 +244,7 @@ func TestServerStartWithShutdownTimeout(t *testing.T) {
 	logger := zerolog.Nop()
 
 	server := appHttp.NewServer(cfg, logger)
-	appHttp.SetupRouter(server.Router(), cfg)
+	appHttp.SetupRouter(server.Router(), cfg, testDependencies())
 
 	server.Router().Get("/slow", func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(5 * time.Second)

@@ -11,6 +11,7 @@ import (
 	"github.com/fintech-bank-platform/api-gateway/internal/config"
 	"github.com/fintech-bank-platform/api-gateway/internal/contracts"
 	appHttp "github.com/fintech-bank-platform/api-gateway/internal/infrastructure/http"
+	"github.com/fintech-bank-platform/pkg/logger"
 	"github.com/go-chi/chi/v5"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/suite"
@@ -18,23 +19,30 @@ import (
 
 type TestCase struct {
 	suite.Suite
-	Router  *chi.Mux
-	Config  *config.Config
-	Logger  zerolog.Logger
-	headers map[string]string
+	Router    *chi.Mux
+	Config    *config.Config
+	Logger    zerolog.Logger
+	Publisher *FakePublisher
+	headers   map[string]string
 }
 
 func (tc *TestCase) SetupSuite() {
 	tc.Config = testConfig()
 	tc.Logger = zerolog.Nop()
+	tc.Publisher = &FakePublisher{}
 	tc.headers = make(map[string]string)
 
 	tc.Router = chi.NewRouter()
-	appHttp.SetupRouter(tc.Router, tc.Config)
+	appHttp.SetupRouter(tc.Router, tc.Config, appHttp.Dependencies{
+		Publisher: tc.Publisher,
+		Logger:    logger.New(logger.Config{Output: io.Discard}),
+	})
 }
 
 func (tc *TestCase) SetupTest() {
 	tc.headers = make(map[string]string)
+	tc.Publisher.Err = nil
+	tc.Publisher.Published = nil
 }
 
 func (tc *TestCase) TearDownTest() {

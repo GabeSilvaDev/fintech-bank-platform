@@ -1,26 +1,31 @@
 package main
 
 import (
-	"os"
-
 	"github.com/fintech-bank-platform/api-gateway/internal/config"
 	"github.com/fintech-bank-platform/api-gateway/internal/infrastructure/http"
-	"github.com/rs/zerolog"
+	"github.com/fintech-bank-platform/api-gateway/internal/infrastructure/messaging"
+	"github.com/fintech-bank-platform/pkg/logger"
 )
 
 func main() {
-	logger := zerolog.New(os.Stdout).With().Timestamp().Logger()
-
 	cfg, err := config.New()
 	if err != nil {
-		logger.Fatal().Err(err).Msg("Failed to load configuration")
+		logger.NewDefault().Fatal().Err(err).Msg("Failed to load configuration")
 	}
 
-	server := http.NewServer(cfg, logger)
+	log := logger.New(logger.Config{Level: cfg.Log.Level, Pretty: cfg.Log.Pretty})
 
-	http.SetupRouter(server.Router(), cfg)
+	producer := messaging.NewProducer(cfg.Kafka)
 
-	if err := server.Start(); err != nil {
-		logger.Fatal().Err(err).Msg("Server failed")
+	server := http.NewServer(cfg, log.Logger)
+	http.SetupRouter(server.Router(), cfg, http.Dependencies{
+		Publisher: messaging.NewBreaker(producer, cfg.Kafka),
+		Logger:    log,
+	})
+
+	err = server.Start()
+	producer.Close()
+	if err != nil {
+		log.Fatal().Err(err).Msg("Server failed")
 	}
 }
