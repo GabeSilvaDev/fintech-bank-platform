@@ -316,3 +316,19 @@ func TestNewNotificationEvent(t *testing.T) {
 	assert.Equal(t, EventTypes.SendEmail, event.Type)
 	assert.Equal(t, "notification-service", event.Source)
 }
+
+func TestDeleteAccountPayload(t *testing.T) {
+	payload := DeleteAccountPayload{
+		AccountID: "acc-123",
+		Reason:    "customer request",
+	}
+
+	jsonData, err := json.Marshal(payload)
+	assert.NoError(t, err)
+	assert.Contains(t, string(jsonData), `"account_id":"acc-123"`)
+
+	var result DeleteAccountPayload
+	err = json.Unmarshal(jsonData, &result)
+	assert.NoError(t, err)
+	assert.Equal(t, payload, result)
+}

@@ -205,6 +205,11 @@ type UpdateAccountPayload struct {
 	Status    *string `json:"status,omitempty"`
 }
 
+type DeleteAccountPayload struct {
+	AccountID string `json:"account_id"`
+	Reason    string `json:"reason,omitempty"`
+}
+
 // AccountCreatedPayload represents the payload for account created event
 type AccountCreatedPayload struct {
 	AccountID     string    `json:"account_id"`
