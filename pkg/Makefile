@@ -1,61 +1,53 @@
-# ═══════════════════════════════════════════════════════════════════════════
-# PKG - Makefile
-# ═══════════════════════════════════════════════════════════════════════════
-
 .PHONY: help test test-coverage clean fmt lint docker-up docker-down docker-test docker-coverage
 
 help:
 	@echo "═══════════════════════════════════════════════════════════════════"
-	@echo "  PKG - Pacotes Compartilhados - Comandos Disponíveis"
+	@echo "  pkg — shared packages"
 	@echo "═══════════════════════════════════════════════════════════════════"
 	@echo ""
 	@echo "  Local:"
-	@echo "    make test            - Roda todos os testes"
-	@echo "    make test-coverage   - Gera relatório de cobertura"
-	@echo "    make fmt             - Formata o código"
-	@echo "    make lint            - Verifica formatação"
-	@echo "    make clean           - Remove arquivos gerados"
+	@echo "    make test            - Run all tests"
+	@echo "    make test-coverage   - Generate coverage report"
+	@echo "    make fmt             - Format code"
+	@echo "    make lint            - Check formatting"
+	@echo "    make clean           - Remove generated files"
 	@echo ""
 	@echo "  Docker:"
-	@echo "    make docker-up       - Sobe container fintech-pkg"
-	@echo "    make docker-down     - Para container fintech-pkg"
-	@echo "    make docker-test     - Roda testes no container"
+	@echo "    make docker-up       - Start the fintech-pkg container"
+	@echo "    make docker-down     - Stop the fintech-pkg container"
+	@echo "    make docker-test     - Run tests inside the container"
 	@echo "    make docker-coverage - Gera coverage no container"
 	@echo ""
 
 test:
-	@echo "🧪 Rodando testes..."
+	@echo "Running tests..."
 	@go test -v ./...
 
 test-coverage:
-	@echo "📊 Gerando relatório de cobertura..."
+	@echo "Generating coverage report..."
 	@go test -coverprofile=coverage.out ./...
 	@go tool cover -html=coverage.out -o coverage.html
 	@go tool cover -func=coverage.out
 	@echo ""
-	@echo "✅ Relatório gerado: coverage.html"
+	@echo "Report written to coverage.html"
 
 fmt:
-	@echo "🎨 Formatando código..."
+	@echo "Formatting..."
 	@gofmt -w .
-	@echo "✅ Código formatado"
+	@echo "Formatted"
 
 lint:
-	@echo "🔍 Verificando formatação..."
+	@echo "Checking formatting..."
 	@if [ -n "$$(gofmt -l .)" ]; then \
-		echo "❌ Código não formatado:"; \
+		echo "Files not gofmt-formatted:"; \
 		gofmt -l .; \
 		exit 1; \
 	fi
-	@echo "✅ Código formatado corretamente"
+	@echo "Formatting OK"
 
 clean:
 	@rm -f coverage.out coverage.html
 	@echo "🧹 Arquivos limpos"
-
-# ═══════════════════════════════════════════════════════════════════════════
-# DOCKER COMMANDS
-# ═══════════════════════════════════════════════════════════════════════════
 
 docker-up:
 	@echo "🐳 Subindo container fintech-pkg..."
@@ -68,7 +60,7 @@ docker-down:
 	@echo "✅ Container parado"
 
 docker-test:
-	@echo "🧪 Rodando testes no container..."
+	@echo "Running tests in the container..."
 	@docker exec fintech-pkg go test -v -cover ./...
 
 docker-coverage:
