@@ -28,3 +28,16 @@ type RateLimitConfig struct {
 	Requests int
 	Window   time.Duration
 }
+
+type KafkaConfig struct {
+	Brokers          []string
+	WriteTimeout     time.Duration
+	MaxAttempts      int
+	BreakerThreshold uint32
+	BreakerTimeout   time.Duration
+}
+
+type LogConfig struct {
+	Level  string
+	Pretty bool
+}

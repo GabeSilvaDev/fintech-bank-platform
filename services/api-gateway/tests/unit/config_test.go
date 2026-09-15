@@ -94,3 +94,66 @@ func TestConfigDefaults(t *testing.T) {
 	assert.Greater(t, cfg.RateLimit.Requests, 0)
 	assert.Greater(t, cfg.RateLimit.Window, time.Duration(0))
 }
+
+func TestConfigKafkaDefaults(t *testing.T) {
+	cfg, _ := config.New()
+
+	assert.Equal(t, []string{"localhost:9092"}, cfg.Kafka.Brokers)
+	assert.Equal(t, 5*time.Second, cfg.Kafka.WriteTimeout)
+	assert.Equal(t, 3, cfg.Kafka.MaxAttempts)
+	assert.Equal(t, uint32(5), cfg.Kafka.BreakerThreshold)
+	assert.Equal(t, 30*time.Second, cfg.Kafka.BreakerTimeout)
+}
+
+func TestConfigKafkaWithEnvVars(t *testing.T) {
+	os.Setenv("KAFKA_BROKERS", "kafka-1:9092, kafka-2:9092")
+	os.Setenv("KAFKA_WRITE_TIMEOUT", "2s")
+	os.Setenv("KAFKA_MAX_ATTEMPTS", "7")
+	os.Setenv("KAFKA_BREAKER_THRESHOLD", "9")
+	os.Setenv("KAFKA_BREAKER_TIMEOUT", "1m")
+	defer func() {
+		os.Unsetenv("KAFKA_BROKERS")
+		os.Unsetenv("KAFKA_WRITE_TIMEOUT")
+		os.Unsetenv("KAFKA_MAX_ATTEMPTS")
+		os.Unsetenv("KAFKA_BREAKER_THRESHOLD")
+		os.Unsetenv("KAFKA_BREAKER_TIMEOUT")
+	}()
+
+	cfg, _ := config.New()
+
+	assert.Equal(t, []string{"kafka-1:9092", "kafka-2:9092"}, cfg.Kafka.Brokers)
+	assert.Equal(t, 2*time.Second, cfg.Kafka.WriteTimeout)
+	assert.Equal(t, 7, cfg.Kafka.MaxAttempts)
+	assert.Equal(t, uint32(9), cfg.Kafka.BreakerThreshold)
+	assert.Equal(t, time.Minute, cfg.Kafka.BreakerTimeout)
+}
+
+func TestConfigLogDefaults(t *testing.T) {
+	cfg, _ := config.New()
+
+	assert.Equal(t, "info", cfg.Log.Level)
+	assert.False(t, cfg.Log.Pretty)
+}
+
+func TestConfigLogWithEnvVars(t *testing.T) {
+	os.Setenv("LOG_LEVEL", "debug")
+	os.Setenv("LOG_PRETTY", "true")
+	defer func() {
+		os.Unsetenv("LOG_LEVEL")
+		os.Unsetenv("LOG_PRETTY")
+	}()
+
+	cfg, _ := config.New()
+
+	assert.Equal(t, "debug", cfg.Log.Level)
+	assert.True(t, cfg.Log.Pretty)
+}
+
+func TestConfigKafkaNegativeBreakerThresholdFallsBack(t *testing.T) {
+	os.Setenv("KAFKA_BREAKER_THRESHOLD", "-1")
+	defer os.Unsetenv("KAFKA_BREAKER_THRESHOLD")
+
+	cfg, _ := config.New()
+
+	assert.Equal(t, uint32(5), cfg.Kafka.BreakerThreshold)
+}

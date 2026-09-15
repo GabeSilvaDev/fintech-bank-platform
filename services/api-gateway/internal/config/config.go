@@ -14,6 +14,8 @@ type Config struct {
 	Server    contracts.ServerConfig
 	CORS      contracts.CORSConfig
 	RateLimit contracts.RateLimitConfig
+	Kafka     contracts.KafkaConfig
+	Log       contracts.LogConfig
 }
 
 func New() (*Config, error) {
@@ -23,6 +25,8 @@ func New() (*Config, error) {
 		Server:    loadServerConfig(),
 		CORS:      loadCORSConfig(),
 		RateLimit: loadRateLimitConfig(),
+		Kafka:     loadKafkaConfig(),
+		Log:       loadLogConfig(),
 	}, nil
 }
 
@@ -55,6 +59,23 @@ func loadRateLimitConfig() contracts.RateLimitConfig {
 	}
 }
 
+func loadKafkaConfig() contracts.KafkaConfig {
+	return contracts.KafkaConfig{
+		Brokers:          splitAndTrim(getEnv("KAFKA_BROKERS", "localhost:9092")),
+		WriteTimeout:     getEnvDuration("KAFKA_WRITE_TIMEOUT", 5*time.Second),
+		MaxAttempts:      getEnvInt("KAFKA_MAX_ATTEMPTS", 3),
+		BreakerThreshold: getEnvUint32("KAFKA_BREAKER_THRESHOLD", 5),
+		BreakerTimeout:   getEnvDuration("KAFKA_BREAKER_TIMEOUT", 30*time.Second),
+	}
+}
+
+func loadLogConfig() contracts.LogConfig {
+	return contracts.LogConfig{
+		Level:  getEnv("LOG_LEVEL", "info"),
+		Pretty: getEnvBool("LOG_PRETTY", false),
+	}
+}
+
 func getEnv(key, defaultValue string) string {
 	if value, exists := os.LookupEnv(key); exists {
 		return value
@@ -69,6 +90,14 @@ func getEnvInt(key string, defaultValue int) int {
 		}
 	}
 	return defaultValue
+}
+
+func getEnvUint32(key string, defaultValue uint32) uint32 {
+	value := getEnvInt(key, int(defaultValue))
+	if value < 0 {
+		return defaultValue
+	}
+	return uint32(value)
 }
 
 func getEnvBool(key string, defaultValue bool) bool {
