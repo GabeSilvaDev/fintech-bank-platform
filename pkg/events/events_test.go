@@ -1,7 +1,3 @@
-// ═══════════════════════════════════════════════════════════════════════════
-// Package events - Tests
-// ═══════════════════════════════════════════════════════════════════════════
-
 package events
 
 import (
@@ -11,10 +7,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 )
-
-// ═══════════════════════════════════════════════════════════════════════════
-// BASE EVENT TESTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 func TestNewEvent(t *testing.T) {
 	payload := map[string]string{"key": "value"}
@@ -33,7 +25,7 @@ func TestEvent_WithTraceID(t *testing.T) {
 	result := event.WithTraceID("trace-123")
 
 	assert.Equal(t, "trace-123", result.TraceID)
-	assert.Same(t, event, result) // Returns same pointer
+	assert.Same(t, event, result)
 }
 
 func TestEvent_WithMetadata(t *testing.T) {
@@ -75,10 +67,6 @@ func TestFromJSON_Invalid(t *testing.T) {
 	assert.Nil(t, event)
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// TOPICS TESTS
-// ═══════════════════════════════════════════════════════════════════════════
-
 func TestTopics(t *testing.T) {
 	assert.Equal(t, "account.commands", Topics.AccountCommands)
 	assert.Equal(t, "transaction.commands", Topics.TransactionCommands)
@@ -92,44 +80,29 @@ func TestTopics(t *testing.T) {
 	assert.Equal(t, "payment.dlq", Topics.PaymentDLQ)
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// EVENT TYPES TESTS
-// ═══════════════════════════════════════════════════════════════════════════
-
 func TestEventTypes(t *testing.T) {
-	// Account Commands
 	assert.Equal(t, "account.create", EventTypes.CreateAccount)
 	assert.Equal(t, "account.update", EventTypes.UpdateAccount)
 	assert.Equal(t, "account.delete", EventTypes.DeleteAccount)
 
-	// Account Events
 	assert.Equal(t, "account.created", EventTypes.AccountCreated)
 	assert.Equal(t, "account.updated", EventTypes.AccountUpdated)
 
-	// Transaction Commands
 	assert.Equal(t, "transaction.create", EventTypes.CreateTransaction)
 	assert.Equal(t, "transaction.transfer", EventTypes.ProcessTransfer)
 
-	// Transaction Events
 	assert.Equal(t, "transaction.completed", EventTypes.TransactionCompleted)
 	assert.Equal(t, "transaction.failed", EventTypes.TransactionFailed)
 
-	// Payment Commands
 	assert.Equal(t, "payment.process", EventTypes.ProcessPayment)
 	assert.Equal(t, "payment.refund", EventTypes.RefundPayment)
 
-	// Payment Events
 	assert.Equal(t, "payment.completed", EventTypes.PaymentCompleted)
 	assert.Equal(t, "payment.failed", EventTypes.PaymentFailed)
 
-	// Notification Events
 	assert.Equal(t, "notification.email", EventTypes.SendEmail)
 	assert.Equal(t, "notification.sms", EventTypes.SendSMS)
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// PAYLOAD TESTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 func TestCreateAccountPayload(t *testing.T) {
 	payload := CreateAccountPayload{
@@ -287,10 +260,6 @@ func TestErrorPayload(t *testing.T) {
 	assert.Equal(t, payload.ErrorCode, result.ErrorCode)
 	assert.Equal(t, payload.Retries, result.Retries)
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// HELPER FUNCTION TESTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 func TestNewAccountCommand(t *testing.T) {
 	payload := CreateAccountPayload{UserID: "user-123"}

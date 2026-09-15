@@ -1,7 +1,3 @@
-// ═══════════════════════════════════════════════════════════════════════════
-// Feature Test: CORS Middleware
-// ═══════════════════════════════════════════════════════════════════════════
-
 package feature
 
 import (
@@ -11,10 +7,6 @@ import (
 	"github.com/stretchr/testify/suite"
 )
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Test Suite
-// ═══════════════════════════════════════════════════════════════════════════
-
 type CorsTestSuite struct {
 	tests.TestCase
 }
@@ -22,10 +14,6 @@ type CorsTestSuite struct {
 func TestCorsSuite(t *testing.T) {
 	suite.Run(t, new(CorsTestSuite))
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Tests
-// ═══════════════════════════════════════════════════════════════════════════
 
 func (s *CorsTestSuite) TestCorsHeadersArePresent() {
 	s.WithHeader("Origin", "http://localhost:3000").

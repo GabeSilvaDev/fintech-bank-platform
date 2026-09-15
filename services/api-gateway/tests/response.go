@@ -1,7 +1,3 @@
-// ═══════════════════════════════════════════════════════════════════════════
-// TestResponse
-// ═══════════════════════════════════════════════════════════════════════════
-
 package tests
 
 import (
@@ -12,10 +8,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 )
-
-// ═══════════════════════════════════════════════════════════════════════════
-// TestResponse struct
-// ═══════════════════════════════════════════════════════════════════════════
 
 type TestResponse struct {
 	t        *testing.T
@@ -42,10 +34,6 @@ func newTestResponse(t *testing.T, rec *httptest.ResponseRecorder) *TestResponse
 
 	return tr
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Status Assertions
-// ═══════════════════════════════════════════════════════════════════════════
 
 func (r *TestResponse) AssertStatus(status int) *TestResponse {
 	assert.Equal(r.t, status, r.recorder.Code, "Expected status %d but got %d", status, r.recorder.Code)
@@ -112,10 +100,6 @@ func (r *TestResponse) AssertRedirect() *TestResponse {
 	return r
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// JSON Assertions
-// ═══════════════════════════════════════════════════════════════════════════
-
 func (r *TestResponse) AssertJson(expected map[string]interface{}) *TestResponse {
 	assert.NotNil(r.t, r.json, "Response is not valid JSON")
 
@@ -167,10 +151,6 @@ func (r *TestResponse) AssertExactJson(expected map[string]interface{}) *TestRes
 	return r
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Header Assertions
-// ═══════════════════════════════════════════════════════════════════════════
-
 func (r *TestResponse) AssertHeader(header, value string) *TestResponse {
 	actual := r.recorder.Header().Get(header)
 	assert.Equal(r.t, value, actual, "Header '%s' value mismatch", header)
@@ -196,10 +176,6 @@ func (r *TestResponse) AssertContentType(contentType string) *TestResponse {
 	return r
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Body Assertions
-// ═══════════════════════════════════════════════════════════════════════════
-
 func (r *TestResponse) AssertSee(value string) *TestResponse {
 	assert.Contains(r.t, string(r.body), value, "Response body does not contain '%s'", value)
 	return r
@@ -214,10 +190,6 @@ func (r *TestResponse) AssertBodyEmpty() *TestResponse {
 	assert.Empty(r.t, r.body, "Response body should be empty")
 	return r
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Success/Error Assertions
-// ═══════════════════════════════════════════════════════════════════════════
 
 func (r *TestResponse) AssertSuccess() *TestResponse {
 	return r.AssertJsonPath("success", true)
@@ -235,10 +207,6 @@ func (r *TestResponse) AssertErrorMessage(message string) *TestResponse {
 	return r.AssertJsonPath("error.message", message)
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Getters
-// ═══════════════════════════════════════════════════════════════════════════
-
 func (r *TestResponse) Status() int {
 	return r.recorder.Code
 }
@@ -254,10 +222,6 @@ func (r *TestResponse) Json() map[string]interface{} {
 func (r *TestResponse) Header(key string) string {
 	return r.recorder.Header().Get(key)
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Internal Helpers
-// ═══════════════════════════════════════════════════════════════════════════
 
 func (r *TestResponse) getJsonPath(path string) interface{} {
 	if r.json == nil {

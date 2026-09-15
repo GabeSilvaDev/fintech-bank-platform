@@ -1,7 +1,3 @@
-// ═══════════════════════════════════════════════════════════════════════════
-// Package validation - Tests
-// ═══════════════════════════════════════════════════════════════════════════
-
 package validation
 
 import (
@@ -9,10 +5,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 )
-
-// ═══════════════════════════════════════════════════════════════════════════
-// VALIDATOR TESTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 func TestGetValidator(t *testing.T) {
 	v := GetValidator()
@@ -48,10 +40,6 @@ func TestValidateVar(t *testing.T) {
 		assert.Error(t, err)
 	})
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// CPF TESTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 func TestIsValidCPF(t *testing.T) {
 	tests := []struct {
@@ -94,10 +82,6 @@ func TestCPFValidator(t *testing.T) {
 		assert.Error(t, err)
 	})
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// CNPJ TESTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 func TestIsValidCNPJ(t *testing.T) {
 	tests := []struct {
@@ -143,10 +127,6 @@ func TestCNPJValidator(t *testing.T) {
 	})
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// BRAZILIAN PHONE TESTS
-// ═══════════════════════════════════════════════════════════════════════════
-
 func TestIsValidBrazilianPhone(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -189,10 +169,6 @@ func TestBrazilianPhoneValidator(t *testing.T) {
 	})
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// CURRENCY TESTS
-// ═══════════════════════════════════════════════════════════════════════════
-
 func TestIsValidCurrency(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -231,10 +207,6 @@ func TestCurrencyValidator(t *testing.T) {
 		assert.Error(t, err)
 	})
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// PASSWORD STRENGTH TESTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 func TestIsStrongPassword(t *testing.T) {
 	tests := []struct {
@@ -277,10 +249,6 @@ func TestPasswordStrengthValidator(t *testing.T) {
 		assert.Error(t, err)
 	})
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// BANKING VALIDATION TESTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 func TestIsValidAccountNumber(t *testing.T) {
 	tests := []struct {
@@ -364,10 +332,6 @@ func TestAgencyNumberValidator(t *testing.T) {
 	})
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// PIX KEY TESTS
-// ═══════════════════════════════════════════════════════════════════════════
-
 func TestIsValidPixKey(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -414,10 +378,6 @@ func TestPixKeyValidator(t *testing.T) {
 		assert.Error(t, err)
 	})
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// FORMATTER TESTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 func TestFormatCPF(t *testing.T) {
 	tests := []struct {
@@ -491,10 +451,6 @@ func TestSanitizePhone(t *testing.T) {
 	result := SanitizePhone("(11) 99988-7766")
 	assert.Equal(t, "11999887766", result)
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// HELPER FUNCTION TESTS
-// ═══════════════════════════════════════════════════════════════════════════
 
 func TestIsAllSameDigits(t *testing.T) {
 	tests := []struct {

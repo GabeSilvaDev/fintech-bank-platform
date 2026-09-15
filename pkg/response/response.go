@@ -1,7 +1,3 @@
-// ═══════════════════════════════════════════════════════════════════════════
-// Package response - HTTP response helpers
-// ═══════════════════════════════════════════════════════════════════════════
-
 package response
 
 import (
@@ -34,10 +30,6 @@ type Meta struct {
 	Total      int64  `json:"total,omitempty"`
 	TotalPages int    `json:"total_pages,omitempty"`
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Response Writers
-// ═══════════════════════════════════════════════════════════════════════════
 
 // JSON writes a JSON response
 func JSON(w http.ResponseWriter, status int, data interface{}) {
@@ -111,10 +103,6 @@ func FromError(w http.ResponseWriter, err error) {
 	}
 	Error(w, http.StatusInternalServerError, "INTERNAL_ERROR", "Internal server error")
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Common Responses
-// ═══════════════════════════════════════════════════════════════════════════
 
 // OK writes a 200 OK response
 func OK(w http.ResponseWriter, data interface{}) {

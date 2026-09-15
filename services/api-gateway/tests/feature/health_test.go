@@ -1,7 +1,3 @@
-// ═══════════════════════════════════════════════════════════════════════════
-// Feature Test: Health Endpoint
-// ═══════════════════════════════════════════════════════════════════════════
-
 package feature
 
 import (
@@ -11,10 +7,6 @@ import (
 	"github.com/stretchr/testify/suite"
 )
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Test Suite
-// ═══════════════════════════════════════════════════════════════════════════
-
 type HealthTestSuite struct {
 	tests.TestCase
 }
@@ -22,10 +14,6 @@ type HealthTestSuite struct {
 func TestHealthSuite(t *testing.T) {
 	suite.Run(t, new(HealthTestSuite))
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Tests
-// ═══════════════════════════════════════════════════════════════════════════
 
 func (s *HealthTestSuite) TestHealthEndpointReturnsOk() {
 	s.Get("/health").

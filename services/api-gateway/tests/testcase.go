@@ -16,10 +16,6 @@ import (
 	"github.com/stretchr/testify/suite"
 )
 
-// ═══════════════════════════════════════════════════════════════════════════
-// TestCase - Base struct for all feature tests
-// ═══════════════════════════════════════════════════════════════════════════
-
 type TestCase struct {
 	suite.Suite
 	Router  *chi.Mux
@@ -27,10 +23,6 @@ type TestCase struct {
 	Logger  zerolog.Logger
 	headers map[string]string
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Setup & Teardown (setUp/tearDown)
-// ═══════════════════════════════════════════════════════════════════════════
 
 func (tc *TestCase) SetupSuite() {
 	tc.Config = testConfig()
@@ -46,16 +38,10 @@ func (tc *TestCase) SetupTest() {
 }
 
 func (tc *TestCase) TearDownTest() {
-	//
 }
 
 func (tc *TestCase) TearDownSuite() {
-	//
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// HTTP Request Methods
-// ═══════════════════════════════════════════════════════════════════════════
 
 func (tc *TestCase) Get(uri string) *TestResponse {
 	return tc.request(http.MethodGet, uri, nil)
@@ -89,10 +75,6 @@ func (tc *TestCase) Head(uri string) *TestResponse {
 	return tc.request(http.MethodHead, uri, nil)
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Header Methods (withHeaders())
-// ═══════════════════════════════════════════════════════════════════════════
-
 func (tc *TestCase) WithHeader(key, value string) *TestCase {
 	tc.headers[key] = value
 	return tc
@@ -112,10 +94,6 @@ func (tc *TestCase) WithToken(token string) *TestCase {
 func (tc *TestCase) WithContentType(contentType string) *TestCase {
 	return tc.WithHeader("Content-Type", contentType)
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Internal Request Helpers
-// ═══════════════════════════════════════════════════════════════════════════
 
 func (tc *TestCase) request(method, uri string, body io.Reader) *TestResponse {
 	req := httptest.NewRequest(method, uri, body)
@@ -151,10 +129,6 @@ func (tc *TestCase) applyHeaders(req *http.Request) {
 		req.Header.Set(key, value)
 	}
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Test Configuration
-// ═══════════════════════════════════════════════════════════════════════════
 
 func testConfig() *config.Config {
 	return &config.Config{

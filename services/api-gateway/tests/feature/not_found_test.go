@@ -1,7 +1,3 @@
-// ═══════════════════════════════════════════════════════════════════════════
-// Feature Test: Not Found Routes
-// ═══════════════════════════════════════════════════════════════════════════
-
 package feature
 
 import (
@@ -11,10 +7,6 @@ import (
 	"github.com/stretchr/testify/suite"
 )
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Test Suite
-// ═══════════════════════════════════════════════════════════════════════════
-
 type NotFoundTestSuite struct {
 	tests.TestCase
 }
@@ -22,10 +14,6 @@ type NotFoundTestSuite struct {
 func TestNotFoundSuite(t *testing.T) {
 	suite.Run(t, new(NotFoundTestSuite))
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Tests
-// ═══════════════════════════════════════════════════════════════════════════
 
 func (s *NotFoundTestSuite) TestNonExistentRouteReturnsNotFound() {
 	s.Get("/non-existent-route").

@@ -1,7 +1,3 @@
-// ═══════════════════════════════════════════════════════════════════════════
-// Package logger - Tests
-// ═══════════════════════════════════════════════════════════════════════════
-
 package logger
 
 import (
@@ -140,11 +136,10 @@ func TestPrettyOutput(t *testing.T) {
 }
 
 func TestNewWithNilOutput(t *testing.T) {
-	// Test that nil Output defaults to os.Stdout
 	cfg := Config{
 		Level:  "info",
 		Pretty: false,
-		Output: nil, // Should default to os.Stdout
+		Output: nil,
 	}
 
 	log := New(cfg)
@@ -157,7 +152,7 @@ func TestNewWithEmptyTimeFormat(t *testing.T) {
 		Level:      "info",
 		Pretty:     false,
 		Output:     &buf,
-		TimeFormat: "", // Should default to RFC3339
+		TimeFormat: "",
 	}
 
 	log := New(cfg)

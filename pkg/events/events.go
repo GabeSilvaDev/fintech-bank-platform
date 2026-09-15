@@ -1,7 +1,3 @@
-// ═══════════════════════════════════════════════════════════════════════════
-// Package events - Kafka event definitions for the Fintech Platform
-// ═══════════════════════════════════════════════════════════════════════════
-
 package events
 
 import (
@@ -10,10 +6,6 @@ import (
 
 	"github.com/google/uuid"
 )
-
-// ═══════════════════════════════════════════════════════════════════════════
-// BASE EVENT STRUCTURE
-// ═══════════════════════════════════════════════════════════════════════════
 
 // Event represents a base event structure for all Kafka messages
 type Event struct {
@@ -68,10 +60,6 @@ func FromJSON(data []byte) (*Event, error) {
 	return &event, nil
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// KAFKA TOPICS
-// ═══════════════════════════════════════════════════════════════════════════
-
 // Topics defines all Kafka topic names
 var Topics = struct {
 	// Commands (requests for actions)
@@ -106,10 +94,6 @@ var Topics = struct {
 	TransactionDLQ: "transaction.dlq",
 	PaymentDLQ:     "payment.dlq",
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// EVENT TYPES
-// ═══════════════════════════════════════════════════════════════════════════
 
 // EventTypes defines all event type constants
 var EventTypes = struct {
@@ -202,10 +186,6 @@ var EventTypes = struct {
 	SendPush:  "notification.push",
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// ACCOUNT PAYLOADS
-// ═══════════════════════════════════════════════════════════════════════════
-
 // CreateAccountPayload represents the payload for creating an account
 type CreateAccountPayload struct {
 	UserID      string `json:"user_id"`
@@ -235,10 +215,6 @@ type AccountCreatedPayload struct {
 	Status        string    `json:"status"`
 	CreatedAt     time.Time `json:"created_at"`
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// TRANSACTION PAYLOADS
-// ═══════════════════════════════════════════════════════════════════════════
 
 // CreateTransactionPayload represents the payload for creating a transaction
 type CreateTransactionPayload struct {
@@ -284,10 +260,6 @@ type TransferCompletedPayload struct {
 	CompletedAt      time.Time `json:"completed_at"`
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// PAYMENT PAYLOADS
-// ═══════════════════════════════════════════════════════════════════════════
-
 // ProcessPaymentPayload represents the payload for processing a payment
 type ProcessPaymentPayload struct {
 	AccountID      string  `json:"account_id"`
@@ -312,10 +284,6 @@ type PaymentCompletedPayload struct {
 	ExternalID    string    `json:"external_id,omitempty"`
 	CompletedAt   time.Time `json:"completed_at"`
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// NOTIFICATION PAYLOADS
-// ═══════════════════════════════════════════════════════════════════════════
 
 // SendEmailPayload represents the payload for sending an email
 type SendEmailPayload struct {
@@ -342,10 +310,6 @@ type SendPushPayload struct {
 	Priority string            `json:"priority,omitempty"`
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// ERROR PAYLOADS
-// ═══════════════════════════════════════════════════════════════════════════
-
 // ErrorPayload represents a generic error payload for failed events
 type ErrorPayload struct {
 	OriginalEvent *Event `json:"original_event"`
@@ -354,10 +318,6 @@ type ErrorPayload struct {
 	Retries       int    `json:"retries"`
 	LastRetryAt   string `json:"last_retry_at,omitempty"`
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// HELPER FUNCTIONS
-// ═══════════════════════════════════════════════════════════════════════════
 
 // NewAccountCommand creates a new account command event
 func NewAccountCommand(eventType string, payload interface{}) *Event {

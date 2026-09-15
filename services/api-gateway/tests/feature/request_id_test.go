@@ -1,7 +1,3 @@
-// ═══════════════════════════════════════════════════════════════════════════
-// Feature Test: Request ID Middleware
-// ═══════════════════════════════════════════════════════════════════════════
-
 package feature
 
 import (
@@ -11,10 +7,6 @@ import (
 	"github.com/stretchr/testify/suite"
 )
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Test Suite
-// ═══════════════════════════════════════════════════════════════════════════
-
 type RequestIDTestSuite struct {
 	tests.TestCase
 }
@@ -22,10 +14,6 @@ type RequestIDTestSuite struct {
 func TestRequestIDSuite(t *testing.T) {
 	suite.Run(t, new(RequestIDTestSuite))
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Tests
-// ═══════════════════════════════════════════════════════════════════════════
 
 func (s *RequestIDTestSuite) TestRequestIdIsGenerated() {
 	s.Get("/health").

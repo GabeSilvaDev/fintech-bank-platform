@@ -1,7 +1,3 @@
-// ═══════════════════════════════════════════════════════════════════════════
-// Test Helpers - Utility functions for testing
-// ═══════════════════════════════════════════════════════════════════════════
-
 package tests
 
 import (
@@ -11,10 +7,6 @@ import (
 
 	"github.com/google/uuid"
 )
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Random Data Generators
-// ═══════════════════════════════════════════════════════════════════════════
 
 var rng = rand.New(rand.NewSource(time.Now().UnixNano()))
 
@@ -51,10 +43,6 @@ func RandomChoice[T any](choices []T) T {
 	return choices[rng.Intn(len(choices))]
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// JSON Helpers
-// ═══════════════════════════════════════════════════════════════════════════
-
 func ToJson(data interface{}) string {
 	bytes, _ := json.Marshal(data)
 	return string(bytes)
@@ -65,10 +53,6 @@ func FromJson(jsonStr string) map[string]interface{} {
 	json.Unmarshal([]byte(jsonStr), &result)
 	return result
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Time Helpers
-// ═══════════════════════════════════════════════════════════════════════════
 
 func Now() string {
 	return time.Now().UTC().Format(time.RFC3339)

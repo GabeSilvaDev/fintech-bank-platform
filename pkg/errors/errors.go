@@ -1,7 +1,3 @@
-// ═══════════════════════════════════════════════════════════════════════════
-// Package errors - Standardized error handling
-// ═══════════════════════════════════════════════════════════════════════════
-
 package errors
 
 import (
@@ -51,10 +47,6 @@ func (e *AppError) Wrap(err error) *AppError {
 	e.Err = err
 	return e
 }
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Error Constructors
-// ═══════════════════════════════════════════════════════════════════════════
 
 // New creates a new AppError
 func New(code, message string, httpStatus int) *AppError {
@@ -110,10 +102,6 @@ func ServiceUnavailable(code, message string) *AppError {
 	return New(code, message, http.StatusServiceUnavailable)
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// Common Errors
-// ═══════════════════════════════════════════════════════════════════════════
-
 var (
 	ErrValidation         = BadRequest("VALIDATION_ERROR", "Validation failed")
 	ErrInvalidJSON        = BadRequest("INVALID_JSON", "Invalid JSON payload")
@@ -134,10 +122,6 @@ var (
 	ErrDatabaseError      = InternalServer("DATABASE_ERROR", "Database operation failed")
 	ErrServiceUnavailable = ServiceUnavailable("SERVICE_UNAVAILABLE", "Service temporarily unavailable")
 )
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Error Helpers
-// ═══════════════════════════════════════════════════════════════════════════
 
 // IsAppError checks if an error is an AppError
 func IsAppError(err error) bool {

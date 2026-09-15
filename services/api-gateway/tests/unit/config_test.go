@@ -1,7 +1,3 @@
-// ═══════════════════════════════════════════════════════════════════════════
-// Unit Test: Config
-// ═══════════════════════════════════════════════════════════════════════════
-
 package unit
 
 import (
@@ -12,10 +8,6 @@ import (
 	"github.com/fintech-bank-platform/api-gateway/internal/config"
 	"github.com/stretchr/testify/assert"
 )
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Test config.New()
-// ═══════════════════════════════════════════════════════════════════════════
 
 func TestConfigNew(t *testing.T) {
 	cfg, err := config.New()
