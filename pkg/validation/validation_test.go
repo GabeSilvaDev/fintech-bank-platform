@@ -3,6 +3,7 @@ package validation
 import (
 	"testing"
 
+	"github.com/go-playground/validator/v10"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -471,4 +472,23 @@ func TestIsAllSameDigits(t *testing.T) {
 			assert.Equal(t, tt.expected, result)
 		})
 	}
+}
+
+func TestValidateReportsJSONFieldNames(t *testing.T) {
+	type payload struct {
+		UserID string `json:"user_id" validate:"required"`
+		Secret string `json:"-" validate:"required"`
+		Plain  string `validate:"required"`
+	}
+
+	err := Validate(payload{})
+
+	fieldErrors, ok := err.(validator.ValidationErrors)
+	assert.True(t, ok)
+
+	var fields []string
+	for _, fe := range fieldErrors {
+		fields = append(fields, fe.Field())
+	}
+	assert.Equal(t, []string{"user_id", "Secret", "Plain"}, fields)
 }

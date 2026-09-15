@@ -1,6 +1,7 @@
 package validation
 
 import (
+	"reflect"
 	"regexp"
 	"strings"
 	"unicode"
@@ -12,7 +13,16 @@ var validate *validator.Validate
 
 func init() {
 	validate = validator.New()
+	validate.RegisterTagNameFunc(jsonFieldName)
 	registerCustomValidators()
+}
+
+func jsonFieldName(field reflect.StructField) string {
+	name := strings.SplitN(field.Tag.Get("json"), ",", 2)[0]
+	if name == "-" {
+		return ""
+	}
+	return name
 }
 
 // GetValidator returns the singleton validator instance
