@@ -1,0 +1,75 @@
+package handlers
+
+import (
+	"net/http"
+	"strings"
+
+	"github.com/fintech-bank-platform/api-gateway/internal/contracts"
+	"github.com/fintech-bank-platform/pkg/errors"
+	"github.com/fintech-bank-platform/pkg/events"
+	"github.com/fintech-bank-platform/pkg/response"
+)
+
+type paymentRequest struct {
+	AccountID      string  `json:"account_id" validate:"required,uuid"`
+	PaymentMethod  string  `json:"payment_method" validate:"required,oneof=pix ted boleto"`
+	Amount         float64 `json:"amount" validate:"required,gt=0"`
+	Currency       string  `json:"currency" validate:"required,currency"`
+	Recipient      string  `json:"recipient" validate:"required,max=120"`
+	PixKey         string  `json:"pix_key" validate:"omitempty,pix_key"`
+	BoletoCode     string  `json:"boleto_code" validate:"omitempty,numeric,len=47"`
+	Description    string  `json:"description" validate:"max=255"`
+	IdempotencyKey string  `json:"idempotency_key" validate:"required,max=64"`
+}
+
+func (r paymentRequest) missingMethodField() string {
+	switch r.PaymentMethod {
+	case "pix":
+		if r.PixKey == "" {
+			return "pix_key"
+		}
+	case "boleto":
+		if r.BoletoCode == "" {
+			return "boleto_code"
+		}
+	}
+	return ""
+}
+
+type PaymentHandler struct {
+	publisher contracts.Publisher
+}
+
+func NewPaymentHandler(publisher contracts.Publisher) *PaymentHandler {
+	return &PaymentHandler{publisher: publisher}
+}
+
+func (h *PaymentHandler) Process(w http.ResponseWriter, r *http.Request) {
+	var req paymentRequest
+	if err := decode(r, &req); err != nil {
+		response.FromError(w, err)
+		return
+	}
+	if err := validate(req); err != nil {
+		response.FromError(w, err)
+		return
+	}
+	if field := req.missingMethodField(); field != "" {
+		response.FromError(w, errors.UnprocessableEntity("VALIDATION_ERROR", "request validation failed").WithDetail(field, "required"))
+		return
+	}
+
+	event := events.NewPaymentCommand(events.EventTypes.ProcessPayment, events.ProcessPaymentPayload{
+		AccountID:      req.AccountID,
+		PaymentMethod:  req.PaymentMethod,
+		Amount:         req.Amount,
+		Currency:       strings.ToUpper(req.Currency),
+		Recipient:      req.Recipient,
+		PixKey:         req.PixKey,
+		BoletoCode:     req.BoletoCode,
+		Description:    req.Description,
+		IdempotencyKey: req.IdempotencyKey,
+	})
+
+	publish(w, r, h.publisher, events.Topics.PaymentCommands, req.AccountID, event)
+}
