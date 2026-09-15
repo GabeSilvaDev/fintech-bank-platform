@@ -1,121 +1,93 @@
-# 📦 Fintech Platform - Shared Packages
+# Shared packages
 
-Este diretório contém pacotes compartilhados utilizados por todos os microserviços da plataforma fintech.
-
-## 📁 Estrutura
+Go module `github.com/fintech-bank-platform/pkg`, imported by every service of the platform. Each package has its own tests; CI requires 100 % coverage and clean `gofmt`.
 
 ```
 pkg/
-├── logger/        # Logger estruturado (zerolog)
-├── errors/        # Error handling padronizado
-├── response/      # HTTP response helpers
-├── validation/    # Validadores compartilhados (CPF, CNPJ, Phone, etc.)
-└── events/        # Definições de eventos Kafka
+├── logger/        zerolog wrapper with presets
+├── errors/        AppError with HTTP status, code and details
+├── response/      JSON response helpers for net/http
+├── validation/    Brazilian and banking validators (CPF, CNPJ, PIX, …)
+└── events/        Kafka event envelope, topics and typed payloads
 ```
 
-## 📋 Pacotes Disponíveis
-
-### 🪵 Logger (`pkg/logger`)
-
-Logger estruturado baseado em zerolog com suporte a níveis de log, saída JSON e contexto.
+## logger
 
 ```go
 import "github.com/fintech-bank-platform/pkg/logger"
 
-// Inicializar logger
-log := logger.NewLogger(logger.Config{
-    Level:  "info",
-    Pretty: true, // false em produção
-})
+log := logger.New(logger.Config{Level: "info", Pretty: true})
+// or logger.NewDevelopment() / logger.NewProduction() / logger.NewDefault()
 
-// Usar logger
-log.Info("User created", logger.Fields{
-    "user_id": "123",
-    "email":   "user@example.com",
-})
+// *Logger embeds zerolog.Logger, so the zerolog API is available directly
+log.WithFields(map[string]interface{}{"user_id": "123", "email": "user@example.com"}).
+    Info().Msg("user created")
+
+log.WithRequestID(reqID).WithError(err).Error().Msg("request failed")
 ```
 
-### ⚠️ Errors (`pkg/errors`)
-
-Error handling padronizado com códigos HTTP e detalhes.
+## errors
 
 ```go
 import "github.com/fintech-bank-platform/pkg/errors"
 
-// Criar erros tipados
 err := errors.NotFound("USER_NOT_FOUND", "User not found")
-err := errors.BadRequest("VALIDATION_ERROR", "Invalid email").
-    WithDetail("field", "email")
+err = errors.BadRequest("VALIDATION_ERROR", "Invalid email").WithDetail("field", "email")
 
-// Verificar tipo
-if errors.IsNotFound(err) {
-    // handle not found
+if errors.IsAppError(err) {
+    appErr := err.(*errors.AppError) // .Code, .Message, .HTTPStatus, .Details
 }
 ```
 
-### 📤 Response (`pkg/response`)
-
-HTTP response helpers para respostas padronizadas.
+## response
 
 ```go
 import "github.com/fintech-bank-platform/pkg/response"
 
-// Sucesso
 response.OK(w, data)
 response.Created(w, data)
 response.NoContent(w)
 
-// Erro
 response.BadRequest(w, "CODE", "message")
 response.NotFound(w, "CODE", "message")
+response.FromError(w, err) // renders an *errors.AppError with its own status
 
-// Com paginação
 response.SuccessWithMeta(w, http.StatusOK, data, &response.Meta{
-    Page:       1,
-    PerPage:    10,
-    Total:      100,
-    TotalPages: 10,
+    Page: 1, PerPage: 10, Total: 100, TotalPages: 10,
 })
 ```
 
-### ✅ Validation (`pkg/validation`)
-
-Validadores compartilhados para dados brasileiros e bancários.
+## validation
 
 ```go
 import "github.com/fintech-bank-platform/pkg/validation"
 
-// Validar CPF
-if validation.IsValidCPF("529.982.247-25") {
-    // CPF válido
-}
+validation.IsValidCPF("529.982.247-25")
+validation.IsValidCNPJ("11.222.333/0001-81")
+validation.IsValidBrazilianPhone("+55 11 91234-5678")
+validation.IsValidPixKey("user@example.com")
+validation.IsStrongPassword("S3nh@Forte!")
 
-// Validar CNPJ
-if validation.IsValidCNPJ("11.222.333/0001-81") {
-    // CNPJ válido
-}
-
-// Validar com struct tags
 type Account struct {
     CPF    string `validate:"cpf"`
     Phone  string `validate:"phone_br"`
     Agency string `validate:"agency_number"`
+    Number string `validate:"account_number"`
 }
-
 err := validation.Validate(account)
 
-// Formatar
-formatted := validation.FormatCPF("52998224725") // "529.982.247-25"
+validation.FormatCPF("52998224725")   // "529.982.247-25"
+validation.FormatCNPJ("11222333000181")
+validation.FormatPhone("11912345678")
 ```
 
-### 📨 Events (`pkg/events`)
+Struct tags: `cpf`, `cnpj`, `phone_br`, `pix_key`, `agency_number`, `account_number`, `currency`, `password_strength`.
 
-Definições de eventos Kafka para comunicação entre microserviços.
+## events
 
 ```go
 import "github.com/fintech-bank-platform/pkg/events"
 
-// Criar evento
 event := events.NewAccountCommand(events.EventTypes.CreateAccount, events.CreateAccountPayload{
     UserID:      "user-123",
     AccountType: "checking",
@@ -123,74 +95,19 @@ event := events.NewAccountCommand(events.EventTypes.CreateAccount, events.Create
     Email:       "john@example.com",
     Document:    "52998224725",
 })
-
-// Adicionar metadata
 event.WithTraceID("trace-123").WithMetadata("source", "mobile-app")
 
-// Serializar
-jsonData, _ := event.ToJSON()
+data, _ := event.ToJSON()
+back, _ := events.FromJSON(data)
 
-// Tópicos disponíveis
 topic := events.Topics.AccountCommands // "account.commands"
 ```
 
-## 🧪 Testes
-
-### Rodar testes localmente
+## Tests
 
 ```bash
-# Com Go instalado
-go test -v ./...
-
-# Com coverage
-go test -coverprofile=coverage.out ./...
-go tool cover -html=coverage.out -o coverage.html
+make test            # go test ./...
+make test-coverage   # coverage.html
+make lint            # gofmt check
+make docker-test     # same, inside the fintech-pkg container
 ```
-
-### Rodar testes via Docker
-
-```bash
-# Usando Makefile
-make docker-test
-make docker-coverage
-
-# Usando docker-compose
-docker-compose run --rm pkg-test
-docker-compose run --rm pkg-coverage
-```
-
-## 🛠️ Desenvolvimento
-
-### Adicionar ao seu serviço
-
-No `go.mod` do seu serviço, adicione:
-
-```go
-require github.com/fintech-bank-platform/pkg v0.0.0
-
-replace github.com/fintech-bank-platform/pkg => ../../pkg
-```
-
-### Convenções
-
-- **Testes**: Mínimo 80% de cobertura
-- **Formatação**: `gofmt -s -w .`
-- **Linting**: `golangci-lint run`
-- **Documentação**: Comentários em todas as funções públicas
-
-## 📊 Validadores Customizados
-
-| Tag | Descrição | Exemplo |
-|-----|-----------|---------|
-| `cpf` | CPF brasileiro | `52998224725` |
-| `cnpj` | CNPJ brasileiro | `11222333000181` |
-| `phone_br` | Telefone brasileiro | `11999887766` |
-| `currency` | Código ISO 4217 | `BRL`, `USD` |
-| `password_strength` | Senha forte | `MyP@ssw0rd` |
-| `account_number` | Número de conta | `12345678` |
-| `agency_number` | Número de agência | `1234` |
-| `pix_key` | Chave PIX | CPF, Email, Phone, EVP |
-
-## 📝 Licença
-
-Este projeto é parte da plataforma Fintech Bank.
