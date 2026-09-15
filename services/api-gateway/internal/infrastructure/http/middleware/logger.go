@@ -1,0 +1,35 @@
+package middleware
+
+import (
+	"net/http"
+	"time"
+
+	"github.com/fintech-bank-platform/pkg/logger"
+	chiMiddleware "github.com/go-chi/chi/v5/middleware"
+)
+
+func Logger(log *logger.Logger) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			start := time.Now()
+			ww := chiMiddleware.NewWrapResponseWriter(w, r.ProtoMajor)
+
+			next.ServeHTTP(ww, r)
+
+			entry := log.Info()
+			if ww.Status() >= http.StatusInternalServerError {
+				entry = log.Error()
+			}
+
+			entry.
+				Str("request_id", GetRequestID(r.Context())).
+				Str("method", r.Method).
+				Str("path", r.URL.Path).
+				Str("remote_addr", r.RemoteAddr).
+				Int("status", ww.Status()).
+				Int("bytes", ww.BytesWritten()).
+				Dur("duration", time.Since(start)).
+				Msg("request completed")
+		})
+	}
+}
