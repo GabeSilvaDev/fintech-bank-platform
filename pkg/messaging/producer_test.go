@@ -1,4 +1,4 @@
-package unit
+package messaging
 
 import (
 	"context"
@@ -7,18 +7,34 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fintech-bank-platform/api-gateway/internal/contracts"
-	"github.com/fintech-bank-platform/api-gateway/internal/infrastructure/messaging"
-	"github.com/fintech-bank-platform/api-gateway/tests"
 	apperrors "github.com/fintech-bank-platform/pkg/errors"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/segmentio/kafka-go"
 	"github.com/stretchr/testify/assert"
 )
 
+type fakeWriter struct {
+	Err      error
+	Messages []kafka.Message
+	Closed   bool
+}
+
+func (f *fakeWriter) WriteMessages(_ context.Context, msgs ...kafka.Message) error {
+	if f.Err != nil {
+		return f.Err
+	}
+	f.Messages = append(f.Messages, msgs...)
+	return nil
+}
+
+func (f *fakeWriter) Close() error {
+	f.Closed = true
+	return nil
+}
+
 func TestProducerPublishWritesMessage(t *testing.T) {
-	w := &tests.FakeWriter{}
-	p := messaging.NewProducerWithWriter(w, 0)
+	w := &fakeWriter{}
+	p := NewProducerWithWriter(w, 0)
 	ev := events.NewAccountCommand(events.EventTypes.CreateAccount, map[string]string{"user_id": "u1"}).WithTraceID("trace-1")
 
 	err := p.Publish(context.Background(), events.Topics.AccountCommands, "u1", ev)
@@ -43,8 +59,8 @@ func TestProducerPublishWritesMessage(t *testing.T) {
 }
 
 func TestProducerPublishReturnsServiceUnavailableOnWriteError(t *testing.T) {
-	w := &tests.FakeWriter{Err: errors.New("broker down")}
-	p := messaging.NewProducerWithWriter(w, 0)
+	w := &fakeWriter{Err: errors.New("broker down")}
+	p := NewProducerWithWriter(w, 0)
 	ev := events.NewAccountCommand(events.EventTypes.CreateAccount, nil)
 
 	err := p.Publish(context.Background(), events.Topics.AccountCommands, "k", ev)
@@ -57,8 +73,8 @@ func TestProducerPublishReturnsServiceUnavailableOnWriteError(t *testing.T) {
 }
 
 func TestProducerPublishReturnsInternalErrorWhenEventCannotBeEncoded(t *testing.T) {
-	w := &tests.FakeWriter{}
-	p := messaging.NewProducerWithWriter(w, 0)
+	w := &fakeWriter{}
+	p := NewProducerWithWriter(w, 0)
 	ev := events.NewAccountCommand(events.EventTypes.CreateAccount, make(chan int))
 
 	err := p.Publish(context.Background(), events.Topics.AccountCommands, "k", ev)
@@ -82,7 +98,7 @@ func (blockingWriter) Close() error {
 }
 
 func TestProducerPublishTimesOutAfterPublishTimeout(t *testing.T) {
-	p := messaging.NewProducerWithWriter(blockingWriter{}, 20*time.Millisecond)
+	p := NewProducerWithWriter(blockingWriter{}, 20*time.Millisecond)
 	ev := events.NewAccountCommand(events.EventTypes.CreateAccount, nil)
 
 	err := p.Publish(context.Background(), events.Topics.AccountCommands, "k", ev)
@@ -94,15 +110,15 @@ func TestProducerPublishTimesOutAfterPublishTimeout(t *testing.T) {
 }
 
 func TestProducerCloseClosesWriter(t *testing.T) {
-	w := &tests.FakeWriter{}
-	p := messaging.NewProducerWithWriter(w, 0)
+	w := &fakeWriter{}
+	p := NewProducerWithWriter(w, 0)
 
 	assert.NoError(t, p.Close())
 	assert.True(t, w.Closed)
 }
 
 func TestNewProducerBuildsKafkaWriter(t *testing.T) {
-	p := messaging.NewProducer(contracts.KafkaConfig{
+	p := NewProducer(ProducerConfig{
 		Brokers:        []string{"localhost:9092"},
 		WriteTimeout:   time.Second,
 		BatchTimeout:   10 * time.Millisecond,

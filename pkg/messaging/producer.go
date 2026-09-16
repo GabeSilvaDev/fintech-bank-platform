@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/fintech-bank-platform/api-gateway/internal/contracts"
 	"github.com/fintech-bank-platform/pkg/errors"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/segmentio/kafka-go"
@@ -15,12 +14,20 @@ type Writer interface {
 	Close() error
 }
 
+type ProducerConfig struct {
+	Brokers        []string
+	WriteTimeout   time.Duration
+	BatchTimeout   time.Duration
+	PublishTimeout time.Duration
+	MaxAttempts    int
+}
+
 type Producer struct {
 	writer  Writer
 	timeout time.Duration
 }
 
-func NewProducer(cfg contracts.KafkaConfig) *Producer {
+func NewProducer(cfg ProducerConfig) *Producer {
 	return NewProducerWithWriter(&kafka.Writer{
 		Addr:                   kafka.TCP(cfg.Brokers...),
 		Balancer:               &kafka.Hash{},

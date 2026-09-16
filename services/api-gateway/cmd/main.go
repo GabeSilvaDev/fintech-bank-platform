@@ -3,8 +3,9 @@ package main
 import (
 	"github.com/fintech-bank-platform/api-gateway/internal/config"
 	"github.com/fintech-bank-platform/api-gateway/internal/infrastructure/http"
-	"github.com/fintech-bank-platform/api-gateway/internal/infrastructure/messaging"
+	gwmsg "github.com/fintech-bank-platform/api-gateway/internal/infrastructure/messaging"
 	"github.com/fintech-bank-platform/pkg/logger"
+	"github.com/fintech-bank-platform/pkg/messaging"
 )
 
 func main() {
@@ -15,11 +16,17 @@ func main() {
 
 	log := logger.New(logger.Config{Level: cfg.Log.Level, Pretty: cfg.Log.Pretty})
 
-	producer := messaging.NewProducer(cfg.Kafka)
+	producer := messaging.NewProducer(messaging.ProducerConfig{
+		Brokers:        cfg.Kafka.Brokers,
+		WriteTimeout:   cfg.Kafka.WriteTimeout,
+		BatchTimeout:   cfg.Kafka.BatchTimeout,
+		PublishTimeout: cfg.Kafka.PublishTimeout,
+		MaxAttempts:    cfg.Kafka.MaxAttempts,
+	})
 
 	server := http.NewServer(cfg, log.Logger)
 	http.SetupRouter(server.Router(), cfg, http.Dependencies{
-		Publisher: messaging.NewBreaker(producer, cfg.Kafka),
+		Publisher: gwmsg.NewBreaker(producer, cfg.Kafka),
 		Logger:    log,
 	})
 

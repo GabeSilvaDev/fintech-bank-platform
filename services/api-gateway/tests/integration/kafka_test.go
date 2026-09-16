@@ -11,9 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fintech-bank-platform/api-gateway/internal/contracts"
-	"github.com/fintech-bank-platform/api-gateway/internal/infrastructure/messaging"
 	"github.com/fintech-bank-platform/pkg/events"
+	"github.com/fintech-bank-platform/pkg/messaging"
 	"github.com/google/uuid"
 	"github.com/segmentio/kafka-go"
 	"github.com/stretchr/testify/require"
@@ -50,10 +49,12 @@ func TestProducerRoundTripsThroughKafka(t *testing.T) {
 	topic := "it." + uuid.NewString()
 	createTopic(t, addrs[0], topic)
 
-	producer := messaging.NewProducer(contracts.KafkaConfig{
-		Brokers:      addrs,
-		WriteTimeout: 10 * time.Second,
-		MaxAttempts:  5,
+	producer := messaging.NewProducer(messaging.ProducerConfig{
+		Brokers:        addrs,
+		WriteTimeout:   10 * time.Second,
+		BatchTimeout:   10 * time.Millisecond,
+		PublishTimeout: 20 * time.Second,
+		MaxAttempts:    5,
 	})
 	defer producer.Close()
 

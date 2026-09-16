@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/fintech-bank-platform/pkg/events"
-	"github.com/segmentio/kafka-go"
 )
 
 type PublishedCommand struct {
@@ -28,23 +27,4 @@ func (f *FakePublisher) Publish(_ context.Context, topic, key string, event *eve
 
 func (f *FakePublisher) Last() PublishedCommand {
 	return f.Published[len(f.Published)-1]
-}
-
-type FakeWriter struct {
-	Err      error
-	Messages []kafka.Message
-	Closed   bool
-}
-
-func (f *FakeWriter) WriteMessages(_ context.Context, msgs ...kafka.Message) error {
-	if f.Err != nil {
-		return f.Err
-	}
-	f.Messages = append(f.Messages, msgs...)
-	return nil
-}
-
-func (f *FakeWriter) Close() error {
-	f.Closed = true
-	return nil
 }
