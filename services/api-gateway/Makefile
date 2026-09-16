@@ -1,4 +1,4 @@
-.PHONY: help test test-unit test-feature test-coverage test-verbose clean run build
+.PHONY: help test test-unit test-feature test-integration test-coverage test-verbose clean run build
 
 help:
 	@echo "═══════════════════════════════════════════════════════════════════"
@@ -8,6 +8,7 @@ help:
 	@echo "  make test            - Run all tests with coverage"
 	@echo "  make test-unit       - Run unit tests only"
 	@echo "  make test-feature    - Run feature tests only"
+	@echo "  make test-integration - Run Kafka integration tests (needs KAFKA_BROKERS)"
 	@echo "  make test-verbose    - Run tests with verbose output"
 	@echo "  make test-coverage   - Generate HTML coverage report"
 	@echo "  make clean           - Remove generated files"
@@ -27,6 +28,10 @@ test-unit:
 test-feature:
 	@echo "Running feature tests..."
 	@go test ./tests/feature/... -v
+
+test-integration:
+	@echo "Running integration tests..."
+	@go test -tags integration ./tests/integration/... -v
 
 test-verbose:
 	@echo "Running tests (verbose)..."
