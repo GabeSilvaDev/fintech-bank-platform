@@ -3,9 +3,12 @@ package messaging
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/segmentio/kafka-go"
 )
+
+const DefaultDrainTimeout = 30 * time.Second
 
 type Reader interface {
 	FetchMessage(ctx context.Context) (kafka.Message, error)
@@ -14,15 +17,17 @@ type Reader interface {
 }
 
 type ConsumerConfig struct {
-	Brokers []string
-	GroupID string
-	Topic   string
+	Brokers      []string
+	GroupID      string
+	Topic        string
+	DrainTimeout time.Duration
 }
 
 type Handler func(ctx context.Context, msg kafka.Message) error
 
 type Consumer struct {
-	reader Reader
+	reader       Reader
+	drainTimeout time.Duration
 }
 
 func NewConsumer(cfg ConsumerConfig) *Consumer {
@@ -33,11 +38,18 @@ func NewConsumer(cfg ConsumerConfig) *Consumer {
 		StartOffset: kafka.FirstOffset,
 		MinBytes:    1,
 		MaxBytes:    1 << 20,
-	}))
+	}), cfg.DrainTimeout)
 }
 
-func NewConsumerWithReader(r Reader) *Consumer {
-	return &Consumer{reader: r}
+func NewConsumerWithReader(r Reader, drainTimeout time.Duration) *Consumer {
+	if drainTimeout <= 0 {
+		drainTimeout = DefaultDrainTimeout
+	}
+	return &Consumer{reader: r, drainTimeout: drainTimeout}
+}
+
+func (c *Consumer) DrainTimeout() time.Duration {
+	return c.drainTimeout
 }
 
 func (c *Consumer) Run(ctx context.Context, handle Handler) error {
@@ -50,19 +62,61 @@ func (c *Consumer) Run(ctx context.Context, handle Handler) error {
 			return err
 		}
 
-		if err := handle(ctx, msg); err != nil {
-			if ctx.Err() != nil {
-				return nil
-			}
+		if err := c.process(ctx, msg, handle); err != nil {
 			return err
 		}
-
-		if err := c.reader.CommitMessages(ctx, msg); err != nil {
-			return err
+		if ctx.Err() != nil {
+			return nil
 		}
 	}
 }
 
+func (c *Consumer) process(ctx context.Context, msg kafka.Message, handle Handler) error {
+	workCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.drainTimeout)
+	defer cancel()
+
+	if err := handle(workCtx, msg); err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
+		return err
+	}
+	return c.reader.CommitMessages(workCtx, msg)
+}
+
 func (c *Consumer) Close() error {
 	return c.reader.Close()
+}
+
+func RunWithRestart(ctx context.Context, newConsumer func() *Consumer, handle Handler, backoff []time.Duration, onError func(error)) {
+	for attempt := 0; ; attempt++ {
+		consumer := newConsumer()
+		err := consumer.Run(ctx, handle)
+		_ = consumer.Close()
+		if ctx.Err() != nil || err == nil {
+			return
+		}
+		onError(err)
+		if !wait(ctx, restartDelay(backoff, attempt)) {
+			return
+		}
+	}
+}
+
+func restartDelay(backoff []time.Duration, attempt int) time.Duration {
+	if len(backoff) == 0 {
+		return 0
+	}
+	return backoff[min(attempt, len(backoff)-1)]
+}
+
+func wait(ctx context.Context, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
