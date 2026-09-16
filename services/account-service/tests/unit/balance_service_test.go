@@ -205,13 +205,17 @@ func TestDebitRechecksBalanceAfterConflict(t *testing.T) {
 	h := newHarness()
 	account := h.activeAccount(1000)
 	h.accounts.CASResults = []tests.CASResult{{Applied: false}}
-	h.accounts.Accounts[account.AccountID].BalanceCents = 100
+	h.accounts.OnCAS = func() { h.accounts.Accounts[account.AccountID].BalanceCents = 100 }
 
 	result, err := h.service.Debit(context.Background(), debit(account.AccountID.String(), 5))
 
 	assert.NoError(t, err)
+	assert.Nil(t, result.Debited)
 	assert.Equal(t, "insufficient_funds", result.Rejected.Reason)
 	assert.Equal(t, 1.0, result.Rejected.Balance)
+	assert.Equal(t, 5.0, result.Rejected.Amount)
+	assert.Equal(t, 1, h.accounts.CASCalls)
+	assert.Equal(t, int64(100), h.accounts.Accounts[account.AccountID].BalanceCents)
 }
 
 func TestDebitRetriesThenSucceeds(t *testing.T) {
