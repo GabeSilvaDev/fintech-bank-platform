@@ -250,3 +250,113 @@ func validateProfile(name, email, phone *string) error {
 	}
 	return nil
 }
+
+type DebitResult struct {
+	Debited  *events.AccountDebitedPayload
+	Rejected *events.DebitRejectedPayload
+}
+
+func (s *AccountService) Credit(ctx context.Context, cmd events.CreditAccountPayload) (events.AccountCreditedPayload, error) {
+	accountID, cents, err := parseBalanceCommand(cmd.AccountID, cmd.Amount, cmd.Currency)
+	if err != nil {
+		return events.AccountCreditedPayload{}, err
+	}
+
+	account, err := s.accounts.Get(ctx, accountID)
+	if err != nil {
+		return events.AccountCreditedPayload{}, err
+	}
+	if account.Status != models.AccountStatusActive {
+		return events.AccountCreditedPayload{}, models.Invalid("account_not_active", "account is not active")
+	}
+
+	now := s.clock.Now()
+	for attempt := 0; attempt < maxBalanceAttempts; attempt++ {
+		next := account.BalanceCents + cents
+		applied, err := s.accounts.CompareAndSetBalance(ctx, accountID, account.BalanceCents, next, now)
+		if err != nil {
+			return events.AccountCreditedPayload{}, err
+		}
+		if applied {
+			return events.AccountCreditedPayload{
+				AccountID:      accountID.String(),
+				Amount:         cmd.Amount,
+				BalanceAfter:   models.FromCents(next),
+				Reference:      cmd.Reference,
+				IdempotencyKey: cmd.IdempotencyKey,
+				OccurredAt:     now,
+			}, nil
+		}
+		if account, err = s.accounts.Get(ctx, accountID); err != nil {
+			return events.AccountCreditedPayload{}, err
+		}
+	}
+	return events.AccountCreditedPayload{}, models.ErrConflict
+}
+
+func (s *AccountService) Debit(ctx context.Context, cmd events.DebitAccountPayload) (DebitResult, error) {
+	accountID, cents, err := parseBalanceCommand(cmd.AccountID, cmd.Amount, cmd.Currency)
+	if err != nil {
+		return DebitResult{}, err
+	}
+
+	account, err := s.accounts.Get(ctx, accountID)
+	if err != nil {
+		return DebitResult{}, err
+	}
+	if account.Status != models.AccountStatusActive {
+		return rejected(cmd, account, "account_not_active"), nil
+	}
+
+	now := s.clock.Now()
+	for attempt := 0; attempt < maxBalanceAttempts; attempt++ {
+		if account.BalanceCents < cents {
+			return rejected(cmd, account, "insufficient_funds"), nil
+		}
+		next := account.BalanceCents - cents
+		applied, err := s.accounts.CompareAndSetBalance(ctx, accountID, account.BalanceCents, next, now)
+		if err != nil {
+			return DebitResult{}, err
+		}
+		if applied {
+			return DebitResult{Debited: &events.AccountDebitedPayload{
+				AccountID:      accountID.String(),
+				Amount:         cmd.Amount,
+				BalanceAfter:   models.FromCents(next),
+				Reference:      cmd.Reference,
+				IdempotencyKey: cmd.IdempotencyKey,
+				OccurredAt:     now,
+			}}, nil
+		}
+		if account, err = s.accounts.Get(ctx, accountID); err != nil {
+			return DebitResult{}, err
+		}
+	}
+	return DebitResult{}, models.ErrConflict
+}
+
+func rejected(cmd events.DebitAccountPayload, account *models.Account, reason string) DebitResult {
+	return DebitResult{Rejected: &events.DebitRejectedPayload{
+		AccountID:      account.AccountID.String(),
+		Amount:         cmd.Amount,
+		Balance:        models.FromCents(account.BalanceCents),
+		Reason:         reason,
+		Reference:      cmd.Reference,
+		IdempotencyKey: cmd.IdempotencyKey,
+	}}
+}
+
+func parseBalanceCommand(accountID string, amount float64, currency string) (uuid.UUID, int64, error) {
+	id, err := uuid.Parse(accountID)
+	if err != nil {
+		return uuid.Nil, 0, models.Invalid("invalid_account_id", "account_id must be a uuid")
+	}
+	cents, err := models.ToCents(amount)
+	if err != nil {
+		return uuid.Nil, 0, err
+	}
+	if !strings.EqualFold(currency, models.Currency) {
+		return uuid.Nil, 0, models.Invalid("unsupported_currency", "only BRL is supported")
+	}
+	return id, cents, nil
+}
