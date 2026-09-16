@@ -2,22 +2,31 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/fintech-bank-platform/api-gateway/internal/contracts"
-	"github.com/fintech-bank-platform/pkg/errors"
+	apperrors "github.com/fintech-bank-platform/pkg/errors"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/response"
 	"github.com/fintech-bank-platform/pkg/validation"
 	"github.com/go-playground/validator/v10"
 )
 
+const maxBodyBytes = 1 << 20
+
 func decode(r *http.Request, dst interface{}) error {
+	r.Body = http.MaxBytesReader(nil, r.Body, maxBodyBytes)
+
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 
 	if err := decoder.Decode(dst); err != nil {
-		return errors.BadRequest("INVALID_JSON", "request body is not valid JSON").Wrap(err)
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			return apperrors.New("PAYLOAD_TOO_LARGE", "request body exceeds 1 MiB", http.StatusRequestEntityTooLarge).Wrap(err)
+		}
+		return apperrors.BadRequest("INVALID_JSON", "request body is not valid JSON").Wrap(err)
 	}
 
 	return nil
@@ -36,12 +45,12 @@ func validate(dst interface{}) error {
 		}
 	}
 
-	return errors.UnprocessableEntity("VALIDATION_ERROR", "request validation failed").WithDetails(details)
+	return apperrors.UnprocessableEntity("VALIDATION_ERROR", "request validation failed").WithDetails(details)
 }
 
 func validateID(id string) error {
 	if err := validation.ValidateVar(id, "required,uuid"); err != nil {
-		return errors.UnprocessableEntity("VALIDATION_ERROR", "request validation failed").WithDetail("id", "uuid")
+		return apperrors.UnprocessableEntity("VALIDATION_ERROR", "request validation failed").WithDetail("id", "uuid")
 	}
 
 	return nil

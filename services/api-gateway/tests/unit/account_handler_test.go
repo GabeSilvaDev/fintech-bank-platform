@@ -97,6 +97,17 @@ func TestCreateAccountRejectsUnknownFields(t *testing.T) {
 	assert.Equal(t, "INVALID_JSON", errorCode(body))
 }
 
+func TestCreateAccountRejectsOversizedBody(t *testing.T) {
+	pub := &tests.FakePublisher{}
+	oversized := `{"name":"` + strings.Repeat("a", 1100*1024) + `"}`
+
+	rec, body := call(accountRouter(pub), http.MethodPost, "/accounts", oversized)
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+	assert.Equal(t, "PAYLOAD_TOO_LARGE", errorCode(body))
+	assert.Empty(t, pub.Published)
+}
+
 func TestCreateAccountValidatesFields(t *testing.T) {
 	pub := &tests.FakePublisher{}
 
