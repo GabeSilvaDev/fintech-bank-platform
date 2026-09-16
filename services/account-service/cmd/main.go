@@ -61,7 +61,17 @@ func main() {
 		MaxAttempts:    cfg.Kafka.MaxAttempts,
 	})
 	processor := handlers.NewProcessor(handlers.NewDispatcher(service), database.NewProcessedEventStore(session), producer, cfg.Consumer.RetryBackoff, log)
-	consumer := messaging.NewConsumer(messaging.ConsumerConfig{Brokers: cfg.Kafka.Brokers, GroupID: cfg.Kafka.GroupID, Topic: events.Topics.AccountCommands})
+	newConsumer := func() *messaging.Consumer {
+		return messaging.NewConsumer(messaging.ConsumerConfig{
+			Brokers:      cfg.Kafka.Brokers,
+			GroupID:      cfg.Kafka.GroupID,
+			Topic:        events.Topics.AccountCommands,
+			DrainTimeout: cfg.Consumer.DrainTimeout,
+		})
+	}
+	handle := func(ctx context.Context, msg kafka.Message) error {
+		return processor.Process(ctx, msg.Key, msg.Value)
+	}
 
 	router := chi.NewRouter()
 	http.SetupRouter(router, http.Dependencies{
@@ -74,9 +84,10 @@ func main() {
 	group, groupCtx := errgroup.WithContext(ctx)
 	group.Go(func() error {
 		log.Info().Str("topic", events.Topics.AccountCommands).Str("group", cfg.Kafka.GroupID).Msg("Consumer starting")
-		return consumer.Run(groupCtx, func(ctx context.Context, msg kafka.Message) error {
-			return processor.Process(ctx, msg.Key, msg.Value)
+		messaging.RunWithRestart(groupCtx, newConsumer, handle, cfg.Consumer.RetryBackoff, func(err error) {
+			log.Error().Err(err).Msg("consumer stopped, restarting")
 		})
+		return nil
 	})
 	group.Go(func() error {
 		log.Info().Str("address", cfg.Server.Address()).Msg("Server starting")
@@ -87,7 +98,7 @@ func main() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
 		defer cancel()
 		_ = server.Shutdown(shutdownCtx)
-		return consumer.Close()
+		return nil
 	})
 
 	err = group.Wait()

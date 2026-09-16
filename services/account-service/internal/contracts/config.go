@@ -35,6 +35,7 @@ type CassandraConfig struct {
 
 type ConsumerConfig struct {
 	RetryBackoff []time.Duration
+	DrainTimeout time.Duration
 }
 
 type LogConfig struct {

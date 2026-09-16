@@ -46,6 +46,7 @@ func New() (*Config, error) {
 		},
 		Consumer: contracts.ConsumerConfig{
 			RetryBackoff: env.GetDurations("CONSUMER_RETRY_BACKOFF", []time.Duration{200 * time.Millisecond, time.Second, 5 * time.Second}),
+			DrainTimeout: env.GetDuration("CONSUMER_DRAIN_TIMEOUT", 30*time.Second),
 		},
 		Log: contracts.LogConfig{
 			Level:  env.Get("LOG_LEVEL", "info"),
