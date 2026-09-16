@@ -144,12 +144,16 @@ producer := messaging.NewProducer(messaging.ProducerConfig{
 })
 err := producer.Publish(ctx, events.Topics.AccountCommands, key, event)
 
-consumer := messaging.NewConsumer(messaging.ConsumerConfig{
-    Brokers: []string{"localhost:9092"},
-    GroupID: "account-service",
-    Topic:   "account.commands",
-})
-err = consumer.Run(ctx, handle) // handle(ctx, kafka.Message) error; committed per message on success
+newConsumer := func() *messaging.Consumer {
+    return messaging.NewConsumer(messaging.ConsumerConfig{
+        Brokers:      []string{"localhost:9092"},
+        GroupID:      "account-service",
+        Topic:        "account.commands",
+        DrainTimeout: 30 * time.Second, // how long the in-flight message may finish after ctx is cancelled
+    })
+}
+err = newConsumer().Run(ctx, handle) // handle(ctx, kafka.Message) error; committed per message on success
+messaging.RunWithRestart(ctx, newConsumer, handle, backoff, onError) // rebuilds the consumer after Run fails, waiting backoff[attempt] between tries
 ```
 
 ## Tests

@@ -46,7 +46,7 @@ Solid boxes exist today; dashed ones are planned. The gateway receives HTTP requ
 | Component | Path | State |
 |---|---|---|
 | Infrastructure | `docker-compose.yml` | Kafka 3.7.1 (KRaft), Cassandra 4.1, Redis 7.2, optional Kafka UI and Cassandra Web |
-| Shared packages | `pkg/` | `logger`, `errors`, `response`, `validation`, `events` — 100 % test coverage, enforced in CI |
+| Shared packages | `pkg/` | `logger`, `errors`, `response`, `validation`, `events`, `env`, `middleware`, `messaging` — 100 % test coverage, enforced in CI |
 | API Gateway | `services/api-gateway/` | Chi router with request-id, real-IP, logging, recovery, CORS and rate-limit middleware; `GET /health`; command endpoints publishing to Kafka through a circuit-breaker-guarded producer; typed config from env; unit + feature tests at 100 % coverage, Kafka integration test in CI; read routes proxied to the account service |
 | Account Service | `services/account-service/` | Consumes `account.commands`, persists customers and accounts in Cassandra (`fintech_accounts`, migrations applied at boot), owns balances with compare-and-set credits/debits, publishes results on `account.events` and failures on `account.dlq`; read API on `:8082`; unit + feature tests at 100 % of `internal/app`, Cassandra and Kafka integration tests in CI |
 
@@ -61,7 +61,7 @@ Solid boxes exist today; dashed ones are planned. The gateway receives HTTP requ
 | `events` | Kafka `Event` envelope (id, type, version, source, timestamp, trace id, metadata, payload), topic and event-type catalogs, typed payloads and `NewAccountCommand`-style constructors |
 | `env` | typed getters for environment variables |
 | `middleware` | request-id, request logging and panic recovery for chi |
-| `messaging` | kafka-go producer with publish timeout and a consumer loop with per-message commit |
+| `messaging` | kafka-go producer with publish timeout and a consumer loop with per-message commit that finishes the in-flight message on shutdown (`DrainTimeout`) and restarts with backoff (`RunWithRestart`) |
 
 Usage examples live in [`pkg/README.md`](pkg/README.md).
 
@@ -104,10 +104,10 @@ Or natively: `make run` (listens on `SERVER_PORT`, default 8080). Configuration 
 cd services/account-service
 cp .env.example .env
 docker compose up -d                  # hot reload with Air, published on :8082
-curl http://localhost:8082/health     # {"status":"healthy","cassandra":"up"}
+curl http://localhost:8082/health     # {"success":true,"data":{"status":"healthy","cassandra":"up"}}
 ```
 
-Migrations in `migrations/*.cql` run at boot against `CASSANDRA_KEYSPACE` (default `fintech_accounts`). Configuration: `SERVER_*`, `KAFKA_BROKERS` / `KAFKA_GROUP_ID` / `KAFKA_*_TIMEOUT` / `KAFKA_MAX_ATTEMPTS`, `CONSUMER_RETRY_BACKOFF`, `CASSANDRA_HOSTS` / `CASSANDRA_KEYSPACE` / `CASSANDRA_CONSISTENCY` / `CASSANDRA_*_TIMEOUT` / `CASSANDRA_MIGRATIONS_PATH`, `LOG_LEVEL` / `LOG_PRETTY`.
+Migrations in `migrations/*.cql` run at boot against `CASSANDRA_KEYSPACE` (default `fintech_accounts`). Configuration: `SERVER_*`, `KAFKA_BROKERS` / `KAFKA_GROUP_ID` / `KAFKA_*_TIMEOUT` / `KAFKA_MAX_ATTEMPTS`, `CONSUMER_RETRY_BACKOFF` / `CONSUMER_DRAIN_TIMEOUT`, `CASSANDRA_HOSTS` / `CASSANDRA_KEYSPACE` / `CASSANDRA_CONSISTENCY` / `CASSANDRA_*_TIMEOUT` / `CASSANDRA_MIGRATIONS_PATH`, `LOG_LEVEL` / `LOG_PRETTY`.
 
 Commands it handles (topic `account.commands`) and the events it answers with (topic `account.events`):
 
@@ -119,7 +119,7 @@ Commands it handles (topic `account.commands`) and the events it answers with (t
 | `account.credit` | `account.credited` | unknown or inactive account, invalid amount |
 | `account.debit` | `account.debited` or `account.debit_rejected` (`insufficient_funds`, `account_not_active`) | unknown account, invalid amount |
 
-Every command is applied at most once (`processed_events`, 7-day TTL); transient failures are retried with `CONSUMER_RETRY_BACKOFF` and then dead-lettered as `account.command_failed`.
+Every command is applied at most once (`processed_events`, 7-day TTL); transient failures are retried with `CONSUMER_RETRY_BACKOFF` and then dead-lettered as `account.command_failed`, with `retries` counting the dispatch attempts. A Cassandra write timeout or unavailable error is dead-lettered right away as `ambiguous_write`, since the write may or may not have been applied and retrying could apply it twice. Because the event id is marked before dispatch, a dead-lettered command replayed as-is is skipped as a duplicate: replays need a new event id. On shutdown the consumer finishes the message in flight (up to `CONSUMER_DRAIN_TIMEOUT`) before committing, and a consumer that stops on an error is restarted with `CONSUMER_RETRY_BACKOFF` while the read API keeps serving.
 
 #### Command endpoints
 
@@ -203,7 +203,7 @@ fintech-bank-platform/
         ├── migrations/                    numbered .cql files, applied at boot
         ├── internal/
         │   ├── config/                    env → typed Config
-        │   ├── contracts/                 interfaces for config, context and http
+        │   ├── contracts/                 interfaces for config, messaging and repositories
         │   ├── app/
         │   │   ├── models/                domain types
         │   │   ├── services/              account and customer use cases
