@@ -155,3 +155,106 @@ jobs:
           name: coverage-report-api-gateway
           path: services/api-gateway/coverage.out
           retention-days: 30
+
+  account-service:
+    name: Account Service Tests
+    runs-on: ubuntu-latest
+    needs: pkg
+    services:
+      kafka:
+        image: apache/kafka:3.7.1
+        ports:
+          - 9092:9092
+        env:
+          KAFKA_NODE_ID: 1
+          KAFKA_PROCESS_ROLES: broker,controller
+          KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+          KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+          KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+          KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+          KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+          KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+          KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+          KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+        options: >-
+          --health-cmd "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092"
+          --health-interval 10s
+          --health-timeout 10s
+          --health-retries 12
+      cassandra:
+        image: cassandra:4.1
+        ports:
+          - 9042:9042
+        env:
+          MAX_HEAP_SIZE: 512M
+          HEAP_NEWSIZE: 128M
+          CASSANDRA_CLUSTER_NAME: ci
+        options: >-
+          --health-cmd "cqlsh -e 'describe keyspaces'"
+          --health-interval 15s
+          --health-timeout 10s
+          --health-retries 20
+    defaults:
+      run:
+        working-directory: services/account-service
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: services/account-service/go.sum
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Check formatting
+        run: |
+          if [ -n "$(gofmt -l .)" ]; then
+            echo "Code is not gofmt-formatted. Run: gofmt -w ."
+            gofmt -l .
+            exit 1
+          fi
+          echo "Formatting OK"
+
+      - name: Run tests
+        run: |
+          go test ./tests/... -v -coverprofile=coverage.out -coverpkg=./internal/app/...
+          echo "Tests passed"
+
+      - name: Run integration tests
+        env:
+          KAFKA_BROKERS: localhost:9092
+          CASSANDRA_HOSTS: localhost:9042
+        run: go test -tags integration ./tests/integration/... -v
+
+      - name: Coverage report
+        run: |
+          echo "## Coverage — Account Service (internal/app)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          go tool cover -func=coverage.out >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}')
+          echo "### Total: **${COVERAGE}**" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "$COVERAGE" = "100.0%" ]; then
+            echo "Coverage is 100%" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Coverage below 100%" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report-account-service
+          path: services/account-service/coverage.out
+          retention-days: 30
