@@ -17,7 +17,7 @@
 
 </div>
 
-> **Work in progress.** The infrastructure, the shared packages and the API gateway skeleton are in place; the domain services are next. See the [roadmap](#roadmap) for what is done and what is planned.
+> **Work in progress.** The infrastructure, the shared packages and the API gateway are in place — the gateway already validates commands and publishes them to Kafka; the domain services that consume them are next. See the [roadmap](#roadmap) for what is done and what is planned.
 
 ## Architecture
 
@@ -115,8 +115,6 @@ curl -s -X POST localhost:8081/api/v1/accounts \
 ```
 
 Errors: `400 INVALID_JSON`, `413 PAYLOAD_TOO_LARGE` (body over 1 MiB), `422 VALIDATION_ERROR` (with per-field `details`), `422 EMPTY_UPDATE` (PATCH without fields), `429 RATE_LIMIT_EXCEEDED`, `503 PUBLISH_FAILED` when the broker is unreachable or the circuit is open.
-
-(Event-type strings above are the exact values from `pkg/events.EventTypes`.)
 
 ## Development
 
