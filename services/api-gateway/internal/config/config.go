@@ -1,12 +1,10 @@
 package config
 
 import (
-	"os"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/fintech-bank-platform/api-gateway/internal/contracts"
+	"github.com/fintech-bank-platform/pkg/env"
 	"github.com/joho/godotenv"
 )
 
@@ -32,110 +30,48 @@ func New() (*Config, error) {
 
 func loadServerConfig() contracts.ServerConfig {
 	return contracts.ServerConfig{
-		Host:            getEnv("SERVER_HOST", "0.0.0.0"),
-		Port:            getEnv("SERVER_PORT", "8080"),
-		ReadTimeout:     getEnvDuration("SERVER_READ_TIMEOUT", 30*time.Second),
-		WriteTimeout:    getEnvDuration("SERVER_WRITE_TIMEOUT", 30*time.Second),
-		IdleTimeout:     getEnvDuration("SERVER_IDLE_TIMEOUT", 120*time.Second),
-		ShutdownTimeout: getEnvDuration("SERVER_SHUTDOWN_TIMEOUT", 10*time.Second),
+		Host:            env.Get("SERVER_HOST", "0.0.0.0"),
+		Port:            env.Get("SERVER_PORT", "8080"),
+		ReadTimeout:     env.GetDuration("SERVER_READ_TIMEOUT", 30*time.Second),
+		WriteTimeout:    env.GetDuration("SERVER_WRITE_TIMEOUT", 30*time.Second),
+		IdleTimeout:     env.GetDuration("SERVER_IDLE_TIMEOUT", 120*time.Second),
+		ShutdownTimeout: env.GetDuration("SERVER_SHUTDOWN_TIMEOUT", 10*time.Second),
 	}
 }
 
 func loadCORSConfig() contracts.CORSConfig {
 	return contracts.CORSConfig{
-		AllowedOrigins:   splitAndTrim(getEnv("CORS_ALLOWED_ORIGINS", "*")),
-		AllowedMethods:   splitAndTrim(getEnv("CORS_ALLOWED_METHODS", "GET,POST,PUT,DELETE,OPTIONS")),
-		AllowedHeaders:   splitAndTrim(getEnv("CORS_ALLOWED_HEADERS", "Accept,Authorization,Content-Type,X-Request-ID")),
-		ExposedHeaders:   splitAndTrim(getEnv("CORS_EXPOSED_HEADERS", "Link")),
-		AllowCredentials: getEnvBool("CORS_ALLOW_CREDENTIALS", true),
-		MaxAge:           getEnvInt("CORS_MAX_AGE", 300),
+		AllowedOrigins:   env.SplitAndTrim(env.Get("CORS_ALLOWED_ORIGINS", "*")),
+		AllowedMethods:   env.SplitAndTrim(env.Get("CORS_ALLOWED_METHODS", "GET,POST,PUT,DELETE,OPTIONS")),
+		AllowedHeaders:   env.SplitAndTrim(env.Get("CORS_ALLOWED_HEADERS", "Accept,Authorization,Content-Type,X-Request-ID")),
+		ExposedHeaders:   env.SplitAndTrim(env.Get("CORS_EXPOSED_HEADERS", "Link")),
+		AllowCredentials: env.GetBool("CORS_ALLOW_CREDENTIALS", true),
+		MaxAge:           env.GetInt("CORS_MAX_AGE", 300),
 	}
 }
 
 func loadRateLimitConfig() contracts.RateLimitConfig {
 	return contracts.RateLimitConfig{
-		Requests: getEnvInt("RATE_LIMIT_REQUESTS", 100),
-		Window:   getEnvDuration("RATE_LIMIT_WINDOW", 1*time.Minute),
+		Requests: env.GetInt("RATE_LIMIT_REQUESTS", 100),
+		Window:   env.GetDuration("RATE_LIMIT_WINDOW", 1*time.Minute),
 	}
 }
 
 func loadKafkaConfig() contracts.KafkaConfig {
 	return contracts.KafkaConfig{
-		Brokers:          splitAndTrim(getEnv("KAFKA_BROKERS", "localhost:9092")),
-		WriteTimeout:     getEnvDuration("KAFKA_WRITE_TIMEOUT", 5*time.Second),
-		BatchTimeout:     getEnvDuration("KAFKA_BATCH_TIMEOUT", 10*time.Millisecond),
-		PublishTimeout:   getEnvDuration("KAFKA_PUBLISH_TIMEOUT", 20*time.Second),
-		MaxAttempts:      getEnvIntMin("KAFKA_MAX_ATTEMPTS", 3, 1),
-		BreakerThreshold: getEnvUint32("KAFKA_BREAKER_THRESHOLD", 5),
-		BreakerTimeout:   getEnvDuration("KAFKA_BREAKER_TIMEOUT", 30*time.Second),
+		Brokers:          env.SplitAndTrim(env.Get("KAFKA_BROKERS", "localhost:9092")),
+		WriteTimeout:     env.GetDuration("KAFKA_WRITE_TIMEOUT", 5*time.Second),
+		BatchTimeout:     env.GetDuration("KAFKA_BATCH_TIMEOUT", 10*time.Millisecond),
+		PublishTimeout:   env.GetDuration("KAFKA_PUBLISH_TIMEOUT", 20*time.Second),
+		MaxAttempts:      env.GetIntMin("KAFKA_MAX_ATTEMPTS", 3, 1),
+		BreakerThreshold: env.GetUint32("KAFKA_BREAKER_THRESHOLD", 5),
+		BreakerTimeout:   env.GetDuration("KAFKA_BREAKER_TIMEOUT", 30*time.Second),
 	}
 }
 
 func loadLogConfig() contracts.LogConfig {
 	return contracts.LogConfig{
-		Level:  getEnv("LOG_LEVEL", "info"),
-		Pretty: getEnvBool("LOG_PRETTY", false),
+		Level:  env.Get("LOG_LEVEL", "info"),
+		Pretty: env.GetBool("LOG_PRETTY", false),
 	}
-}
-
-func getEnv(key, defaultValue string) string {
-	if value, exists := os.LookupEnv(key); exists {
-		return value
-	}
-	return defaultValue
-}
-
-func getEnvInt(key string, defaultValue int) int {
-	if value, exists := os.LookupEnv(key); exists {
-		if intValue, err := strconv.Atoi(value); err == nil {
-			return intValue
-		}
-	}
-	return defaultValue
-}
-
-func getEnvIntMin(key string, defaultValue, min int) int {
-	value := getEnvInt(key, defaultValue)
-	if value < min {
-		return defaultValue
-	}
-	return value
-}
-
-func getEnvUint32(key string, defaultValue uint32) uint32 {
-	value := getEnvInt(key, int(defaultValue))
-	if value < 1 {
-		return defaultValue
-	}
-	return uint32(value)
-}
-
-func getEnvBool(key string, defaultValue bool) bool {
-	if value, exists := os.LookupEnv(key); exists {
-		if boolValue, err := strconv.ParseBool(value); err == nil {
-			return boolValue
-		}
-	}
-	return defaultValue
-}
-
-func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
-	if value, exists := os.LookupEnv(key); exists {
-		if duration, err := time.ParseDuration(value); err == nil {
-			return duration
-		}
-	}
-	return defaultValue
-}
-
-func splitAndTrim(s string) []string {
-	parts := strings.Split(s, ",")
-	result := make([]string, 0, len(parts))
-	for _, part := range parts {
-		trimmed := strings.TrimSpace(part)
-		if trimmed != "" {
-			result = append(result, trimmed)
-		}
-	}
-	return result
 }
