@@ -21,16 +21,17 @@ func NewAccountRepository(session *gocql.Session) *AccountRepository {
 const accountColumns = "account_id, user_id, agency, number, type, status, currency, balance_cents, created_at, updated_at, closed_at"
 
 func (r *AccountRepository) Create(ctx context.Context, account *models.Account) error {
-	return r.session.Batch(gocql.LoggedBatch).WithContext(ctx).
+	return MapWriteError(r.session.Batch(gocql.LoggedBatch).WithContext(ctx).
 		Query("INSERT INTO accounts ("+accountColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 			gocql.UUID(account.AccountID), gocql.UUID(account.UserID), account.Agency, account.Number, string(account.Type), string(account.Status), account.Currency, account.BalanceCents, account.CreatedAt, account.UpdatedAt, account.ClosedAt).
 		Query("INSERT INTO accounts_by_user (user_id, account_id) VALUES (?, ?)", gocql.UUID(account.UserID), gocql.UUID(account.AccountID)).
-		Exec()
+		Exec())
 }
 
 func (r *AccountRepository) ReserveNumber(ctx context.Context, agency, number string, accountID uuid.UUID) (bool, error) {
-	return r.session.Query("INSERT INTO accounts_by_number (agency, number, account_id) VALUES (?, ?, ?) IF NOT EXISTS", agency, number, gocql.UUID(accountID)).
+	applied, err := r.session.Query("INSERT INTO accounts_by_number (agency, number, account_id) VALUES (?, ?, ?) IF NOT EXISTS", agency, number, gocql.UUID(accountID)).
 		WithContext(ctx).MapScanCAS(map[string]interface{}{})
+	return applied, MapWriteError(err)
 }
 
 func (r *AccountRepository) Get(ctx context.Context, accountID uuid.UUID) (*models.Account, error) {
@@ -63,13 +64,14 @@ func (r *AccountRepository) ListByUser(ctx context.Context, userID uuid.UUID) ([
 }
 
 func (r *AccountRepository) UpdateStatus(ctx context.Context, accountID uuid.UUID, status models.AccountStatus, updatedAt time.Time, closedAt *time.Time) error {
-	return r.session.Query("UPDATE accounts SET status = ?, updated_at = ?, closed_at = ? WHERE account_id = ?", string(status), updatedAt, closedAt, gocql.UUID(accountID)).
-		WithContext(ctx).Exec()
+	return MapWriteError(r.session.Query("UPDATE accounts SET status = ?, updated_at = ?, closed_at = ? WHERE account_id = ?", string(status), updatedAt, closedAt, gocql.UUID(accountID)).
+		WithContext(ctx).Exec())
 }
 
 func (r *AccountRepository) CompareAndSetBalance(ctx context.Context, accountID uuid.UUID, expected, next int64, updatedAt time.Time) (bool, error) {
-	return r.session.Query("UPDATE accounts SET balance_cents = ?, updated_at = ? WHERE account_id = ? IF balance_cents = ?", next, updatedAt, gocql.UUID(accountID), expected).
+	applied, err := r.session.Query("UPDATE accounts SET balance_cents = ?, updated_at = ? WHERE account_id = ? IF balance_cents = ?", next, updatedAt, gocql.UUID(accountID), expected).
 		WithContext(ctx).MapScanCAS(map[string]interface{}{})
+	return applied, MapWriteError(err)
 }
 
 func scanAccount(query *gocql.Query) (*models.Account, error) {

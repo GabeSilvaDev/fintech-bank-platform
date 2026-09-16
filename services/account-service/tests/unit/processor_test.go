@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -116,6 +117,7 @@ func TestProcessDeadLettersUnprocessableWithoutRetry(t *testing.T) {
 		"bad_payload":       handlers.ErrBadPayload,
 		"account_not_found": models.ErrNotFound,
 		"account_closed":    models.Invalid("account_closed", "closed"),
+		"ambiguous_write":   fmt.Errorf("%w: x", models.ErrAmbiguousWrite),
 	}
 
 	for code, dispatchErr := range cases {

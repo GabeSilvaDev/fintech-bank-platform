@@ -122,6 +122,7 @@ func sleep(ctx context.Context, d time.Duration) bool {
 func isTransient(err error) bool {
 	return !models.IsInvalid(err) &&
 		!errors.Is(err, models.ErrNotFound) &&
+		!errors.Is(err, models.ErrAmbiguousWrite) &&
 		!errors.Is(err, ErrUnknownCommand) &&
 		!errors.Is(err, ErrBadPayload) &&
 		!errors.Is(err, ErrPanic)
@@ -133,6 +134,8 @@ func errorCode(err error) string {
 		return models.InvalidCode(err)
 	case errors.Is(err, models.ErrNotFound):
 		return "account_not_found"
+	case errors.Is(err, models.ErrAmbiguousWrite):
+		return "ambiguous_write"
 	case errors.Is(err, ErrUnknownCommand):
 		return "unknown_command"
 	case errors.Is(err, ErrBadPayload):

@@ -20,9 +20,9 @@ func NewCustomerRepository(session *gocql.Session) *CustomerRepository {
 }
 
 func (r *CustomerRepository) Upsert(ctx context.Context, customer *models.Customer) error {
-	return r.session.Query("INSERT INTO customers (user_id, name, email, document, phone, kyc_status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+	return MapWriteError(r.session.Query("INSERT INTO customers (user_id, name, email, document, phone, kyc_status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
 		gocql.UUID(customer.UserID), customer.Name, customer.Email, customer.Document, customer.Phone, customer.KYCStatus, customer.CreatedAt, customer.UpdatedAt).
-		WithContext(ctx).Exec()
+		WithContext(ctx).Exec())
 }
 
 func (r *CustomerRepository) Get(ctx context.Context, userID uuid.UUID) (*models.Customer, error) {
@@ -59,5 +59,5 @@ func (r *CustomerRepository) UpdateProfile(ctx context.Context, userID uuid.UUID
 	}
 	values = append(values, gocql.UUID(userID))
 
-	return r.session.Query("UPDATE customers SET "+strings.Join(assignments, ", ")+" WHERE user_id = ?", values...).WithContext(ctx).Exec()
+	return MapWriteError(r.session.Query("UPDATE customers SET "+strings.Join(assignments, ", ")+" WHERE user_id = ?", values...).WithContext(ctx).Exec())
 }

@@ -3,8 +3,9 @@ package models
 import "errors"
 
 var (
-	ErrNotFound = errors.New("account not found")
-	ErrConflict = errors.New("concurrent update conflict")
+	ErrNotFound       = errors.New("account not found")
+	ErrConflict       = errors.New("concurrent update conflict")
+	ErrAmbiguousWrite = errors.New("ambiguous write")
 )
 
 type InvalidError struct {
