@@ -78,6 +78,18 @@ func TestCreateAccountPublishesCommand(t *testing.T) {
 	assert.Equal(t, "req-1", data["trace_id"])
 }
 
+func TestCreateAccountNormalizesDocumentAndPhone(t *testing.T) {
+	pub := &tests.FakePublisher{}
+	userID := tests.UUID()
+
+	rec, _ := call(accountRouter(pub), http.MethodPost, "/accounts", `{"user_id":"`+userID+`","account_type":"savings","name":"Ana Souza","email":"ana@example.com","document":"529.982.247-25","phone":"(11) 99988-7766"}`)
+
+	assert.Equal(t, http.StatusAccepted, rec.Code)
+	payload := pub.Last().Event.Payload.(events.CreateAccountPayload)
+	assert.Equal(t, "52998224725", payload.Document)
+	assert.Equal(t, "11999887766", payload.Phone)
+}
+
 func TestCreateAccountRejectsMalformedJSON(t *testing.T) {
 	pub := &tests.FakePublisher{}
 
@@ -152,6 +164,16 @@ func TestUpdateAccountPublishesCommand(t *testing.T) {
 	assert.Equal(t, "blocked", *payload.Status)
 	assert.Nil(t, payload.Email)
 	assert.Nil(t, payload.Phone)
+}
+
+func TestUpdateAccountNormalizesPhone(t *testing.T) {
+	pub := &tests.FakePublisher{}
+
+	rec, _ := call(accountRouter(pub), http.MethodPatch, "/accounts/"+tests.UUID(), `{"phone":"(11) 99988-7766"}`)
+
+	assert.Equal(t, http.StatusAccepted, rec.Code)
+	payload := pub.Last().Event.Payload.(events.UpdateAccountPayload)
+	assert.Equal(t, "11999887766", *payload.Phone)
 }
 
 func TestUpdateAccountRejectsInvalidID(t *testing.T) {

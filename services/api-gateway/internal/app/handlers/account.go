@@ -7,6 +7,7 @@ import (
 	"github.com/fintech-bank-platform/pkg/errors"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/response"
+	"github.com/fintech-bank-platform/pkg/validation"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -54,8 +55,8 @@ func (h *AccountHandler) Create(w http.ResponseWriter, r *http.Request) {
 		AccountType: req.AccountType,
 		Name:        req.Name,
 		Email:       req.Email,
-		Document:    req.Document,
-		Phone:       req.Phone,
+		Document:    validation.SanitizeCPF(req.Document),
+		Phone:       validation.SanitizePhone(req.Phone),
 	})
 
 	publish(w, r, h.publisher, events.Topics.AccountCommands, req.UserID, event)
@@ -82,11 +83,17 @@ func (h *AccountHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	phone := req.Phone
+	if req.Phone != nil {
+		sanitized := validation.SanitizePhone(*req.Phone)
+		phone = &sanitized
+	}
+
 	event := events.NewAccountCommand(events.EventTypes.UpdateAccount, events.UpdateAccountPayload{
 		AccountID: accountID,
 		Name:      req.Name,
 		Email:     req.Email,
-		Phone:     req.Phone,
+		Phone:     phone,
 		Status:    req.Status,
 	})
 
