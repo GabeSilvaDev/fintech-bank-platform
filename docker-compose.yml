@@ -38,6 +38,22 @@
         start_period: 60s
       restart: unless-stopped
 
+    kafka-init:
+      image: apache/kafka:3.7.1
+      container_name: fintech-kafka-init
+      depends_on:
+        kafka:
+          condition: service_healthy
+      entrypoint: ["/bin/sh", "-c"]
+      command:
+        - |
+          for topic in account.commands transaction.commands payment.commands account.events transaction.events payment.events notification.events account.dlq transaction.dlq payment.dlq; do
+            /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic "$$topic" --partitions 3 --replication-factor 1
+          done
+      networks:
+        - fintech-network
+      restart: "no"
+
     kafka-ui:
       image: provectuslabs/kafka-ui:v0.7.2
       container_name: fintech-kafka-ui
