@@ -2,6 +2,7 @@ package events
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 
@@ -331,4 +332,34 @@ func TestDeleteAccountPayload(t *testing.T) {
 	err = json.Unmarshal(jsonData, &result)
 	assert.NoError(t, err)
 	assert.Equal(t, payload, result)
+}
+
+func TestBalanceEventTypes(t *testing.T) {
+	assert.Equal(t, "account.credit", EventTypes.CreditAccount)
+	assert.Equal(t, "account.debit", EventTypes.DebitAccount)
+	assert.Equal(t, "account.credited", EventTypes.AccountCredited)
+	assert.Equal(t, "account.debited", EventTypes.AccountDebited)
+	assert.Equal(t, "account.debit_rejected", EventTypes.DebitRejected)
+	assert.Equal(t, "account.command_failed", EventTypes.AccountCommandFailed)
+}
+
+func TestBalancePayloadsRoundTrip(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	cases := []interface{}{
+		CreditAccountPayload{AccountID: "a", Amount: 10.5, Currency: "BRL", Reference: "tx-1", IdempotencyKey: "k1"},
+		DebitAccountPayload{AccountID: "a", Amount: 3, Currency: "BRL", Reference: "tx-2", IdempotencyKey: "k2"},
+		AccountCreditedPayload{AccountID: "a", Amount: 10.5, BalanceAfter: 10.5, Reference: "tx-1", IdempotencyKey: "k1", OccurredAt: now},
+		AccountDebitedPayload{AccountID: "a", Amount: 3, BalanceAfter: 7.5, Reference: "tx-2", IdempotencyKey: "k2", OccurredAt: now},
+		DebitRejectedPayload{AccountID: "a", Amount: 100, Balance: 7.5, Reason: "insufficient_funds", Reference: "tx-3", IdempotencyKey: "k3"},
+		AccountUpdatedPayload{AccountID: "a", UserID: "u", Name: "Ana", Email: "ana@example.com", Phone: "11999887766", Status: "active", UpdatedAt: now},
+		AccountDeletedPayload{AccountID: "a", UserID: "u", Reason: "customer request", ClosedAt: now},
+	}
+
+	for _, payload := range cases {
+		data, err := json.Marshal(payload)
+		assert.NoError(t, err)
+		decoded := reflect.New(reflect.TypeOf(payload)).Interface()
+		assert.NoError(t, json.Unmarshal(data, decoded))
+		assert.Equal(t, payload, reflect.ValueOf(decoded).Elem().Interface())
+	}
 }

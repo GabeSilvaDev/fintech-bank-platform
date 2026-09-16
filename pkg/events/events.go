@@ -102,14 +102,20 @@ var EventTypes = struct {
 	UpdateAccount string
 	DeleteAccount string
 	VerifyKYC     string
+	CreditAccount string
+	DebitAccount  string
 
 	// Account Events
-	AccountCreated  string
-	AccountUpdated  string
-	AccountDeleted  string
-	AccountVerified string
-	KYCCompleted    string
-	KYCFailed       string
+	AccountCreated       string
+	AccountUpdated       string
+	AccountDeleted       string
+	AccountVerified      string
+	KYCCompleted         string
+	KYCFailed            string
+	AccountCredited      string
+	AccountDebited       string
+	DebitRejected        string
+	AccountCommandFailed string
 
 	// Transaction Commands
 	CreateTransaction  string
@@ -146,14 +152,20 @@ var EventTypes = struct {
 	UpdateAccount: "account.update",
 	DeleteAccount: "account.delete",
 	VerifyKYC:     "account.verify_kyc",
+	CreditAccount: "account.credit",
+	DebitAccount:  "account.debit",
 
 	// Account Events
-	AccountCreated:  "account.created",
-	AccountUpdated:  "account.updated",
-	AccountDeleted:  "account.deleted",
-	AccountVerified: "account.verified",
-	KYCCompleted:    "account.kyc_completed",
-	KYCFailed:       "account.kyc_failed",
+	AccountCreated:       "account.created",
+	AccountUpdated:       "account.updated",
+	AccountDeleted:       "account.deleted",
+	AccountVerified:      "account.verified",
+	KYCCompleted:         "account.kyc_completed",
+	KYCFailed:            "account.kyc_failed",
+	AccountCredited:      "account.credited",
+	AccountDebited:       "account.debited",
+	DebitRejected:        "account.debit_rejected",
+	AccountCommandFailed: "account.command_failed",
 
 	// Transaction Commands
 	CreateTransaction:  "transaction.create",
@@ -219,6 +231,66 @@ type AccountCreatedPayload struct {
 	AccountType   string    `json:"account_type"`
 	Status        string    `json:"status"`
 	CreatedAt     time.Time `json:"created_at"`
+}
+
+type AccountUpdatedPayload struct {
+	AccountID string    `json:"account_id"`
+	UserID    string    `json:"user_id"`
+	Name      string    `json:"name"`
+	Email     string    `json:"email"`
+	Phone     string    `json:"phone,omitempty"`
+	Status    string    `json:"status"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+type AccountDeletedPayload struct {
+	AccountID string    `json:"account_id"`
+	UserID    string    `json:"user_id"`
+	Reason    string    `json:"reason,omitempty"`
+	ClosedAt  time.Time `json:"closed_at"`
+}
+
+type CreditAccountPayload struct {
+	AccountID      string  `json:"account_id"`
+	Amount         float64 `json:"amount"`
+	Currency       string  `json:"currency"`
+	Reference      string  `json:"reference,omitempty"`
+	IdempotencyKey string  `json:"idempotency_key"`
+}
+
+type DebitAccountPayload struct {
+	AccountID      string  `json:"account_id"`
+	Amount         float64 `json:"amount"`
+	Currency       string  `json:"currency"`
+	Reference      string  `json:"reference,omitempty"`
+	IdempotencyKey string  `json:"idempotency_key"`
+}
+
+type AccountCreditedPayload struct {
+	AccountID      string    `json:"account_id"`
+	Amount         float64   `json:"amount"`
+	BalanceAfter   float64   `json:"balance_after"`
+	Reference      string    `json:"reference,omitempty"`
+	IdempotencyKey string    `json:"idempotency_key"`
+	OccurredAt     time.Time `json:"occurred_at"`
+}
+
+type AccountDebitedPayload struct {
+	AccountID      string    `json:"account_id"`
+	Amount         float64   `json:"amount"`
+	BalanceAfter   float64   `json:"balance_after"`
+	Reference      string    `json:"reference,omitempty"`
+	IdempotencyKey string    `json:"idempotency_key"`
+	OccurredAt     time.Time `json:"occurred_at"`
+}
+
+type DebitRejectedPayload struct {
+	AccountID      string  `json:"account_id"`
+	Amount         float64 `json:"amount"`
+	Balance        float64 `json:"balance"`
+	Reason         string  `json:"reason"`
+	Reference      string  `json:"reference,omitempty"`
+	IdempotencyKey string  `json:"idempotency_key"`
 }
 
 // CreateTransactionPayload represents the payload for creating a transaction
