@@ -92,7 +92,7 @@ docker compose up -d                  # hot reload com Air, publicado em :8081
 curl http://localhost:8081/health
 ```
 
-Ou nativo: `make run` (escuta em `SERVER_PORT`, padrão 8080). A configuração vem do ambiente: `SERVER_*` (host, porta, timeouts), `CORS_*`, `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW`, `KAFKA_BROKERS` / `KAFKA_WRITE_TIMEOUT` / `KAFKA_MAX_ATTEMPTS` / `KAFKA_BREAKER_*` e `LOG_LEVEL` / `LOG_PRETTY`.
+Ou nativo: `make run` (escuta em `SERVER_PORT`, padrão 8080). A configuração vem do ambiente: `SERVER_*` (host, porta, timeouts), `CORS_*`, `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW`, `KAFKA_BROKERS` / `KAFKA_WRITE_TIMEOUT` / `KAFKA_BATCH_TIMEOUT` / `KAFKA_PUBLISH_TIMEOUT` / `KAFKA_MAX_ATTEMPTS` / `KAFKA_BREAKER_*` e `LOG_LEVEL` / `LOG_PRETTY`.
 
 #### Endpoints de comando
 
@@ -114,7 +114,7 @@ curl -s -X POST localhost:8081/api/v1/accounts \
 # {"success":true,"data":{"command_id":"…","trace_id":"…"}}
 ```
 
-Erros: `400 INVALID_JSON`, `422 VALIDATION_ERROR` (com `details` por campo), `503 PUBLISH_FAILED` quando o broker está inacessível ou o circuito está aberto.
+Erros: `400 INVALID_JSON`, `413 PAYLOAD_TOO_LARGE` (corpo acima de 1 MiB), `422 VALIDATION_ERROR` (com `details` por campo), `422 EMPTY_UPDATE` (PATCH sem campos), `429 RATE_LIMIT_EXCEEDED`, `503 PUBLISH_FAILED` quando o broker está inacessível ou o circuito está aberto.
 
 (As strings de tipo de evento acima são os valores exatos de `pkg/events.EventTypes`.)
 
