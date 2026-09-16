@@ -61,12 +61,55 @@ func TestAccountRepository(t *testing.T) {
 	require.Equal(t, models.AccountStatusBlocked, got.Status)
 	require.Nil(t, got.ClosedAt)
 
+	applied, err = repo.CompareAndSetBalance(ctx, account.AccountID, 1050, 1000, now)
+	require.NoError(t, err)
+	require.False(t, applied)
+	got, _ = repo.Get(ctx, account.AccountID)
+	require.Equal(t, int64(1050), got.BalanceCents)
+
+	applied, err = repo.CloseIfEmpty(ctx, account.AccountID, now)
+	require.NoError(t, err)
+	require.False(t, applied)
+	got, _ = repo.Get(ctx, account.AccountID)
+	require.Equal(t, models.AccountStatusBlocked, got.Status)
+
 	closedAt := now.Add(time.Minute)
 	require.NoError(t, repo.UpdateStatus(ctx, account.AccountID, models.AccountStatusClosed, closedAt, &closedAt))
 	got, _ = repo.Get(ctx, account.AccountID)
 	require.Equal(t, models.AccountStatusClosed, got.Status)
 	require.NotNil(t, got.ClosedAt)
 	require.WithinDuration(t, closedAt, *got.ClosedAt, time.Millisecond)
+}
+
+func TestAccountRepositoryCloseIfEmpty(t *testing.T) {
+	session, _ := throwawayKeyspace(t)
+	repo := database.NewAccountRepository(session)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	account := &models.Account{AccountID: uuid.New(), UserID: uuid.New(), Agency: "0001", Number: "87654321", Type: models.AccountTypeSavings, Status: models.AccountStatusActive, Currency: "BRL", CreatedAt: now, UpdatedAt: now}
+	require.NoError(t, repo.Create(ctx, account))
+
+	closedAt := now.Add(time.Minute)
+	applied, err := repo.CloseIfEmpty(ctx, account.AccountID, closedAt)
+	require.NoError(t, err)
+	require.True(t, applied)
+	got, err := repo.Get(ctx, account.AccountID)
+	require.NoError(t, err)
+	require.Equal(t, models.AccountStatusClosed, got.Status)
+	require.NotNil(t, got.ClosedAt)
+	require.WithinDuration(t, closedAt, *got.ClosedAt, time.Millisecond)
+	require.WithinDuration(t, closedAt, got.UpdatedAt, time.Millisecond)
+
+	applied, err = repo.CloseIfEmpty(ctx, account.AccountID, closedAt.Add(time.Minute))
+	require.NoError(t, err)
+	require.False(t, applied)
+	got, _ = repo.Get(ctx, account.AccountID)
+	require.WithinDuration(t, closedAt, *got.ClosedAt, time.Millisecond)
+
+	applied, err = repo.CompareAndSetBalance(ctx, account.AccountID, 0, 100, now)
+	require.NoError(t, err)
+	require.False(t, applied)
 }
 
 func TestCustomerRepository(t *testing.T) {

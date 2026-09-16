@@ -28,6 +28,10 @@ type FakeAccountRepo struct {
 	Statuses        []StatusChange
 	CASCalls        int
 	CASResults      []CASResult
+	OnCAS           func()
+	CloseCalls      int
+	CloseErr        error
+	OnClose         func()
 	GetErrs         []error
 	CreateErr       error
 	UpdateStatusErr error
@@ -115,8 +119,33 @@ func (f *FakeAccountRepo) UpdateStatus(_ context.Context, accountID uuid.UUID, s
 	return nil
 }
 
+func (f *FakeAccountRepo) CloseIfEmpty(_ context.Context, accountID uuid.UUID, closedAt time.Time) (bool, error) {
+	f.CloseCalls++
+	if f.OnClose != nil {
+		f.OnClose()
+	}
+	if f.CloseErr != nil {
+		return false, f.CloseErr
+	}
+	if f.Err != nil {
+		return false, f.Err
+	}
+	account := f.Accounts[accountID]
+	if account.BalanceCents != 0 || account.Status == models.AccountStatusClosed {
+		return false, nil
+	}
+	account.Status = models.AccountStatusClosed
+	account.UpdatedAt = closedAt
+	account.ClosedAt = &closedAt
+	f.Statuses = append(f.Statuses, StatusChange{AccountID: accountID, Status: models.AccountStatusClosed, UpdatedAt: closedAt, ClosedAt: &closedAt})
+	return true, nil
+}
+
 func (f *FakeAccountRepo) CompareAndSetBalance(_ context.Context, accountID uuid.UUID, expected, next int64, updatedAt time.Time) (bool, error) {
 	f.CASCalls++
+	if f.OnCAS != nil {
+		f.OnCAS()
+	}
 	if len(f.CASResults) > 0 {
 		result := f.CASResults[0]
 		f.CASResults = f.CASResults[1:]
@@ -126,7 +155,7 @@ func (f *FakeAccountRepo) CompareAndSetBalance(_ context.Context, accountID uuid
 		return false, f.Err
 	}
 	account := f.Accounts[accountID]
-	if account.BalanceCents != expected {
+	if account.BalanceCents != expected || account.Status != models.AccountStatusActive {
 		return false, nil
 	}
 	account.BalanceCents = next

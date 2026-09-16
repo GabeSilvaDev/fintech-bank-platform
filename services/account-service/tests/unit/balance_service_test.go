@@ -82,6 +82,31 @@ func TestCreditRejections(t *testing.T) {
 	assert.Equal(t, 0, h.accounts.CASCalls)
 }
 
+func TestCreditRejectsWhenAccountIsBlockedBeforeCAS(t *testing.T) {
+	h := newHarness()
+	account := h.activeAccount(100)
+	h.accounts.CASResults = []tests.CASResult{{Applied: false}}
+	h.accounts.OnCAS = func() { h.accounts.Accounts[account.AccountID].Status = models.AccountStatusBlocked }
+
+	_, err := h.service.Credit(context.Background(), credit(account.AccountID.String(), 1))
+
+	assert.Equal(t, "account_not_active", models.InvalidCode(err))
+	assert.Equal(t, 1, h.accounts.CASCalls)
+	assert.Equal(t, int64(100), h.accounts.Accounts[account.AccountID].BalanceCents)
+}
+
+func TestCreditIsRefusedByRepositoryWhenAccountIsNotActive(t *testing.T) {
+	h := newHarness()
+	account := h.activeAccount(100)
+	h.accounts.OnCAS = func() { h.accounts.Accounts[account.AccountID].Status = models.AccountStatusBlocked }
+
+	_, err := h.service.Credit(context.Background(), credit(account.AccountID.String(), 1))
+
+	assert.Equal(t, "account_not_active", models.InvalidCode(err))
+	assert.Equal(t, 1, h.accounts.CASCalls)
+	assert.Equal(t, int64(100), h.accounts.Accounts[account.AccountID].BalanceCents)
+}
+
 func TestCreditPropagatesRepositoryErrors(t *testing.T) {
 	h := newHarness()
 	account := h.activeAccount(0)
@@ -139,6 +164,22 @@ func TestDebitRejectsInactiveAccount(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "account_not_active", result.Rejected.Reason)
 	assert.Equal(t, 10.0, result.Rejected.Balance)
+}
+
+func TestDebitRejectsWhenAccountIsBlockedBeforeCAS(t *testing.T) {
+	h := newHarness()
+	account := h.activeAccount(1000)
+	h.accounts.CASResults = []tests.CASResult{{Applied: false}}
+	h.accounts.OnCAS = func() { h.accounts.Accounts[account.AccountID].Status = models.AccountStatusBlocked }
+
+	result, err := h.service.Debit(context.Background(), debit(account.AccountID.String(), 1))
+
+	assert.NoError(t, err)
+	assert.Nil(t, result.Debited)
+	assert.Equal(t, "account_not_active", result.Rejected.Reason)
+	assert.Equal(t, 10.0, result.Rejected.Balance)
+	assert.Equal(t, 1, h.accounts.CASCalls)
+	assert.Equal(t, int64(1000), h.accounts.Accounts[account.AccountID].BalanceCents)
 }
 
 func TestDebitRechecksBalanceAfterConflict(t *testing.T) {

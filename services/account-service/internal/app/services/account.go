@@ -178,8 +178,18 @@ func (s *AccountService) Close(ctx context.Context, cmd events.DeleteAccountPayl
 	}
 
 	now := s.clock.Now()
-	if err := s.accounts.UpdateStatus(ctx, accountID, models.AccountStatusClosed, now, &now); err != nil {
+	applied, err := s.accounts.CloseIfEmpty(ctx, accountID, now)
+	if err != nil {
 		return events.AccountDeletedPayload{}, err
+	}
+	if !applied {
+		if account, err = s.accounts.Get(ctx, accountID); err != nil {
+			return events.AccountDeletedPayload{}, err
+		}
+		if account.Status == models.AccountStatusClosed {
+			return events.AccountDeletedPayload{}, models.Invalid("account_closed", "account is already closed")
+		}
+		return events.AccountDeletedPayload{}, models.Invalid("account_has_balance", "account balance must be zero before closing")
 	}
 
 	return events.AccountDeletedPayload{
@@ -290,6 +300,9 @@ func (s *AccountService) Credit(ctx context.Context, cmd events.CreditAccountPay
 		if account, err = s.accounts.Get(ctx, accountID); err != nil {
 			return events.AccountCreditedPayload{}, err
 		}
+		if account.Status != models.AccountStatusActive {
+			return events.AccountCreditedPayload{}, models.Invalid("account_not_active", "account is not active")
+		}
 	}
 	return events.AccountCreditedPayload{}, models.ErrConflict
 }
@@ -330,6 +343,9 @@ func (s *AccountService) Debit(ctx context.Context, cmd events.DebitAccountPaylo
 		}
 		if account, err = s.accounts.Get(ctx, accountID); err != nil {
 			return DebitResult{}, err
+		}
+		if account.Status != models.AccountStatusActive {
+			return rejected(cmd, account, "account_not_active"), nil
 		}
 	}
 	return DebitResult{}, models.ErrConflict

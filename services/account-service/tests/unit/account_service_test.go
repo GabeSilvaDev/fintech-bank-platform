@@ -270,14 +270,51 @@ func TestCloseAccount(t *testing.T) {
 	assert.Equal(t, now, *change.ClosedAt)
 }
 
-func TestClosePropagatesStatusUpdateError(t *testing.T) {
+func TestClosePropagatesCloseError(t *testing.T) {
 	h := newHarness()
 	account := h.activeAccount(0)
-	h.accounts.UpdateStatusErr = errors.New("status update failed")
+	h.accounts.CloseErr = errors.New("close failed")
 
 	_, err := h.service.Close(context.Background(), events.DeleteAccountPayload{AccountID: account.AccountID.String()})
 
-	assert.EqualError(t, err, "status update failed")
+	assert.EqualError(t, err, "close failed")
+	assert.Empty(t, h.accounts.Statuses)
+}
+
+func TestCloseRejectsWhenBalanceArrivesBeforeClosing(t *testing.T) {
+	h := newHarness()
+	account := h.activeAccount(0)
+	h.accounts.OnClose = func() { h.accounts.Accounts[account.AccountID].BalanceCents = 100 }
+
+	_, err := h.service.Close(context.Background(), events.DeleteAccountPayload{AccountID: account.AccountID.String()})
+
+	assert.Equal(t, "account_has_balance", models.InvalidCode(err))
+	assert.Equal(t, 1, h.accounts.CloseCalls)
+	assert.Equal(t, models.AccountStatusActive, h.accounts.Accounts[account.AccountID].Status)
+	assert.Empty(t, h.accounts.Statuses)
+}
+
+func TestCloseRejectsWhenClosedConcurrently(t *testing.T) {
+	h := newHarness()
+	account := h.activeAccount(0)
+	h.accounts.OnClose = func() { h.accounts.Accounts[account.AccountID].Status = models.AccountStatusClosed }
+
+	_, err := h.service.Close(context.Background(), events.DeleteAccountPayload{AccountID: account.AccountID.String()})
+
+	assert.Equal(t, "account_closed", models.InvalidCode(err))
+	assert.Equal(t, 1, h.accounts.CloseCalls)
+	assert.Empty(t, h.accounts.Statuses)
+}
+
+func TestClosePropagatesRereadErrorAfterConflict(t *testing.T) {
+	h := newHarness()
+	account := h.activeAccount(0)
+	h.accounts.OnClose = func() { h.accounts.Accounts[account.AccountID].BalanceCents = 100 }
+	h.accounts.GetErrs = []error{nil, errors.New("db down")}
+
+	_, err := h.service.Close(context.Background(), events.DeleteAccountPayload{AccountID: account.AccountID.String()})
+
+	assert.EqualError(t, err, "db down")
 }
 
 func TestCloseAccountRejections(t *testing.T) {

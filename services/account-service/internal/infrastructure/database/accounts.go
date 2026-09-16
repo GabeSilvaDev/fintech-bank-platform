@@ -68,8 +68,16 @@ func (r *AccountRepository) UpdateStatus(ctx context.Context, accountID uuid.UUI
 		WithContext(ctx).Exec())
 }
 
+func (r *AccountRepository) CloseIfEmpty(ctx context.Context, accountID uuid.UUID, closedAt time.Time) (bool, error) {
+	applied, err := r.session.Query("UPDATE accounts SET status = ?, updated_at = ?, closed_at = ? WHERE account_id = ? IF balance_cents = 0 AND status != ?",
+		string(models.AccountStatusClosed), closedAt, closedAt, gocql.UUID(accountID), string(models.AccountStatusClosed)).
+		WithContext(ctx).MapScanCAS(map[string]interface{}{})
+	return applied, MapWriteError(err)
+}
+
 func (r *AccountRepository) CompareAndSetBalance(ctx context.Context, accountID uuid.UUID, expected, next int64, updatedAt time.Time) (bool, error) {
-	applied, err := r.session.Query("UPDATE accounts SET balance_cents = ?, updated_at = ? WHERE account_id = ? IF balance_cents = ?", next, updatedAt, gocql.UUID(accountID), expected).
+	applied, err := r.session.Query("UPDATE accounts SET balance_cents = ?, updated_at = ? WHERE account_id = ? IF balance_cents = ? AND status = ?",
+		next, updatedAt, gocql.UUID(accountID), expected, string(models.AccountStatusActive)).
 		WithContext(ctx).MapScanCAS(map[string]interface{}{})
 	return applied, MapWriteError(err)
 }

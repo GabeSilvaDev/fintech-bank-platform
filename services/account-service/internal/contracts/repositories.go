@@ -14,6 +14,7 @@ type AccountRepository interface {
 	Get(ctx context.Context, accountID uuid.UUID) (*models.Account, error)
 	ListByUser(ctx context.Context, userID uuid.UUID) ([]*models.Account, error)
 	UpdateStatus(ctx context.Context, accountID uuid.UUID, status models.AccountStatus, updatedAt time.Time, closedAt *time.Time) error
+	CloseIfEmpty(ctx context.Context, accountID uuid.UUID, closedAt time.Time) (bool, error)
 	CompareAndSetBalance(ctx context.Context, accountID uuid.UUID, expected, next int64, updatedAt time.Time) (bool, error)
 }
 
