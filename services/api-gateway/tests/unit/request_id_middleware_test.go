@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/fintech-bank-platform/api-gateway/internal/contracts"
@@ -79,4 +80,26 @@ func TestRequestIDMiddlewareSetsContext(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, "context-test-id", capturedRequestID)
+}
+
+func TestRequestIDMiddlewareReplacesMalformedIDs(t *testing.T) {
+	handler := middleware.RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	for _, provided := range []string{
+		strings.Repeat("a", 65),
+		"has space",
+		"semi;colon",
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		req.Header.Set(contracts.RequestIDHeader, provided)
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		requestID := rec.Header().Get(contracts.RequestIDHeader)
+		assert.NotEqual(t, provided, requestID)
+		assert.Regexp(t, `^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`, requestID)
+	}
 }
