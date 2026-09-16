@@ -17,7 +17,7 @@
 
 </div>
 
-> **Work in progress.** The infrastructure, the shared packages and the API gateway are in place — the gateway already validates commands and publishes them to Kafka; the domain services that consume them are next. See the [roadmap](#roadmap) for what is done and what is planned.
+> **Work in progress.** Infrastructure, shared packages, the API gateway and the account service are in place — commands flow from HTTP to Kafka to Cassandra and reads come back through the gateway; the transaction, payment and notification services are next. See the [roadmap](#roadmap) for what is done and what is planned.
 
 ## Architecture
 
@@ -34,12 +34,12 @@ flowchart LR
     A & T & P -->|events| K
 
     classDef planned stroke-dasharray: 5 5,opacity:0.6
-    class A,T,P,N,CS,R planned
+    class T,P,N,R planned
 ```
 
 Solid boxes exist today; dashed ones are planned. The gateway receives HTTP requests and publishes them as commands on Kafka; each domain service consumes its command topic, persists to Cassandra, and emits result events. Redis caches hot reads and backs rate limiting.
 
-**Topics** (`pkg/events`): `account.commands`, `transaction.commands`, `payment.commands` for commands; `account.events`, `transaction.events`, `payment.events`, `notification.events` for results; one dead-letter topic per domain.
+**Topics** (`pkg/events`): `account.commands`, `transaction.commands`, `payment.commands` for commands; `account.events`, `transaction.events`, `payment.events`, `notification.events` for results; one dead-letter topic per domain. The root compose pre-creates every topic with a `kafka-init` one-shot.
 
 ## What exists today
 
@@ -47,7 +47,8 @@ Solid boxes exist today; dashed ones are planned. The gateway receives HTTP requ
 |---|---|---|
 | Infrastructure | `docker-compose.yml` | Kafka 3.7.1 (KRaft), Cassandra 4.1, Redis 7.2, optional Kafka UI and Cassandra Web |
 | Shared packages | `pkg/` | `logger`, `errors`, `response`, `validation`, `events` — 100 % test coverage, enforced in CI |
-| API Gateway | `services/api-gateway/` | Chi router with request-id, real-IP, logging, recovery, CORS and rate-limit middleware; `GET /health`; command endpoints publishing to Kafka through a circuit-breaker-guarded producer; typed config from env; unit + feature tests at 100 % coverage, Kafka integration test in CI |
+| API Gateway | `services/api-gateway/` | Chi router with request-id, real-IP, logging, recovery, CORS and rate-limit middleware; `GET /health`; command endpoints publishing to Kafka through a circuit-breaker-guarded producer; typed config from env; unit + feature tests at 100 % coverage, Kafka integration test in CI; read routes proxied to the account service |
+| Account Service | `services/account-service/` | Consumes `account.commands`, persists customers and accounts in Cassandra (`fintech_accounts`, migrations applied at boot), owns balances with compare-and-set credits/debits, publishes results on `account.events` and failures on `account.dlq`; read API on `:8082`; unit + feature tests at 100 % of `internal/app`, Cassandra and Kafka integration tests in CI |
 
 ### Shared packages
 
@@ -58,6 +59,9 @@ Solid boxes exist today; dashed ones are planned. The gateway receives HTTP requ
 | `response` | JSON helpers (`OK`, `Created`, `NoContent`, `BadRequest`, …), `SuccessWithMeta` for pagination, `FromError` to render an `AppError` |
 | `validation` | Brazilian and banking validators — CPF, CNPJ, phone, PIX key, agency and account numbers, currency, password strength — as functions and as `validate:"…"` struct tags |
 | `events` | Kafka `Event` envelope (id, type, version, source, timestamp, trace id, metadata, payload), topic and event-type catalogs, typed payloads and `NewAccountCommand`-style constructors |
+| `env` | typed getters for environment variables |
+| `middleware` | request-id, request logging and panic recovery for chi |
+| `messaging` | kafka-go producer with publish timeout and a consumer loop with per-message commit |
 
 Usage examples live in [`pkg/README.md`](pkg/README.md).
 
@@ -94,6 +98,29 @@ curl http://localhost:8081/health
 
 Or natively: `make run` (listens on `SERVER_PORT`, default 8080). Configuration is read from the environment: `SERVER_*` (host, port, timeouts), `CORS_*`, `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW`, `KAFKA_BROKERS` / `KAFKA_WRITE_TIMEOUT` / `KAFKA_BATCH_TIMEOUT` / `KAFKA_PUBLISH_TIMEOUT` / `KAFKA_MAX_ATTEMPTS` / `KAFKA_BREAKER_*` and `LOG_LEVEL` / `LOG_PRETTY`.
 
+### Account Service
+
+```bash
+cd services/account-service
+cp .env.example .env
+docker compose up -d                  # hot reload with Air, published on :8082
+curl http://localhost:8082/health     # {"status":"healthy","cassandra":"up"}
+```
+
+Migrations in `migrations/*.cql` run at boot against `CASSANDRA_KEYSPACE` (default `fintech_accounts`). Configuration: `SERVER_*`, `KAFKA_BROKERS` / `KAFKA_GROUP_ID` / `KAFKA_*_TIMEOUT` / `KAFKA_MAX_ATTEMPTS`, `CONSUMER_RETRY_BACKOFF`, `CASSANDRA_HOSTS` / `CASSANDRA_KEYSPACE` / `CASSANDRA_CONSISTENCY` / `CASSANDRA_*_TIMEOUT` / `CASSANDRA_MIGRATIONS_PATH`, `LOG_LEVEL` / `LOG_PRETTY`.
+
+Commands it handles (topic `account.commands`) and the events it answers with (topic `account.events`):
+
+| Command | Result | Dead-letter (`account.dlq`) when |
+|---|---|---|
+| `account.create` | `account.created` | invalid data, number collision after 5 tries |
+| `account.update` | `account.updated` | unknown account, closed account, empty update |
+| `account.delete` | `account.deleted` | unknown account, non-zero balance |
+| `account.credit` | `account.credited` | unknown or inactive account, invalid amount |
+| `account.debit` | `account.debited` or `account.debit_rejected` (`insufficient_funds`, `account_not_active`) | unknown account, invalid amount |
+
+Every command is applied at most once (`processed_events`, 7-day TTL); transient failures are retried with `CONSUMER_RETRY_BACKOFF` and then dead-lettered as `account.command_failed`.
+
 #### Command endpoints
 
 Every write is accepted asynchronously: the gateway validates the body, publishes a command to Kafka and answers `202` with the command id and the trace id (`X-Request-ID`).
@@ -116,6 +143,15 @@ curl -s -X POST localhost:8081/api/v1/accounts \
 
 Errors: `400 INVALID_JSON`, `413 PAYLOAD_TOO_LARGE` (body over 1 MiB), `422 VALIDATION_ERROR` (with per-field `details`), `422 EMPTY_UPDATE` (PATCH without fields), `429 RATE_LIMIT_EXCEEDED`, `503 PUBLISH_FAILED` when the broker is unreachable or the circuit is open.
 
+#### Read endpoints
+
+Reads are proxied to the account service (`services/account-service`) via `ACCOUNT_SERVICE_URL`; `502 UPSTREAM_UNAVAILABLE` when it is down.
+
+| Method | Path | Upstream |
+|---|---|---|
+| `GET` | `/api/v1/accounts/{id}` | `GET /accounts/{id}` → `200` account (`balance` in BRL), `404 ACCOUNT_NOT_FOUND`, `422` |
+| `GET` | `/api/v1/users/{user_id}/accounts` | `GET /users/{user_id}/accounts` → `200` list |
+
 ## Development
 
 ```bash
@@ -127,9 +163,15 @@ cd services/api-gateway
 make test                                   # unit + feature, coverage of ./internal/...
 make test-coverage                          # writes coverage.html
 make test-integration                       # needs KAFKA_BROKERS pointing at a broker
+
+# account service
+cd services/account-service
+make test                                   # unit + feature, coverage of ./internal/app/...
+make test-coverage                          # writes coverage.html
+make test-integration                       # needs KAFKA_BROKERS and CASSANDRA_HOSTS
 ```
 
-CI (`.github/workflows/ci.yml`) runs on every push and pull request: `gofmt` check and the test suites for `pkg` and `api-gateway`, failing the build if coverage drops below 100 %.
+CI (`.github/workflows/ci.yml`) runs on every push and pull request as three jobs — `pkg`, `api-gateway` (with a Kafka service container) and `account-service` (with Kafka and Cassandra service containers) — running `gofmt` check and the test suites for `pkg`, `api-gateway` and `account-service`, failing the build if coverage drops below 100 % (of `internal/app` for the account service).
 
 ## Project structure
 
@@ -140,19 +182,36 @@ fintech-bank-platform/
 ├── .github/workflows/ci.yml   gofmt + tests + coverage gate
 ├── pkg/                       shared Go module
 │   ├── logger/  errors/  response/  validation/  events/
+│   ├── env/  middleware/  messaging/
 │   ├── Makefile · Dockerfile · docker-compose.yml
 │   └── README.md
 └── services/
-    └── api-gateway/
+    ├── api-gateway/
+    │   ├── cmd/main.go                    entry point
+    │   ├── internal/
+    │   │   ├── config/                    env → typed Config
+    │   │   ├── contracts/                 interfaces for config, context and http
+    │   │   ├── app/handlers/              command endpoints
+    │   │   └── infrastructure/
+    │   │       ├── http/                  server, router, handlers, middleware/
+    │   │       └── messaging/             kafka producer, circuit breaker
+    │   ├── tests/  (unit/ · feature/ · integration/)     testify-style TestCase helpers
+    │   ├── Makefile · Dockerfile · docker-compose.yml · .air.toml
+    │   └── .env.example
+    └── account-service/
         ├── cmd/main.go                    entry point
+        ├── migrations/                    numbered .cql files, applied at boot
         ├── internal/
         │   ├── config/                    env → typed Config
         │   ├── contracts/                 interfaces for config, context and http
-        │   ├── app/handlers/              command endpoints
+        │   ├── app/
+        │   │   ├── models/                domain types
+        │   │   ├── services/              account and customer use cases
+        │   │   └── handlers/              command dispatcher, DLQ, read endpoints
         │   └── infrastructure/
-        │       ├── http/                  server, router, handlers, middleware/
-        │       └── messaging/             kafka producer, circuit breaker
-        ├── tests/  (unit/ · feature/ · integration/)     testify-style TestCase helpers
+        │       ├── database/              Cassandra repositories and migrations
+        │       └── http/                  server, router, health, read handlers
+        ├── tests/  (unit/ · feature/ · integration/)
         ├── Makefile · Dockerfile · docker-compose.yml · .air.toml
         └── .env.example
 ```
@@ -164,7 +223,7 @@ Each future service follows the same layout: `cmd/`, `internal/{config,contracts
 - [x] **Sprint 0** — Docker Compose infrastructure (Kafka KRaft, Cassandra, Redis, debug UIs)
 - [x] **Shared packages** — logger, errors, response, validation, events, with CI and 100 % coverage
 - [x] **Sprint 1 — API Gateway** — HTTP skeleton, middleware, config, Kafka producer with circuit breaker and command endpoints
-- [ ] **Sprint 2 — Account Service** — account and customer CRUD, Cassandra keyspace and migrations
+- [x] **Sprint 2 — Account Service** — customers and accounts in Cassandra, balance with compare-and-set, result events, read API proxied by the gateway
 - [ ] **Sprint 3 — Transaction Service** — transfers with idempotency and balance checks
 - [ ] **Sprint 4 — Payment Service** — PIX, TED and boleto flows
 - [ ] **Sprint 5 — Notification Service** — e-mail, SMS and push consumers

@@ -8,7 +8,10 @@ pkg/
 ├── errors/        AppError with HTTP status, code and details
 ├── response/      JSON response helpers for net/http
 ├── validation/    Brazilian and banking validators (CPF, CNPJ, PIX, …)
-└── events/        Kafka event envelope, topics and typed payloads
+├── events/        Kafka event envelope, topics and typed payloads
+├── env/           typed getters for environment variables
+├── middleware/    request-id, request logging and panic recovery for chi
+└── messaging/     kafka-go producer and consumer
 ```
 
 ## logger
@@ -101,6 +104,52 @@ data, _ := event.ToJSON()
 back, _ := events.FromJSON(data)
 
 topic := events.Topics.AccountCommands // "account.commands"
+```
+
+## env
+
+```go
+import "github.com/fintech-bank-platform/pkg/env"
+
+env.Get("KAFKA_BROKERS", "localhost:9092")
+env.GetInt("KAFKA_MAX_ATTEMPTS", 3)
+env.GetDuration("KAFKA_WRITE_TIMEOUT", 5*time.Second)
+env.GetDurations("CONSUMER_RETRY_BACKOFF", []time.Duration{200 * time.Millisecond, time.Second, 5 * time.Second})
+env.GetBool("LOG_PRETTY", false)
+env.SplitAndTrim("kafka-1:9092, kafka-2:9092") // ["kafka-1:9092", "kafka-2:9092"]
+```
+
+## middleware
+
+```go
+import "github.com/fintech-bank-platform/pkg/middleware"
+
+router.Use(middleware.RequestID, middleware.Logger(log), middleware.Recovery)
+
+// downstream handlers read the request id middleware.RequestID generated (or forwarded from middleware.RequestIDHeader)
+requestID := middleware.GetRequestID(r.Context())
+```
+
+## messaging
+
+```go
+import "github.com/fintech-bank-platform/pkg/messaging"
+
+producer := messaging.NewProducer(messaging.ProducerConfig{
+    Brokers:        []string{"localhost:9092"},
+    WriteTimeout:   5 * time.Second,
+    BatchTimeout:   10 * time.Millisecond,
+    PublishTimeout: 20 * time.Second,
+    MaxAttempts:    3,
+})
+err := producer.Publish(ctx, events.Topics.AccountCommands, key, event)
+
+consumer := messaging.NewConsumer(messaging.ConsumerConfig{
+    Brokers: []string{"localhost:9092"},
+    GroupID: "account-service",
+    Topic:   "account.commands",
+})
+err = consumer.Run(ctx, handle) // handle(ctx, kafka.Message) error; committed per message on success
 ```
 
 ## Tests
