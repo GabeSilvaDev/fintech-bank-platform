@@ -290,7 +290,7 @@ func (s *AccountService) Credit(ctx context.Context, cmd events.CreditAccountPay
 		if applied {
 			return events.AccountCreditedPayload{
 				AccountID:      accountID.String(),
-				Amount:         cmd.Amount,
+				Amount:         models.FromCents(cents),
 				BalanceAfter:   models.FromCents(next),
 				Reference:      cmd.Reference,
 				IdempotencyKey: cmd.IdempotencyKey,
@@ -318,13 +318,13 @@ func (s *AccountService) Debit(ctx context.Context, cmd events.DebitAccountPaylo
 		return DebitResult{}, err
 	}
 	if account.Status != models.AccountStatusActive {
-		return rejected(cmd, account, "account_not_active"), nil
+		return rejected(cmd, cents, account, "account_not_active"), nil
 	}
 
 	now := s.clock.Now()
 	for attempt := 0; attempt < maxBalanceAttempts; attempt++ {
 		if account.BalanceCents < cents {
-			return rejected(cmd, account, "insufficient_funds"), nil
+			return rejected(cmd, cents, account, "insufficient_funds"), nil
 		}
 		next := account.BalanceCents - cents
 		applied, err := s.accounts.CompareAndSetBalance(ctx, accountID, account.BalanceCents, next, now)
@@ -334,7 +334,7 @@ func (s *AccountService) Debit(ctx context.Context, cmd events.DebitAccountPaylo
 		if applied {
 			return DebitResult{Debited: &events.AccountDebitedPayload{
 				AccountID:      accountID.String(),
-				Amount:         cmd.Amount,
+				Amount:         models.FromCents(cents),
 				BalanceAfter:   models.FromCents(next),
 				Reference:      cmd.Reference,
 				IdempotencyKey: cmd.IdempotencyKey,
@@ -345,16 +345,16 @@ func (s *AccountService) Debit(ctx context.Context, cmd events.DebitAccountPaylo
 			return DebitResult{}, err
 		}
 		if account.Status != models.AccountStatusActive {
-			return rejected(cmd, account, "account_not_active"), nil
+			return rejected(cmd, cents, account, "account_not_active"), nil
 		}
 	}
 	return DebitResult{}, models.ErrConflict
 }
 
-func rejected(cmd events.DebitAccountPayload, account *models.Account, reason string) DebitResult {
+func rejected(cmd events.DebitAccountPayload, cents int64, account *models.Account, reason string) DebitResult {
 	return DebitResult{Rejected: &events.DebitRejectedPayload{
 		AccountID:      account.AccountID.String(),
-		Amount:         cmd.Amount,
+		Amount:         models.FromCents(cents),
 		Balance:        models.FromCents(account.BalanceCents),
 		Reason:         reason,
 		Reference:      cmd.Reference,

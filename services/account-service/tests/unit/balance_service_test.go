@@ -122,6 +122,25 @@ func TestCreditPropagatesRepositoryErrors(t *testing.T) {
 	assert.EqualError(t, err, "db down")
 }
 
+func TestBalanceAmountsAreReportedRounded(t *testing.T) {
+	h := newHarness()
+	account := h.activeAccount(100)
+	amount := 0.1 + 0.2
+
+	credited, err := h.service.Credit(context.Background(), credit(account.AccountID.String(), amount))
+	assert.NoError(t, err)
+	assert.Equal(t, 0.3, credited.Amount)
+
+	result, err := h.service.Debit(context.Background(), debit(account.AccountID.String(), amount))
+	assert.NoError(t, err)
+	assert.Equal(t, 0.3, result.Debited.Amount)
+
+	result, err = h.service.Debit(context.Background(), debit(account.AccountID.String(), 1+amount))
+	assert.NoError(t, err)
+	assert.Equal(t, "insufficient_funds", result.Rejected.Reason)
+	assert.Equal(t, 1.3, result.Rejected.Amount)
+}
+
 func TestDebitDecreasesBalance(t *testing.T) {
 	h := newHarness()
 	account := h.activeAccount(1000)

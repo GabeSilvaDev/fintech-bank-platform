@@ -3,8 +3,11 @@ package unit
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -69,6 +72,17 @@ func encoded(cmd *events.Event) []byte {
 	return data
 }
 
+func logEntry(t *testing.T, logs *bytes.Buffer, message string) map[string]interface{} {
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		var entry map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &entry); err == nil && entry["message"] == message {
+			return entry
+		}
+	}
+	t.Fatalf("log entry %q not found in %s", message, logs.String())
+	return nil
+}
+
 func TestProcessPublishesResult(t *testing.T) {
 	h := newProcessor()
 	cmd := command(events.EventTypes.CreateAccount, validCreate())
@@ -107,6 +121,7 @@ func TestProcessDeadLettersUndecodableMessages(t *testing.T) {
 	assert.Equal(t, events.EventTypes.AccountCommandFailed, dlq[0].Event.Type)
 	assert.Equal(t, "invalid_event", dlq[0].Event.Payload.(events.ErrorPayload).ErrorCode)
 	assert.Nil(t, dlq[0].Event.Payload.(events.ErrorPayload).OriginalEvent)
+	assert.Equal(t, 0, dlq[0].Event.Payload.(events.ErrorPayload).Retries)
 	assert.NotNil(t, dlq[1].Event.Payload.(events.ErrorPayload).OriginalEvent)
 	assert.Equal(t, 0, h.dispatcher.Calls)
 }
@@ -133,6 +148,7 @@ func TestProcessDeadLettersUnprocessableWithoutRetry(t *testing.T) {
 		payload := dlq[0].Event.Payload.(events.ErrorPayload)
 		assert.Equal(t, code, payload.ErrorCode, code)
 		assert.Equal(t, cmd.ID, payload.OriginalEvent.ID, code)
+		assert.Equal(t, 1, payload.Retries, code)
 		assert.Equal(t, "trace-1", dlq[0].Event.TraceID, code)
 		assert.Equal(t, "k", dlq[0].Key, code)
 	}
@@ -158,7 +174,9 @@ func TestProcessDeadLettersAfterRetriesExhausted(t *testing.T) {
 
 	assert.Equal(t, 4, h.dispatcher.Calls)
 	dlq := h.publisher.ByTopic(events.Topics.AccountDLQ)
-	assert.Equal(t, "internal_error", dlq[0].Event.Payload.(events.ErrorPayload).ErrorCode)
+	payload := dlq[0].Event.Payload.(events.ErrorPayload)
+	assert.Equal(t, "internal_error", payload.ErrorCode)
+	assert.Equal(t, 4, payload.Retries)
 }
 
 func TestProcessTreatsConflictAsTransient(t *testing.T) {
@@ -195,7 +213,16 @@ func TestProcessDeadLettersWhenResultPublishFails(t *testing.T) {
 	assert.Len(t, dlq, 1)
 	payload := dlq[0].Event.Payload.(events.ErrorPayload)
 	assert.Equal(t, "publish_failed", payload.ErrorCode)
+	assert.Equal(t, 0, payload.Retries)
 	assert.Equal(t, events.EventTypes.AccountCreated, payload.OriginalEvent.Type)
+
+	entry := logEntry(t, h.logs, "result publish failed")
+	assert.Equal(t, payload.OriginalEvent.ID, entry["event_id"])
+	assert.Equal(t, "trace-1", entry["trace_id"])
+	assert.Equal(t, events.EventTypes.AccountCreated, entry["type"])
+	assert.Equal(t, "broker down", entry["error"])
+	assert.Equal(t, payload.OriginalEvent.ID, entry["event"].(map[string]interface{})["id"])
+	assert.Equal(t, "1", entry["event"].(map[string]interface{})["payload"].(map[string]interface{})["ok"])
 }
 
 func TestProcessSurvivesDeadLetterPublishFailure(t *testing.T) {
@@ -204,7 +231,32 @@ func TestProcessSurvivesDeadLetterPublishFailure(t *testing.T) {
 	cmd := command(events.EventTypes.CreateAccount, validCreate())
 
 	assert.NoError(t, h.processor.Process(context.Background(), []byte("k"), encoded(cmd)))
-	assert.Contains(t, h.logs.String(), "dead-letter publish failed")
+
+	entry := logEntry(t, h.logs, "dead-letter publish failed")
+	assert.NotEmpty(t, entry["event_id"])
+	assert.Equal(t, "trace-1", entry["trace_id"])
+	assert.Equal(t, events.EventTypes.AccountCommandFailed, entry["type"])
+	assert.Equal(t, "publish_failed", entry["code"])
+	failed := entry["event"].(map[string]interface{})
+	assert.Equal(t, entry["event_id"], failed["id"])
+	original := failed["payload"].(map[string]interface{})["original_event"].(map[string]interface{})
+	assert.Equal(t, events.EventTypes.AccountCreated, original["type"])
+	assert.Equal(t, "trace-1", original["trace_id"])
+}
+
+func TestProcessLogsUnencodableEventsWhenPublishFails(t *testing.T) {
+	h := newProcessor()
+	h.publisher.ErrByTopic = map[string]error{events.Topics.AccountEvents: errors.New("encoding failed")}
+	h.dispatcher.Result = handlers.Result{Event: events.NewAccountEvent(events.EventTypes.AccountCredited, map[string]float64{"amount": math.NaN()}).WithTraceID("trace-1"), Key: "key-1"}
+	cmd := command(events.EventTypes.CreditAccount, nil)
+
+	assert.NoError(t, h.processor.Process(context.Background(), []byte("k"), encoded(cmd)))
+
+	entry := logEntry(t, h.logs, "result publish failed")
+	assert.Equal(t, h.dispatcher.Result.Event.ID, entry["event_id"])
+	assert.Equal(t, events.EventTypes.AccountCredited, entry["type"])
+	assert.Contains(t, entry["event"], "NaN")
+	assert.Len(t, h.publisher.ByTopic(events.Topics.AccountDLQ), 1)
 }
 
 func TestProcessRetriesIdempotencyStoreThenFails(t *testing.T) {
