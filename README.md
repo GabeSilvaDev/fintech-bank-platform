@@ -37,7 +37,7 @@ flowchart LR
     class A,T,P,N,CS,R planned
 ```
 
-Solid boxes exist today; dashed ones are planned. The gateway receives HTTP requests and will publish them as commands on Kafka; each domain service consumes its command topic, persists to Cassandra, and emits result events. Redis caches hot reads and backs rate limiting.
+Solid boxes exist today; dashed ones are planned. The gateway receives HTTP requests and publishes them as commands on Kafka; each domain service consumes its command topic, persists to Cassandra, and emits result events. Redis caches hot reads and backs rate limiting.
 
 **Topics** (`pkg/events`): `account.commands`, `transaction.commands`, `payment.commands` for commands; `account.events`, `transaction.events`, `payment.events`, `notification.events` for results; one dead-letter topic per domain.
 
@@ -47,7 +47,7 @@ Solid boxes exist today; dashed ones are planned. The gateway receives HTTP requ
 |---|---|---|
 | Infrastructure | `docker-compose.yml` | Kafka 3.7.1 (KRaft), Cassandra 4.1, Redis 7.2, optional Kafka UI and Cassandra Web |
 | Shared packages | `pkg/` | `logger`, `errors`, `response`, `validation`, `events` — 100 % test coverage, enforced in CI |
-| API Gateway | `services/api-gateway/` | Chi router with request-id, recovery, real-IP, CORS and rate-limit middleware; `GET /health`; typed config from env; unit + feature tests at 100 % coverage |
+| API Gateway | `services/api-gateway/` | Chi router with request-id, real-IP, logging, recovery, CORS and rate-limit middleware; `GET /health`; command endpoints publishing to Kafka through a circuit-breaker-guarded producer; typed config from env; unit + feature tests at 100 % coverage, Kafka integration test in CI |
 
 ### Shared packages
 
@@ -92,7 +92,31 @@ docker compose up -d                  # hot reload with Air, published on :8081
 curl http://localhost:8081/health
 ```
 
-Or natively: `make run` (listens on `SERVER_PORT`, default 8080). Configuration is read from the environment: `SERVER_*` (host, port, timeouts), `CORS_*` and `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW`.
+Or natively: `make run` (listens on `SERVER_PORT`, default 8080). Configuration is read from the environment: `SERVER_*` (host, port, timeouts), `CORS_*`, `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW`, `KAFKA_BROKERS` / `KAFKA_WRITE_TIMEOUT` / `KAFKA_MAX_ATTEMPTS` / `KAFKA_BREAKER_*` and `LOG_LEVEL` / `LOG_PRETTY`.
+
+#### Command endpoints
+
+Every write is accepted asynchronously: the gateway validates the body, publishes a command to Kafka and answers `202` with the command id and the trace id (`X-Request-ID`).
+
+| Method | Path | Topic | Event type |
+|---|---|---|---|
+| `POST` | `/api/v1/accounts` | `account.commands` | `account.create` |
+| `PATCH` | `/api/v1/accounts/{id}` | `account.commands` | `account.update` |
+| `DELETE` | `/api/v1/accounts/{id}` | `account.commands` | `account.delete` |
+| `POST` | `/api/v1/transactions` | `transaction.commands` | `transaction.create` |
+| `POST` | `/api/v1/transfers` | `transaction.commands` | `transaction.transfer` |
+| `POST` | `/api/v1/payments` | `payment.commands` | `payment.process` |
+
+```bash
+curl -s -X POST localhost:8081/api/v1/accounts \
+  -H 'Content-Type: application/json' \
+  -d '{"user_id":"5d1e7c2a-0a6b-4c1e-9f4e-2b6f7a8c9d01","account_type":"checking","name":"Ana Souza","email":"ana@example.com","document":"52998224725"}'
+# {"success":true,"data":{"command_id":"…","trace_id":"…"}}
+```
+
+Errors: `400 INVALID_JSON`, `422 VALIDATION_ERROR` (with per-field `details`), `503 PUBLISH_FAILED` when the broker is unreachable or the circuit is open.
+
+(Event-type strings above are the exact values from `pkg/events.EventTypes`.)
 
 ## Development
 
@@ -104,6 +128,7 @@ cd pkg && make test && make lint            # go test ./... · gofmt check
 cd services/api-gateway
 make test                                   # unit + feature, coverage of ./internal/...
 make test-coverage                          # writes coverage.html
+make test-integration                       # needs KAFKA_BROKERS pointing at a broker
 ```
 
 CI (`.github/workflows/ci.yml`) runs on every push and pull request: `gofmt` check and the test suites for `pkg` and `api-gateway`, failing the build if coverage drops below 100 %.
@@ -125,8 +150,11 @@ fintech-bank-platform/
         ├── internal/
         │   ├── config/                    env → typed Config
         │   ├── contracts/                 interfaces for config, context and http
-        │   └── infrastructure/http/       server, router, handlers, middleware/
-        ├── tests/  (unit/ · feature/)     testify-style TestCase helpers
+        │   ├── app/handlers/              command endpoints
+        │   └── infrastructure/
+        │       ├── http/                  server, router, handlers, middleware/
+        │       └── messaging/             kafka producer, circuit breaker
+        ├── tests/  (unit/ · feature/ · integration/)     testify-style TestCase helpers
         ├── Makefile · Dockerfile · docker-compose.yml · .air.toml
         └── .env.example
 ```
@@ -137,7 +165,7 @@ Each future service follows the same layout: `cmd/`, `internal/{config,contracts
 
 - [x] **Sprint 0** — Docker Compose infrastructure (Kafka KRaft, Cassandra, Redis, debug UIs)
 - [x] **Shared packages** — logger, errors, response, validation, events, with CI and 100 % coverage
-- [~] **Sprint 1 — API Gateway** — HTTP skeleton, middleware and config done; Kafka producer and command endpoints pending
+- [x] **Sprint 1 — API Gateway** — HTTP skeleton, middleware, config, Kafka producer with circuit breaker and command endpoints
 - [ ] **Sprint 2 — Account Service** — account and customer CRUD, Cassandra keyspace and migrations
 - [ ] **Sprint 3 — Transaction Service** — transfers with idempotency and balance checks
 - [ ] **Sprint 4 — Payment Service** — PIX, TED and boleto flows
