@@ -63,7 +63,9 @@ func loadKafkaConfig() contracts.KafkaConfig {
 	return contracts.KafkaConfig{
 		Brokers:          splitAndTrim(getEnv("KAFKA_BROKERS", "localhost:9092")),
 		WriteTimeout:     getEnvDuration("KAFKA_WRITE_TIMEOUT", 5*time.Second),
-		MaxAttempts:      getEnvInt("KAFKA_MAX_ATTEMPTS", 3),
+		BatchTimeout:     getEnvDuration("KAFKA_BATCH_TIMEOUT", 10*time.Millisecond),
+		PublishTimeout:   getEnvDuration("KAFKA_PUBLISH_TIMEOUT", 20*time.Second),
+		MaxAttempts:      getEnvIntMin("KAFKA_MAX_ATTEMPTS", 3, 1),
 		BreakerThreshold: getEnvUint32("KAFKA_BREAKER_THRESHOLD", 5),
 		BreakerTimeout:   getEnvDuration("KAFKA_BREAKER_TIMEOUT", 30*time.Second),
 	}
@@ -92,9 +94,17 @@ func getEnvInt(key string, defaultValue int) int {
 	return defaultValue
 }
 
+func getEnvIntMin(key string, defaultValue, min int) int {
+	value := getEnvInt(key, defaultValue)
+	if value < min {
+		return defaultValue
+	}
+	return value
+}
+
 func getEnvUint32(key string, defaultValue uint32) uint32 {
 	value := getEnvInt(key, int(defaultValue))
-	if value < 0 {
+	if value < 1 {
 		return defaultValue
 	}
 	return uint32(value)

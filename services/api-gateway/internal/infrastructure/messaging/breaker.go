@@ -2,9 +2,10 @@ package messaging
 
 import (
 	"context"
+	"errors"
 
 	"github.com/fintech-bank-platform/api-gateway/internal/contracts"
-	"github.com/fintech-bank-platform/pkg/errors"
+	apperrors "github.com/fintech-bank-platform/pkg/errors"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/sony/gobreaker/v2"
 )
@@ -21,6 +22,9 @@ func NewBreaker(next contracts.Publisher, cfg contracts.KafkaConfig) *Breaker {
 		ReadyToTrip: func(counts gobreaker.Counts) bool {
 			return counts.ConsecutiveFailures >= cfg.BreakerThreshold
 		},
+		IsSuccessful: func(err error) bool {
+			return err == nil || errors.Is(err, context.Canceled)
+		},
 	}
 
 	return &Breaker{
@@ -35,7 +39,7 @@ func (b *Breaker) Publish(ctx context.Context, topic, key string, event *events.
 	})
 
 	if err == gobreaker.ErrOpenState || err == gobreaker.ErrTooManyRequests {
-		return errors.ServiceUnavailable("PUBLISH_FAILED", "message broker is unavailable").Wrap(err)
+		return apperrors.ServiceUnavailable("PUBLISH_FAILED", "message broker is unavailable").Wrap(err)
 	}
 
 	return err

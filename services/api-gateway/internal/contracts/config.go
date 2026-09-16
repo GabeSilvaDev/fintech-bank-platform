@@ -32,6 +32,8 @@ type RateLimitConfig struct {
 type KafkaConfig struct {
 	Brokers          []string
 	WriteTimeout     time.Duration
+	BatchTimeout     time.Duration
+	PublishTimeout   time.Duration
 	MaxAttempts      int
 	BreakerThreshold uint32
 	BreakerTimeout   time.Duration

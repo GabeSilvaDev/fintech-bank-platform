@@ -2,6 +2,7 @@ package messaging
 
 import (
 	"context"
+	"time"
 
 	"github.com/fintech-bank-platform/api-gateway/internal/contracts"
 	"github.com/fintech-bank-platform/pkg/errors"
@@ -15,7 +16,8 @@ type Writer interface {
 }
 
 type Producer struct {
-	writer Writer
+	writer  Writer
+	timeout time.Duration
 }
 
 func NewProducer(cfg contracts.KafkaConfig) *Producer {
@@ -24,13 +26,14 @@ func NewProducer(cfg contracts.KafkaConfig) *Producer {
 		Balancer:               &kafka.Hash{},
 		MaxAttempts:            cfg.MaxAttempts,
 		WriteTimeout:           cfg.WriteTimeout,
+		BatchTimeout:           cfg.BatchTimeout,
 		RequiredAcks:           kafka.RequireAll,
 		AllowAutoTopicCreation: true,
-	})
+	}, cfg.PublishTimeout)
 }
 
-func NewProducerWithWriter(w Writer) *Producer {
-	return &Producer{writer: w}
+func NewProducerWithWriter(w Writer, publishTimeout time.Duration) *Producer {
+	return &Producer{writer: w, timeout: publishTimeout}
 }
 
 func (p *Producer) Publish(ctx context.Context, topic, key string, event *events.Event) error {
@@ -48,6 +51,12 @@ func (p *Producer) Publish(ctx context.Context, topic, key string, event *events
 			{Key: "event_type", Value: []byte(event.Type)},
 			{Key: "trace_id", Value: []byte(event.TraceID)},
 		},
+	}
+
+	if p.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, p.timeout)
+		defer cancel()
 	}
 
 	if err := p.writer.WriteMessages(ctx, msg); err != nil {

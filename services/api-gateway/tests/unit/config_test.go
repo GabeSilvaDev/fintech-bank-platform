@@ -100,6 +100,8 @@ func TestConfigKafkaDefaults(t *testing.T) {
 
 	assert.Equal(t, []string{"localhost:9092"}, cfg.Kafka.Brokers)
 	assert.Equal(t, 5*time.Second, cfg.Kafka.WriteTimeout)
+	assert.Equal(t, 10*time.Millisecond, cfg.Kafka.BatchTimeout)
+	assert.Equal(t, 20*time.Second, cfg.Kafka.PublishTimeout)
 	assert.Equal(t, 3, cfg.Kafka.MaxAttempts)
 	assert.Equal(t, uint32(5), cfg.Kafka.BreakerThreshold)
 	assert.Equal(t, 30*time.Second, cfg.Kafka.BreakerTimeout)
@@ -108,12 +110,16 @@ func TestConfigKafkaDefaults(t *testing.T) {
 func TestConfigKafkaWithEnvVars(t *testing.T) {
 	os.Setenv("KAFKA_BROKERS", "kafka-1:9092, kafka-2:9092")
 	os.Setenv("KAFKA_WRITE_TIMEOUT", "2s")
+	os.Setenv("KAFKA_BATCH_TIMEOUT", "50ms")
+	os.Setenv("KAFKA_PUBLISH_TIMEOUT", "7s")
 	os.Setenv("KAFKA_MAX_ATTEMPTS", "7")
 	os.Setenv("KAFKA_BREAKER_THRESHOLD", "9")
 	os.Setenv("KAFKA_BREAKER_TIMEOUT", "1m")
 	defer func() {
 		os.Unsetenv("KAFKA_BROKERS")
 		os.Unsetenv("KAFKA_WRITE_TIMEOUT")
+		os.Unsetenv("KAFKA_BATCH_TIMEOUT")
+		os.Unsetenv("KAFKA_PUBLISH_TIMEOUT")
 		os.Unsetenv("KAFKA_MAX_ATTEMPTS")
 		os.Unsetenv("KAFKA_BREAKER_THRESHOLD")
 		os.Unsetenv("KAFKA_BREAKER_TIMEOUT")
@@ -123,6 +129,8 @@ func TestConfigKafkaWithEnvVars(t *testing.T) {
 
 	assert.Equal(t, []string{"kafka-1:9092", "kafka-2:9092"}, cfg.Kafka.Brokers)
 	assert.Equal(t, 2*time.Second, cfg.Kafka.WriteTimeout)
+	assert.Equal(t, 50*time.Millisecond, cfg.Kafka.BatchTimeout)
+	assert.Equal(t, 7*time.Second, cfg.Kafka.PublishTimeout)
 	assert.Equal(t, 7, cfg.Kafka.MaxAttempts)
 	assert.Equal(t, uint32(9), cfg.Kafka.BreakerThreshold)
 	assert.Equal(t, time.Minute, cfg.Kafka.BreakerTimeout)
@@ -156,4 +164,22 @@ func TestConfigKafkaNegativeBreakerThresholdFallsBack(t *testing.T) {
 	cfg, _ := config.New()
 
 	assert.Equal(t, uint32(5), cfg.Kafka.BreakerThreshold)
+}
+
+func TestConfigKafkaZeroBreakerThresholdFallsBack(t *testing.T) {
+	os.Setenv("KAFKA_BREAKER_THRESHOLD", "0")
+	defer os.Unsetenv("KAFKA_BREAKER_THRESHOLD")
+
+	cfg, _ := config.New()
+
+	assert.Equal(t, uint32(5), cfg.Kafka.BreakerThreshold)
+}
+
+func TestConfigKafkaZeroMaxAttemptsFallsBack(t *testing.T) {
+	os.Setenv("KAFKA_MAX_ATTEMPTS", "0")
+	defer os.Unsetenv("KAFKA_MAX_ATTEMPTS")
+
+	cfg, _ := config.New()
+
+	assert.Equal(t, 3, cfg.Kafka.MaxAttempts)
 }

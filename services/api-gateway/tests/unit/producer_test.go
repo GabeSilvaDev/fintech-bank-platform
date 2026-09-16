@@ -18,7 +18,7 @@ import (
 
 func TestProducerPublishWritesMessage(t *testing.T) {
 	w := &tests.FakeWriter{}
-	p := messaging.NewProducerWithWriter(w)
+	p := messaging.NewProducerWithWriter(w, 0)
 	ev := events.NewAccountCommand(events.EventTypes.CreateAccount, map[string]string{"user_id": "u1"}).WithTraceID("trace-1")
 
 	err := p.Publish(context.Background(), events.Topics.AccountCommands, "u1", ev)
@@ -44,7 +44,7 @@ func TestProducerPublishWritesMessage(t *testing.T) {
 
 func TestProducerPublishReturnsServiceUnavailableOnWriteError(t *testing.T) {
 	w := &tests.FakeWriter{Err: errors.New("broker down")}
-	p := messaging.NewProducerWithWriter(w)
+	p := messaging.NewProducerWithWriter(w, 0)
 	ev := events.NewAccountCommand(events.EventTypes.CreateAccount, nil)
 
 	err := p.Publish(context.Background(), events.Topics.AccountCommands, "k", ev)
@@ -58,7 +58,7 @@ func TestProducerPublishReturnsServiceUnavailableOnWriteError(t *testing.T) {
 
 func TestProducerPublishReturnsInternalErrorWhenEventCannotBeEncoded(t *testing.T) {
 	w := &tests.FakeWriter{}
-	p := messaging.NewProducerWithWriter(w)
+	p := messaging.NewProducerWithWriter(w, 0)
 	ev := events.NewAccountCommand(events.EventTypes.CreateAccount, make(chan int))
 
 	err := p.Publish(context.Background(), events.Topics.AccountCommands, "k", ev)
@@ -70,9 +70,32 @@ func TestProducerPublishReturnsInternalErrorWhenEventCannotBeEncoded(t *testing.
 	assert.Empty(t, w.Messages)
 }
 
+type blockingWriter struct{}
+
+func (blockingWriter) WriteMessages(ctx context.Context, _ ...kafka.Message) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func (blockingWriter) Close() error {
+	return nil
+}
+
+func TestProducerPublishTimesOutAfterPublishTimeout(t *testing.T) {
+	p := messaging.NewProducerWithWriter(blockingWriter{}, 20*time.Millisecond)
+	ev := events.NewAccountCommand(events.EventTypes.CreateAccount, nil)
+
+	err := p.Publish(context.Background(), events.Topics.AccountCommands, "k", ev)
+
+	appErr, ok := apperrors.AsAppError(err)
+	assert.True(t, ok)
+	assert.Equal(t, "PUBLISH_FAILED", appErr.Code)
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
 func TestProducerCloseClosesWriter(t *testing.T) {
 	w := &tests.FakeWriter{}
-	p := messaging.NewProducerWithWriter(w)
+	p := messaging.NewProducerWithWriter(w, 0)
 
 	assert.NoError(t, p.Close())
 	assert.True(t, w.Closed)
@@ -80,9 +103,11 @@ func TestProducerCloseClosesWriter(t *testing.T) {
 
 func TestNewProducerBuildsKafkaWriter(t *testing.T) {
 	p := messaging.NewProducer(contracts.KafkaConfig{
-		Brokers:      []string{"localhost:9092"},
-		WriteTimeout: time.Second,
-		MaxAttempts:  2,
+		Brokers:        []string{"localhost:9092"},
+		WriteTimeout:   time.Second,
+		BatchTimeout:   10 * time.Millisecond,
+		PublishTimeout: 20 * time.Second,
+		MaxAttempts:    2,
 	})
 
 	assert.NotNil(t, p)

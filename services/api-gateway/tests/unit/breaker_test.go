@@ -76,3 +76,19 @@ func TestBreakerRecoversAfterTimeout(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, pub.Published, 1)
 }
+
+func TestBreakerIgnoresCanceledContexts(t *testing.T) {
+	pub := &tests.FakePublisher{Err: context.Canceled}
+	b := messaging.NewBreaker(pub, breakerConfig(1, time.Minute))
+	ev := events.NewAccountCommand(events.EventTypes.CreateAccount, nil)
+	ctx := context.Background()
+
+	for i := 0; i < 3; i++ {
+		assert.ErrorIs(t, b.Publish(ctx, events.Topics.AccountCommands, "k", ev), context.Canceled)
+	}
+	pub.Err = nil
+	err := b.Publish(ctx, events.Topics.AccountCommands, "k", ev)
+
+	assert.NoError(t, err)
+	assert.Len(t, pub.Published, 1)
+}
