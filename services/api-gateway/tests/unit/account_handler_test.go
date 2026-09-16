@@ -219,6 +219,17 @@ func TestUpdateAccountValidatesFields(t *testing.T) {
 	assert.Equal(t, "oneof", details["status"])
 }
 
+func TestUpdateAccountRejectsClosingThroughPatch(t *testing.T) {
+	pub := &tests.FakePublisher{}
+
+	rec, body := call(accountRouter(pub), http.MethodPatch, "/accounts/"+tests.UUID(), `{"status":"closed"}`)
+
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	assert.Equal(t, "VALIDATION_ERROR", errorCode(body))
+	assert.Equal(t, "oneof", errorDetails(body)["status"])
+	assert.Empty(t, pub.Published)
+}
+
 func TestUpdateAccountReturnsPublisherError(t *testing.T) {
 	pub := &tests.FakePublisher{Err: apperrors.ServiceUnavailable("PUBLISH_FAILED", "down")}
 

@@ -70,12 +70,21 @@ func (s *AccountsTestSuite) TestCreateAccountWhenBrokerIsDown() {
 func (s *AccountsTestSuite) TestUpdateAccountIsAccepted() {
 	id := tests.UUID()
 
-	s.Patch("/api/v1/accounts/"+id, map[string]interface{}{"status": "closed"}).
+	s.Patch("/api/v1/accounts/"+id, map[string]interface{}{"status": "blocked"}).
 		AssertAccepted().
 		AssertSuccess()
 
 	s.Equal(id, s.Publisher.Last().Key)
 	s.Equal(events.EventTypes.UpdateAccount, s.Publisher.Last().Event.Type)
+}
+
+func (s *AccountsTestSuite) TestUpdateAccountCannotCloseThroughPatch() {
+	s.Patch("/api/v1/accounts/"+tests.UUID(), map[string]interface{}{"status": "closed"}).
+		AssertUnprocessableEntity().
+		AssertErrorCode("VALIDATION_ERROR").
+		AssertJsonPath("error.details.status", "oneof")
+
+	s.Empty(s.Publisher.Published)
 }
 
 func (s *AccountsTestSuite) TestDeleteAccountIsAccepted() {

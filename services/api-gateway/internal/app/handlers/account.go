@@ -24,7 +24,7 @@ type updateAccountRequest struct {
 	Name   *string `json:"name" validate:"omitempty,min=3,max=120"`
 	Email  *string `json:"email" validate:"omitempty,email"`
 	Phone  *string `json:"phone" validate:"omitempty,phone_br"`
-	Status *string `json:"status" validate:"omitempty,oneof=active blocked closed"`
+	Status *string `json:"status" validate:"omitempty,oneof=active blocked"`
 }
 
 func (r updateAccountRequest) empty() bool {
