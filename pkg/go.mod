@@ -3,6 +3,7 @@ module github.com/fintech-bank-platform/pkg
 go 1.25
 
 require (
+	github.com/go-chi/chi/v5 v5.3.2
 	github.com/go-playground/validator/v10 v10.23.0
 	github.com/google/uuid v1.6.0
 	github.com/rs/zerolog v1.33.0

@@ -12,6 +12,7 @@ import (
 	"github.com/fintech-bank-platform/api-gateway/tests"
 	apperrors "github.com/fintech-bank-platform/pkg/errors"
 	"github.com/fintech-bank-platform/pkg/events"
+	"github.com/fintech-bank-platform/pkg/middleware"
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 )
@@ -28,7 +29,7 @@ func accountRouter(pub contracts.Publisher) http.Handler {
 func call(handler http.Handler, method, path, body string) (*httptest.ResponseRecorder, map[string]interface{}) {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(context.WithValue(req.Context(), contracts.RequestIDKey, "req-1"))
+	req = req.WithContext(context.WithValue(req.Context(), middleware.RequestIDKey, "req-1"))
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)

@@ -1,4 +1,4 @@
-package unit
+package middleware
 
 import (
 	"context"
@@ -7,15 +7,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fintech-bank-platform/api-gateway/internal/contracts"
-	"github.com/fintech-bank-platform/api-gateway/internal/infrastructure/http/middleware"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestGetRequestIDWithValue(t *testing.T) {
-	ctx := context.WithValue(context.Background(), contracts.RequestIDKey, "test-request-id")
+	ctx := context.WithValue(context.Background(), RequestIDKey, "test-request-id")
 
-	result := middleware.GetRequestID(ctx)
+	result := GetRequestID(ctx)
 
 	assert.Equal(t, "test-request-id", result)
 }
@@ -23,21 +21,21 @@ func TestGetRequestIDWithValue(t *testing.T) {
 func TestGetRequestIDWithoutValue(t *testing.T) {
 	ctx := context.Background()
 
-	result := middleware.GetRequestID(ctx)
+	result := GetRequestID(ctx)
 
 	assert.Empty(t, result)
 }
 
 func TestGetRequestIDWithWrongType(t *testing.T) {
-	ctx := context.WithValue(context.Background(), contracts.RequestIDKey, 12345)
+	ctx := context.WithValue(context.Background(), RequestIDKey, 12345)
 
-	result := middleware.GetRequestID(ctx)
+	result := GetRequestID(ctx)
 
 	assert.Empty(t, result)
 }
 
 func TestRequestIDMiddlewareGeneratesID(t *testing.T) {
-	handler := middleware.RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -46,35 +44,35 @@ func TestRequestIDMiddlewareGeneratesID(t *testing.T) {
 
 	handler.ServeHTTP(rec, req)
 
-	requestID := rec.Header().Get(contracts.RequestIDHeader)
+	requestID := rec.Header().Get(RequestIDHeader)
 	assert.NotEmpty(t, requestID)
 	assert.Regexp(t, `^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`, requestID)
 }
 
 func TestRequestIDMiddlewarePreservesProvidedID(t *testing.T) {
-	handler := middleware.RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set(contracts.RequestIDHeader, "custom-id-12345")
+	req.Header.Set(RequestIDHeader, "custom-id-12345")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
 
-	assert.Equal(t, "custom-id-12345", rec.Header().Get(contracts.RequestIDHeader))
+	assert.Equal(t, "custom-id-12345", rec.Header().Get(RequestIDHeader))
 }
 
 func TestRequestIDMiddlewareSetsContext(t *testing.T) {
 	var capturedRequestID string
 
-	handler := middleware.RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		capturedRequestID = middleware.GetRequestID(r.Context())
+	handler := RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedRequestID = GetRequestID(r.Context())
 		w.WriteHeader(http.StatusOK)
 	}))
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	req.Header.Set(contracts.RequestIDHeader, "context-test-id")
+	req.Header.Set(RequestIDHeader, "context-test-id")
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -83,7 +81,7 @@ func TestRequestIDMiddlewareSetsContext(t *testing.T) {
 }
 
 func TestRequestIDMiddlewareReplacesMalformedIDs(t *testing.T) {
-	handler := middleware.RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -93,12 +91,12 @@ func TestRequestIDMiddlewareReplacesMalformedIDs(t *testing.T) {
 		"semi;colon",
 	} {
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
-		req.Header.Set(contracts.RequestIDHeader, provided)
+		req.Header.Set(RequestIDHeader, provided)
 		rec := httptest.NewRecorder()
 
 		handler.ServeHTTP(rec, req)
 
-		requestID := rec.Header().Get(contracts.RequestIDHeader)
+		requestID := rec.Header().Get(RequestIDHeader)
 		assert.NotEqual(t, provided, requestID)
 		assert.Regexp(t, `^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$`, requestID)
 	}

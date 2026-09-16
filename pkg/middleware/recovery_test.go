@@ -1,16 +1,15 @@
-package unit
+package middleware
 
 import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
-	"github.com/fintech-bank-platform/api-gateway/internal/infrastructure/http/middleware"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestRecoveryMiddlewareHandlesPanic(t *testing.T) {
-	handler := middleware.Recovery(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := Recovery(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		panic("test panic")
 	}))
 
@@ -25,7 +24,7 @@ func TestRecoveryMiddlewareHandlesPanic(t *testing.T) {
 }
 
 func TestRecoveryMiddlewarePassesThroughNormally(t *testing.T) {
-	handler := middleware.Recovery(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := Recovery(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	}))
@@ -40,7 +39,7 @@ func TestRecoveryMiddlewarePassesThroughNormally(t *testing.T) {
 }
 
 func TestRecoveryMiddlewareHandlesNilPanic(t *testing.T) {
-	handler := middleware.Recovery(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := Recovery(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		panic(nil)
 	}))
 
@@ -53,7 +52,7 @@ func TestRecoveryMiddlewareHandlesNilPanic(t *testing.T) {
 }
 
 func TestRecoveryMiddlewareHandlesErrorPanic(t *testing.T) {
-	handler := middleware.Recovery(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := Recovery(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		panic("error message")
 	}))
 

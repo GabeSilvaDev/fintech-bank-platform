@@ -6,6 +6,7 @@ import (
 	"github.com/fintech-bank-platform/api-gateway/internal/contracts"
 	"github.com/fintech-bank-platform/api-gateway/internal/infrastructure/http/middleware"
 	"github.com/fintech-bank-platform/pkg/logger"
+	pkgmw "github.com/fintech-bank-platform/pkg/middleware"
 	"github.com/go-chi/chi/v5"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 )
@@ -16,10 +17,10 @@ type Dependencies struct {
 }
 
 func SetupRouter(router *chi.Mux, cfg *config.Config, deps Dependencies) {
-	router.Use(middleware.RequestID)
+	router.Use(pkgmw.RequestID)
 	router.Use(chiMiddleware.RealIP)
-	router.Use(middleware.Logger(deps.Logger))
-	router.Use(middleware.Recovery)
+	router.Use(pkgmw.Logger(deps.Logger))
+	router.Use(pkgmw.Recovery)
 	router.Use(middleware.CORS(cfg.CORS))
 	router.Use(middleware.RateLimit(cfg.RateLimit))
 	router.Use(chiMiddleware.StripSlashes)

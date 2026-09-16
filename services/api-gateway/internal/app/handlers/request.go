@@ -8,6 +8,7 @@ import (
 	"github.com/fintech-bank-platform/api-gateway/internal/contracts"
 	apperrors "github.com/fintech-bank-platform/pkg/errors"
 	"github.com/fintech-bank-platform/pkg/events"
+	"github.com/fintech-bank-platform/pkg/middleware"
 	"github.com/fintech-bank-platform/pkg/response"
 	"github.com/fintech-bank-platform/pkg/validation"
 	"github.com/go-playground/validator/v10"
@@ -57,8 +58,7 @@ func validateID(id string) error {
 }
 
 func requestID(r *http.Request) string {
-	id, _ := r.Context().Value(contracts.RequestIDKey).(string)
-	return id
+	return middleware.GetRequestID(r.Context())
 }
 
 func publish(w http.ResponseWriter, r *http.Request, pub contracts.Publisher, topic, key string, event *events.Event) {

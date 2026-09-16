@@ -1,4 +1,4 @@
-package unit
+package middleware
 
 import (
 	"bytes"
@@ -8,8 +8,6 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/fintech-bank-platform/api-gateway/internal/contracts"
-	"github.com/fintech-bank-platform/api-gateway/internal/infrastructure/http/middleware"
 	"github.com/fintech-bank-platform/pkg/logger"
 	"github.com/stretchr/testify/assert"
 )
@@ -18,14 +16,14 @@ func captureLog(t *testing.T, status int, body string) map[string]interface{} {
 	var buf bytes.Buffer
 	log := logger.New(logger.Config{Level: "debug", Output: &buf})
 
-	handler := middleware.Logger(log)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := Logger(log)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(status)
 		_, _ = w.Write([]byte(body))
 	}))
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/accounts", nil)
 	req.RemoteAddr = "10.0.0.7:5555"
-	req = req.WithContext(context.WithValue(req.Context(), contracts.RequestIDKey, "req-1"))
+	req = req.WithContext(context.WithValue(req.Context(), RequestIDKey, "req-1"))
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
