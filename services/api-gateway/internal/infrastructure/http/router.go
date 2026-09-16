@@ -1,6 +1,9 @@
 package http
 
 import (
+	nethttp "net/http"
+	"net/url"
+
 	"github.com/fintech-bank-platform/api-gateway/internal/app/handlers"
 	"github.com/fintech-bank-platform/api-gateway/internal/config"
 	"github.com/fintech-bank-platform/api-gateway/internal/contracts"
@@ -12,8 +15,9 @@ import (
 )
 
 type Dependencies struct {
-	Publisher contracts.Publisher
-	Logger    *logger.Logger
+	Publisher      contracts.Publisher
+	Logger         *logger.Logger
+	AccountService *url.URL
 }
 
 func SetupRouter(router *chi.Mux, cfg *config.Config, deps Dependencies) {
@@ -30,11 +34,14 @@ func SetupRouter(router *chi.Mux, cfg *config.Config, deps Dependencies) {
 	account := handlers.NewAccountHandler(deps.Publisher)
 	transaction := handlers.NewTransactionHandler(deps.Publisher)
 	payment := handlers.NewPaymentHandler(deps.Publisher)
+	reads := nethttp.StripPrefix("/api/v1", handlers.NewReadProxy(deps.AccountService))
 
 	router.Route("/api/v1", func(r chi.Router) {
 		r.Post("/accounts", account.Create)
 		r.Patch("/accounts/{id}", account.Update)
 		r.Delete("/accounts/{id}", account.Delete)
+		r.Get("/accounts/{id}", reads.ServeHTTP)
+		r.Get("/users/{user_id}/accounts", reads.ServeHTTP)
 		r.Post("/transactions", transaction.Create)
 		r.Post("/transfers", transaction.Transfer)
 		r.Post("/payments", payment.Process)

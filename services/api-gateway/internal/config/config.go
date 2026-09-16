@@ -14,6 +14,7 @@ type Config struct {
 	RateLimit contracts.RateLimitConfig
 	Kafka     contracts.KafkaConfig
 	Log       contracts.LogConfig
+	Upstreams contracts.UpstreamConfig
 }
 
 func New() (*Config, error) {
@@ -25,6 +26,7 @@ func New() (*Config, error) {
 		RateLimit: loadRateLimitConfig(),
 		Kafka:     loadKafkaConfig(),
 		Log:       loadLogConfig(),
+		Upstreams: contracts.UpstreamConfig{AccountService: env.Get("ACCOUNT_SERVICE_URL", "http://localhost:8082")},
 	}, nil
 }
 

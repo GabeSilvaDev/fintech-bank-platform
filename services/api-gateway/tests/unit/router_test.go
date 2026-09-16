@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -18,9 +19,11 @@ import (
 )
 
 func testDependencies() appHttp.Dependencies {
+	accountService, _ := url.Parse("http://127.0.0.1:1")
 	return appHttp.Dependencies{
-		Publisher: &tests.FakePublisher{},
-		Logger:    logger.New(logger.Config{Output: io.Discard}),
+		Publisher:      &tests.FakePublisher{},
+		Logger:         logger.New(logger.Config{Output: io.Discard}),
+		AccountService: accountService,
 	}
 }
 
@@ -96,4 +99,10 @@ func TestSetupRouterMountsCommandRoutes(t *testing.T) {
 
 		assert.Equal(t, http.StatusUnprocessableEntity, rec.Code, path)
 	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/x", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadGateway, rec.Code)
 }

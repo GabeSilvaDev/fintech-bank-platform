@@ -183,3 +183,14 @@ func TestConfigKafkaZeroMaxAttemptsFallsBack(t *testing.T) {
 
 	assert.Equal(t, 3, cfg.Kafka.MaxAttempts)
 }
+
+func TestConfigUpstreamDefaults(t *testing.T) {
+	cfg, _ := config.New()
+	assert.Equal(t, "http://localhost:8082", cfg.Upstreams.AccountService)
+}
+
+func TestConfigUpstreamFromEnv(t *testing.T) {
+	t.Setenv("ACCOUNT_SERVICE_URL", "http://accounts:9000")
+	cfg, _ := config.New()
+	assert.Equal(t, "http://accounts:9000", cfg.Upstreams.AccountService)
+}

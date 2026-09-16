@@ -43,3 +43,7 @@ type LogConfig struct {
 	Level  string
 	Pretty bool
 }
+
+type UpstreamConfig struct {
+	AccountService string
+}

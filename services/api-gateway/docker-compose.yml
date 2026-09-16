@@ -11,12 +11,10 @@ services:
       - /app/tmp
       - ../../pkg:/app/../pkg
     environment:
-      - APP_ENV=development
-      - APP_PORT=8080
-      - APP_NAME=api-gateway
       - LOG_LEVEL=debug
       - LOG_PRETTY=true
       - KAFKA_BROKERS=kafka:29092
+      - ACCOUNT_SERVICE_URL=http://account-service:8082
     networks:
       - fintech-network
     restart: unless-stopped

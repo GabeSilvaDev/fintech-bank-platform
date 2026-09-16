@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"time"
 
 	"github.com/fintech-bank-platform/api-gateway/internal/config"
@@ -34,8 +35,9 @@ func (tc *TestCase) SetupSuite() {
 
 	tc.Router = chi.NewRouter()
 	appHttp.SetupRouter(tc.Router, tc.Config, appHttp.Dependencies{
-		Publisher: tc.Publisher,
-		Logger:    logger.New(logger.Config{Output: io.Discard}),
+		Publisher:      tc.Publisher,
+		Logger:         logger.New(logger.Config{Output: io.Discard}),
+		AccountService: mustURL("http://127.0.0.1:1"),
 	})
 }
 
@@ -173,4 +175,9 @@ func testRateLimitConfig() contracts.RateLimitConfig {
 		Requests: 1000,
 		Window:   1 * time.Minute,
 	}
+}
+
+func mustURL(s string) *url.URL {
+	u, _ := url.Parse(s)
+	return u
 }

@@ -92,3 +92,8 @@ func (s *AccountsTestSuite) TestAccountsRejectUnsupportedMethods() {
 	s.Get("/api/v1/accounts").AssertMethodNotAllowed()
 	s.Put("/api/v1/accounts/"+tests.UUID(), nil).AssertMethodNotAllowed()
 }
+
+func (s *AccountsTestSuite) TestReadRoutesAreProxied() {
+	s.Get("/api/v1/accounts/" + tests.UUID()).AssertStatus(502).AssertErrorCode("UPSTREAM_UNAVAILABLE")
+	s.Get("/api/v1/users/" + tests.UUID() + "/accounts").AssertStatus(502)
+}
