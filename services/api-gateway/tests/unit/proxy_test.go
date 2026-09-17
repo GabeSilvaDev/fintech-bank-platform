@@ -20,6 +20,8 @@ func proxyRouter(upstream string) http.Handler {
 	r := chi.NewRouter()
 	r.Get("/api/v1/accounts/{id}", proxy.ServeHTTP)
 	r.Get("/api/v1/users/{user_id}/accounts", proxy.ServeHTTP)
+	r.Get("/api/v1/transactions/{id}", proxy.ServeHTTP)
+	r.Get("/api/v1/accounts/{account_id}/transactions", proxy.ServeHTTP)
 	return r
 }
 
@@ -87,4 +89,21 @@ func TestReadProxyAnswers502WhenUpstreamIsDown(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadGateway, rec.Code)
 	assert.Equal(t, "UPSTREAM_UNAVAILABLE", tests.FromJson(rec.Body.String())["error"].(map[string]interface{})["code"])
+}
+
+func TestReadProxyForwardsTransactionPaths(t *testing.T) {
+	var paths []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.RequestURI())
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+	}))
+	defer upstream.Close()
+
+	for _, path := range []string{"/api/v1/transactions/abc", "/api/v1/accounts/a1/transactions?limit=5"} {
+		rec := httptest.NewRecorder()
+		proxyRouter(upstream.URL).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		assert.Equal(t, http.StatusOK, rec.Code)
+	}
+	assert.Equal(t, []string{"/transactions/abc", "/accounts/a1/transactions?limit=5"}, paths)
 }

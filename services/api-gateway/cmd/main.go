@@ -23,6 +23,11 @@ func main() {
 		log.Fatal().Err(err).Msg("Invalid ACCOUNT_SERVICE_URL")
 	}
 
+	transactionService, err := url.Parse(cfg.Upstreams.TransactionService)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Invalid TRANSACTION_SERVICE_URL")
+	}
+
 	producer := messaging.NewProducer(messaging.ProducerConfig{
 		Brokers:        cfg.Kafka.Brokers,
 		WriteTimeout:   cfg.Kafka.WriteTimeout,
@@ -33,9 +38,10 @@ func main() {
 
 	server := http.NewServer(cfg, log.Logger)
 	http.SetupRouter(server.Router(), cfg, http.Dependencies{
-		Publisher:      gwmsg.NewBreaker(producer, cfg.Kafka),
-		Logger:         log,
-		AccountService: upstream,
+		Publisher:          gwmsg.NewBreaker(producer, cfg.Kafka),
+		Logger:             log,
+		AccountService:     upstream,
+		TransactionService: transactionService,
 	})
 
 	err = server.Start()

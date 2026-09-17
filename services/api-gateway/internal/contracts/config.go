@@ -45,5 +45,6 @@ type LogConfig struct {
 }
 
 type UpstreamConfig struct {
-	AccountService string
+	AccountService     string
+	TransactionService string
 }

@@ -26,7 +26,10 @@ func New() (*Config, error) {
 		RateLimit: loadRateLimitConfig(),
 		Kafka:     loadKafkaConfig(),
 		Log:       loadLogConfig(),
-		Upstreams: contracts.UpstreamConfig{AccountService: env.Get("ACCOUNT_SERVICE_URL", "http://localhost:8082")},
+		Upstreams: contracts.UpstreamConfig{
+			AccountService:     env.Get("ACCOUNT_SERVICE_URL", "http://localhost:8082"),
+			TransactionService: env.Get("TRANSACTION_SERVICE_URL", "http://localhost:8083"),
+		},
 	}, nil
 }
 

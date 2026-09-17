@@ -35,9 +35,10 @@ func (tc *TestCase) SetupSuite() {
 
 	tc.Router = chi.NewRouter()
 	appHttp.SetupRouter(tc.Router, tc.Config, appHttp.Dependencies{
-		Publisher:      tc.Publisher,
-		Logger:         logger.New(logger.Config{Output: io.Discard}),
-		AccountService: mustURL("http://127.0.0.1:1"),
+		Publisher:          tc.Publisher,
+		Logger:             logger.New(logger.Config{Output: io.Discard}),
+		AccountService:     mustURL("http://127.0.0.1:1"),
+		TransactionService: mustURL("http://127.0.0.1:1"),
 	})
 }
 

@@ -59,6 +59,11 @@ func (s *TransactionsTestSuite) TestTransferIsAccepted() {
 	s.Equal(events.EventTypes.ProcessTransfer, s.Publisher.Last().Event.Type)
 }
 
+func (s *TransactionsTestSuite) TestReadRoutesAreProxied() {
+	s.Get("/api/v1/transactions/00000000-0000-0000-0000-000000000000").AssertStatus(502).AssertErrorCode("UPSTREAM_UNAVAILABLE")
+	s.Get("/api/v1/accounts/00000000-0000-0000-0000-000000000000/transactions").AssertStatus(502).AssertErrorCode("UPSTREAM_UNAVAILABLE")
+}
+
 func (s *TransactionsTestSuite) TestTransferToSameAccountIsRejected() {
 	id := tests.UUID()
 

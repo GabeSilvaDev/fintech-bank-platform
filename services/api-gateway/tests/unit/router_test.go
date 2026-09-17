@@ -20,10 +20,12 @@ import (
 
 func testDependencies() appHttp.Dependencies {
 	accountService, _ := url.Parse("http://127.0.0.1:1")
+	transactionService, _ := url.Parse("http://127.0.0.1:1")
 	return appHttp.Dependencies{
-		Publisher:      &tests.FakePublisher{},
-		Logger:         logger.New(logger.Config{Output: io.Discard}),
-		AccountService: accountService,
+		Publisher:          &tests.FakePublisher{},
+		Logger:             logger.New(logger.Config{Output: io.Discard}),
+		AccountService:     accountService,
+		TransactionService: transactionService,
 	}
 }
 

@@ -15,6 +15,7 @@ services:
       - LOG_PRETTY=true
       - KAFKA_BROKERS=kafka:29092
       - ACCOUNT_SERVICE_URL=http://account-service:8082
+      - TRANSACTION_SERVICE_URL=http://transaction-service:8083
     networks:
       - fintech-network
     restart: unless-stopped
