@@ -11,6 +11,7 @@ import (
 	"github.com/fintech-bank-platform/pkg/processor"
 	"github.com/fintech-bank-platform/transaction-service/internal/app/handlers"
 	"github.com/fintech-bank-platform/transaction-service/internal/app/models"
+	"github.com/fintech-bank-platform/transaction-service/tests"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 )
@@ -56,7 +57,8 @@ func TestCommandDispatcherRoutesCreateAndTransfer(t *testing.T) {
 func TestReplyDispatcherRoutesAccountEvents(t *testing.T) {
 	h := newHarness()
 	tx := h.pending(models.TypeDeposit, models.StatusPending)
-	dispatcher := handlers.NewReplyDispatcher(h.service)
+	logs := &bytes.Buffer{}
+	dispatcher := handlers.NewReplyDispatcher(h.service, logger.New(logger.Config{Output: logs}))
 
 	reply := events.NewAccountEvent(events.EventTypes.AccountCredited, events.AccountCreditedPayload{AccountID: tx.AccountID.String(), Amount: 30, BalanceAfter: 130, Reference: tx.ID.String(), IdempotencyKey: models.StepKey(tx.ID, models.StepCredit)}).WithTraceID("trace-7")
 	res, err := dispatcher.Dispatch(context.Background(), reply)
@@ -70,10 +72,25 @@ func TestReplyDispatcherRoutesAccountEvents(t *testing.T) {
 	res, err = dispatcher.Dispatch(context.Background(), rejected)
 	assert.NoError(t, err)
 	assert.Equal(t, "insufficient_funds", res.Messages[0].Event.Payload.(events.TransactionFailedPayload).Reason)
+	assert.NotContains(t, logs.String(), "ignored account event")
 
 	res, err = dispatcher.Dispatch(context.Background(), events.NewAccountEvent(events.EventTypes.AccountCreated, events.AccountCreatedPayload{AccountID: "a"}))
 	assert.NoError(t, err)
 	assert.Empty(t, res.Messages)
+	assert.NotContains(t, logs.String(), "ignored account event")
+
+	unrelated := uuid.New()
+	stray := events.NewAccountEvent(events.EventTypes.AccountDebited, events.AccountDebitedPayload{AccountID: tx.AccountID.String(), Amount: 30, BalanceAfter: 70, Reference: unrelated.String(), IdempotencyKey: models.StepKey(unrelated, models.StepDebit)})
+	res, err = dispatcher.Dispatch(context.Background(), stray)
+	assert.NoError(t, err)
+	assert.Empty(t, res.Messages)
+	entry := tests.FromJson(logs.String())
+	assert.Equal(t, "info", entry["level"])
+	assert.Equal(t, "ignored account event", entry["message"])
+	assert.Equal(t, stray.ID, entry["event_id"])
+	assert.Equal(t, events.EventTypes.AccountDebited, entry["type"])
+	assert.Equal(t, unrelated.String(), entry["reference"])
+	assert.Equal(t, models.StepKey(unrelated, models.StepDebit), entry["idempotency_key"])
 
 	_, err = dispatcher.Dispatch(context.Background(), events.NewAccountEvent(events.EventTypes.AccountDebited, "not an object"))
 	assert.ErrorIs(t, err, processor.ErrBadPayload)

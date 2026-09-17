@@ -65,7 +65,7 @@ func main() {
 		Backoff:         cfg.Consumer.RetryBackoff,
 	}
 	commands := processor.NewProcessor(handlers.NewCommandDispatcher(service, log), store, producer, processorCfg, log)
-	replies := processor.NewProcessor(handlers.NewReplyDispatcher(service), store, producer, processorCfg, log)
+	replies := processor.NewProcessor(handlers.NewReplyDispatcher(service, log), store, producer, processorCfg, log)
 
 	router := chi.NewRouter()
 	http.SetupRouter(router, http.Dependencies{

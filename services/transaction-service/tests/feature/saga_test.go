@@ -30,7 +30,7 @@ func newPipeline() *pipeline {
 	service := services.NewTransactionService(p.repo, tests.FakeClock{T: time.Now().UTC()}, uuid.New)
 	cfg := processor.Config{Source: "transaction-service", FailedEventType: events.EventTypes.TransactionCommandFailed, DLQTopic: events.Topics.TransactionDLQ, Backoff: []time.Duration{time.Millisecond}}
 	p.commands = processor.NewProcessor(handlers.NewCommandDispatcher(service, log), tests.NewFakeStore(), p.publisher, cfg, log)
-	p.replies = processor.NewProcessor(handlers.NewReplyDispatcher(service), tests.NewFakeStore(), p.publisher, cfg, log)
+	p.replies = processor.NewProcessor(handlers.NewReplyDispatcher(service, log), tests.NewFakeStore(), p.publisher, cfg, log)
 	return p
 }
 

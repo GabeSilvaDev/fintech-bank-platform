@@ -214,7 +214,7 @@ func (s *TransactionService) ApplyAccountEvent(ctx context.Context, reply Reply)
 	switch {
 	case reply.Kind == events.EventTypes.AccountDebited && step == models.StepDebit:
 		return s.onDebited(ctx, tx, reply, now)
-	case reply.Kind == events.EventTypes.DebitRejected && step == models.StepDebit:
+	case reply.Kind == events.EventTypes.DebitRejected && step == models.StepDebit && tx.Type != models.TypeDeposit:
 		return s.fail(ctx, tx, models.StatusPending, reply, now)
 	case reply.Kind == events.EventTypes.AccountCredited && step == models.StepCredit:
 		return s.onCredited(ctx, tx, reply, now)

@@ -232,6 +232,19 @@ func TestApplyTreatsLostTransitionAsAlreadyApplied(t *testing.T) {
 	assert.Len(t, h.repo.Transitions, 1)
 }
 
+func TestDepositIgnoresDebitRejection(t *testing.T) {
+	h := newHarness()
+	tx := h.pending(models.TypeDeposit, models.StatusPending)
+
+	res, err := h.service.ApplyAccountEvent(context.Background(), reply(events.EventTypes.DebitRejected, tx, models.StepDebit, 0, "insufficient_funds"))
+
+	assert.NoError(t, err)
+	assert.Empty(t, res.Messages)
+	assert.Equal(t, models.StatusPending, h.repo.Transactions[tx.ID].Status)
+	assert.Empty(t, h.repo.Transactions[tx.ID].FailureReason)
+	assert.Empty(t, h.repo.Transitions)
+}
+
 func TestOnDebitedIgnoresNonWithdrawalNonTransferTypes(t *testing.T) {
 	h := newHarness()
 	tx := h.pending(models.TypeDeposit, models.StatusPending)

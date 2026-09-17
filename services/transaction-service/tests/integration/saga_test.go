@@ -125,7 +125,7 @@ func TestTransferSagaEndToEnd(t *testing.T) {
 	log := logger.New(logger.Config{Output: &bytes.Buffer{}})
 	cfg := processor.Config{Source: "transaction-service", FailedEventType: events.EventTypes.TransactionCommandFailed, DLQTopic: events.Topics.TransactionDLQ, Backoff: []time.Duration{100 * time.Millisecond}}
 	commandProcessor := processor.NewProcessor(handlers.NewCommandDispatcher(service, log), store, producer, cfg, log)
-	replyProcessor := processor.NewProcessor(handlers.NewReplyDispatcher(service), store, producer, cfg, log)
+	replyProcessor := processor.NewProcessor(handlers.NewReplyDispatcher(service, log), store, producer, cfg, log)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()

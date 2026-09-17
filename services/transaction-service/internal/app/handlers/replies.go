@@ -4,16 +4,18 @@ import (
 	"context"
 
 	"github.com/fintech-bank-platform/pkg/events"
+	"github.com/fintech-bank-platform/pkg/logger"
 	"github.com/fintech-bank-platform/pkg/processor"
 	"github.com/fintech-bank-platform/transaction-service/internal/app/services"
 )
 
 type ReplyDispatcher struct {
 	txns *services.TransactionService
+	log  *logger.Logger
 }
 
-func NewReplyDispatcher(txns *services.TransactionService) *ReplyDispatcher {
-	return &ReplyDispatcher{txns: txns}
+func NewReplyDispatcher(txns *services.TransactionService, log *logger.Logger) *ReplyDispatcher {
+	return &ReplyDispatcher{txns: txns, log: log}
 }
 
 type accountReply struct {
@@ -34,7 +36,7 @@ func (d *ReplyDispatcher) Dispatch(ctx context.Context, event *events.Event) (pr
 	if err := processor.DecodePayload(event, &payload); err != nil {
 		return processor.Result{}, err
 	}
-	return d.txns.ApplyAccountEvent(ctx, services.Reply{
+	res, err := d.txns.ApplyAccountEvent(ctx, services.Reply{
 		Kind:           event.Type,
 		Reference:      payload.Reference,
 		IdempotencyKey: payload.IdempotencyKey,
@@ -42,4 +44,8 @@ func (d *ReplyDispatcher) Dispatch(ctx context.Context, event *events.Event) (pr
 		Reason:         payload.Reason,
 		TraceID:        event.TraceID,
 	})
+	if err == nil && len(res.Messages) == 0 {
+		d.log.Info().Str("event_id", event.ID).Str("type", event.Type).Str("reference", payload.Reference).Str("idempotency_key", payload.IdempotencyKey).Msg("ignored account event")
+	}
+	return res, err
 }
