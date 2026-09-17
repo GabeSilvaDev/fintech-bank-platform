@@ -11,7 +11,10 @@ pkg/
 ├── events/        Kafka event envelope, topics and typed payloads
 ├── env/           typed getters for environment variables
 ├── middleware/    request-id, request logging and panic recovery for chi
-└── messaging/     kafka-go producer and consumer
+├── messaging/     kafka-go producer and consumer
+├── domain/        shared domain errors and money helpers
+├── cassandra/     migrator and write-error mapping
+└── processor/     idempotent Kafka command processor
 ```
 
 ## logger
@@ -155,6 +158,70 @@ newConsumer := func() *messaging.Consumer {
 err = newConsumer().Run(ctx, handle) // handle(ctx, kafka.Message) error; committed per message on success
 messaging.RunWithRestart(ctx, newConsumer, handle, backoff, onError) // rebuilds the consumer after Run fails, waiting backoff[attempt] between tries
 ```
+
+## domain
+
+```go
+import "github.com/fintech-bank-platform/pkg/domain"
+
+domain.ErrNotFound       // not found
+domain.ErrConflict       // concurrent update conflict
+domain.ErrAmbiguousWrite // write may or may not have applied
+
+err := domain.Invalid("invalid_amount", "amount must be greater than zero")
+domain.IsInvalid(err)     // true
+domain.InvalidCode(err)   // "invalid_amount"
+
+cents, err := domain.ToCents(19.99) // 1999; rejects amounts <= 0 or with more than two decimal places
+domain.FromCents(1999)              // 19.99
+domain.Cents(19.99)                 // 1999, unvalidated
+```
+
+## cassandra
+
+```go
+import "github.com/fintech-bank-platform/pkg/cassandra"
+
+// Executor is implemented by each service over its own gocql session
+type Executor interface {
+    Exec(ctx context.Context, statement string, values ...interface{}) error
+    Versions(ctx context.Context, keyspace string) ([]int, error)
+}
+
+migrator := cassandra.NewMigrator(executor, "fintech_transactions", os.DirFS("migrations"))
+applied, err := migrator.Up(ctx) // applies the first *.cql (the keyspace) then the rest in order, {{keyspace}} substituted, tracked in schema_migrations
+
+err = cassandra.MapWriteError(err) // wraps a write timeout, an unavailable error or a cancelled/expired context as domain.ErrAmbiguousWrite
+```
+
+## processor
+
+```go
+import "github.com/fintech-bank-platform/pkg/processor"
+
+type myDispatcher struct{}
+
+func (myDispatcher) Dispatch(ctx context.Context, cmd *events.Event) (processor.Result, error) {
+    var payload somePayload
+    if err := processor.DecodePayload(cmd, &payload); err != nil {
+        return processor.Result{}, err
+    }
+    return processor.Reply(events.Topics.AccountEvents, payload.AccountID, events.NewAccountEvent(events.EventTypes.AccountCredited, payload)), nil
+}
+
+proc := processor.NewProcessor(myDispatcher{}, store, publisher, processor.Config{
+    Source:          "account-service",
+    FailedEventType: events.EventTypes.AccountCommandFailed,
+    DLQTopic:        events.Topics.AccountDLQ,
+    Backoff:         []time.Duration{200 * time.Millisecond, time.Second, 5 * time.Second},
+}, log)
+
+err := proc.Process(ctx, msg.Key, msg.Value)
+// dedupes by event id through store.MarkProcessed, retries transient dispatcher errors with Config.Backoff,
+// and dead-letters the rest as Config.FailedEventType on Config.DLQTopic before publishing the dispatcher's reply messages
+```
+
+`Store.MarkProcessed(ctx, eventID) (bool, error)` and `Publisher.Publish(ctx, topic, key, event) error` are the other two seams. A dispatcher error is dead-lettered right away — no retry — when `domain.IsInvalid(err)` is true or it wraps `domain.ErrNotFound`, `domain.ErrAmbiguousWrite`, `processor.ErrUnknownCommand`, `processor.ErrBadPayload` or `processor.ErrPanic`; anything else is treated as transient and retried with `Config.Backoff`.
 
 ## Tests
 
