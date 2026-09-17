@@ -104,7 +104,7 @@ func (p *Processor) Process(ctx context.Context, key, value []byte) error {
 	for _, msg := range res.Messages {
 		if err := p.publisher.Publish(ctx, msg.Topic, msg.Key, msg.Event); err != nil {
 			p.logUndeliverable(err, msg.Event, "publish_failed", "result publish failed")
-			return p.deadLetter(ctx, key, msg.Event, "publish_failed", err.Error(), 0)
+			_ = p.deadLetter(ctx, key, msg.Event, "publish_failed", err.Error(), 0)
 		}
 	}
 	return nil

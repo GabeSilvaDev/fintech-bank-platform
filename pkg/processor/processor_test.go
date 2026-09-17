@@ -377,27 +377,38 @@ func TestProcessRetriesMarkProcessedTransientThenSucceeds(t *testing.T) {
 	assert.Len(t, h.publisher.byTopic("results"), 1)
 }
 
-func TestProcessPublishesMessagesInOrderAndStopsAtFirstFailure(t *testing.T) {
+func TestProcessPublishesEveryMessageAndDeadLettersFailures(t *testing.T) {
 	h := newProcessor()
 	first := events.NewEvent("first", "test", map[string]string{"n": "1"}).WithTraceID("trace-1")
 	second := events.NewEvent("second", "test", map[string]string{"n": "2"}).WithTraceID("trace-1")
+	third := events.NewEvent("third", "test", map[string]string{"n": "3"}).WithTraceID("trace-1")
 	h.dispatcher.Result = Result{Messages: []Message{
 		{Topic: "topic-a", Key: "key-a", Event: first},
 		{Topic: "topic-b", Key: "key-b", Event: second},
+		{Topic: "topic-a", Key: "key-a", Event: third},
 	}}
-	h.publisher.errByTopic = map[string]error{"topic-b": errors.New("broker down")}
+	h.publisher.errByTopic = map[string]error{"topic-a": errors.New("broker down")}
 	cmd := command(map[string]string{"a": "1"})
 
 	err := h.processor.Process(context.Background(), []byte("k"), encoded(cmd))
 
 	assert.NoError(t, err)
-	assert.Len(t, h.publisher.byTopic("topic-a"), 1)
-	assert.Empty(t, h.publisher.byTopic("topic-b"))
+	assert.Empty(t, h.publisher.byTopic("topic-a"))
+	published := h.publisher.byTopic("topic-b")
+	assert.Len(t, published, 1)
+	assert.Equal(t, second.ID, published[0].Event.ID)
 	dlq := h.publisher.byTopic("dlq")
-	assert.Len(t, dlq, 1)
-	payload := dlq[0].Event.Payload.(events.ErrorPayload)
-	assert.Equal(t, "publish_failed", payload.ErrorCode)
-	assert.Equal(t, second.ID, payload.OriginalEvent.ID)
+	assert.Len(t, dlq, 2)
+	for i, event := range []*events.Event{first, third} {
+		payload := dlq[i].Event.Payload.(events.ErrorPayload)
+		assert.Equal(t, "publish_failed", payload.ErrorCode, i)
+		assert.Equal(t, "broker down", payload.ErrorMessage, i)
+		assert.Equal(t, 0, payload.Retries, i)
+		assert.Equal(t, event.ID, payload.OriginalEvent.ID, i)
+		assert.Equal(t, event.Type, payload.OriginalEvent.Type, i)
+		assert.Equal(t, "trace-1", dlq[i].Event.TraceID, i)
+		assert.Equal(t, "k", dlq[i].Key, i)
+	}
 }
 
 func TestDecodePayload(t *testing.T) {
