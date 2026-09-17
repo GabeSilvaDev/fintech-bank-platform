@@ -12,6 +12,7 @@ import (
 	"github.com/fintech-bank-platform/account-service/tests"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/logger"
+	"github.com/fintech-bank-platform/pkg/processor"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 )
@@ -21,12 +22,17 @@ func TestCommandsEndToEndWithFakeInfrastructure(t *testing.T) {
 	customers := tests.NewFakeCustomerRepo()
 	publisher := &tests.FakePublisher{}
 	service := services.NewAccountService(accounts, customers, tests.FakeClock{T: time.Now().UTC()}, func() string { return "87654321" })
-	processor := handlers.NewProcessor(handlers.NewDispatcher(service), tests.NewFakeStore(), publisher, []time.Duration{time.Millisecond}, logger.New(logger.Config{Output: &bytes.Buffer{}}))
+	proc := processor.NewProcessor(handlers.NewDispatcher(service), tests.NewFakeStore(), publisher, processor.Config{
+		Source:          "account-service",
+		FailedEventType: events.EventTypes.AccountCommandFailed,
+		DLQTopic:        events.Topics.AccountDLQ,
+		Backoff:         []time.Duration{time.Millisecond},
+	}, logger.New(logger.Config{Output: &bytes.Buffer{}}))
 	ctx := context.Background()
 
 	create := events.NewAccountCommand(events.EventTypes.CreateAccount, events.CreateAccountPayload{UserID: uuid.NewString(), AccountType: "savings", Name: "Bruno Costa", Email: "bruno@example.com", Document: "52998224725"}).WithTraceID("t-1")
 	raw, _ := create.ToJSON()
-	assert.NoError(t, processor.Process(ctx, []byte("u"), raw))
+	assert.NoError(t, proc.Process(ctx, []byte("u"), raw))
 
 	created := publisher.ByTopic(events.Topics.AccountEvents)[0].Event.Payload.(events.AccountCreatedPayload)
 	assert.Equal(t, "87654321", created.AccountNumber)
@@ -35,7 +41,7 @@ func TestCommandsEndToEndWithFakeInfrastructure(t *testing.T) {
 
 	debit := events.NewAccountCommand(events.EventTypes.DebitAccount, events.DebitAccountPayload{AccountID: created.AccountID, Amount: 10, Currency: "BRL"}).WithTraceID("t-2")
 	raw, _ = debit.ToJSON()
-	assert.NoError(t, processor.Process(ctx, []byte(created.AccountID), raw))
+	assert.NoError(t, proc.Process(ctx, []byte(created.AccountID), raw))
 
 	published := publisher.ByTopic(events.Topics.AccountEvents)
 	assert.Equal(t, events.EventTypes.DebitRejected, published[1].Event.Type)
@@ -44,7 +50,7 @@ func TestCommandsEndToEndWithFakeInfrastructure(t *testing.T) {
 	closeWithBalance := events.NewAccountCommand(events.EventTypes.DeleteAccount, events.DeleteAccountPayload{AccountID: created.AccountID})
 	accounts.Accounts[accountID].BalanceCents = 5
 	raw, _ = closeWithBalance.ToJSON()
-	assert.NoError(t, processor.Process(ctx, []byte(created.AccountID), raw))
+	assert.NoError(t, proc.Process(ctx, []byte(created.AccountID), raw))
 
 	dlq := publisher.ByTopic(events.Topics.AccountDLQ)
 	assert.Len(t, dlq, 1)

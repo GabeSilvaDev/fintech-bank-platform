@@ -19,6 +19,7 @@ import (
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/logger"
 	"github.com/fintech-bank-platform/pkg/messaging"
+	"github.com/fintech-bank-platform/pkg/processor"
 	"github.com/google/uuid"
 	"github.com/segmentio/kafka-go"
 	"github.com/stretchr/testify/require"
@@ -77,14 +78,19 @@ func TestConsumerAppliesCommandsEndToEnd(t *testing.T) {
 	defer results.Close()
 
 	service := services.NewAccountService(database.NewAccountRepository(session), database.NewCustomerRepository(session), services.SystemClock{}, services.RandomNumber)
-	processor := handlers.NewProcessor(handlers.NewDispatcher(service), database.NewProcessedEventStore(session), producer, []time.Duration{100 * time.Millisecond}, logger.New(logger.Config{Output: &bytes.Buffer{}}))
+	proc := processor.NewProcessor(handlers.NewDispatcher(service), database.NewProcessedEventStore(session), producer, processor.Config{
+		Source:          "account-service",
+		FailedEventType: events.EventTypes.AccountCommandFailed,
+		DLQTopic:        events.Topics.AccountDLQ,
+		Backoff:         []time.Duration{100 * time.Millisecond},
+	}, logger.New(logger.Config{Output: &bytes.Buffer{}}))
 	consumer := messaging.NewConsumer(messaging.ConsumerConfig{Brokers: addrs, GroupID: "it-consumer-" + uuid.NewString(), Topic: commands})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- consumer.Run(ctx, func(ctx context.Context, msg kafka.Message) error { return processor.Process(ctx, msg.Key, msg.Value) })
+		done <- consumer.Run(ctx, func(ctx context.Context, msg kafka.Message) error { return proc.Process(ctx, msg.Key, msg.Value) })
 	}()
 
 	trace := "it-" + uuid.NewString()

@@ -14,6 +14,7 @@ import (
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/logger"
 	"github.com/fintech-bank-platform/pkg/messaging"
+	"github.com/fintech-bank-platform/pkg/processor"
 	"github.com/go-chi/chi/v5"
 	"github.com/segmentio/kafka-go"
 	"golang.org/x/sync/errgroup"
@@ -60,7 +61,12 @@ func main() {
 		PublishTimeout: cfg.Kafka.PublishTimeout,
 		MaxAttempts:    cfg.Kafka.MaxAttempts,
 	})
-	processor := handlers.NewProcessor(handlers.NewDispatcher(service), database.NewProcessedEventStore(session), producer, cfg.Consumer.RetryBackoff, log)
+	proc := processor.NewProcessor(handlers.NewDispatcher(service), database.NewProcessedEventStore(session), producer, processor.Config{
+		Source:          "account-service",
+		FailedEventType: events.EventTypes.AccountCommandFailed,
+		DLQTopic:        events.Topics.AccountDLQ,
+		Backoff:         cfg.Consumer.RetryBackoff,
+	}, log)
 	newConsumer := func() *messaging.Consumer {
 		return messaging.NewConsumer(messaging.ConsumerConfig{
 			Brokers:      cfg.Kafka.Brokers,
@@ -70,7 +76,7 @@ func main() {
 		})
 	}
 	handle := func(ctx context.Context, msg kafka.Message) error {
-		return processor.Process(ctx, msg.Key, msg.Value)
+		return proc.Process(ctx, msg.Key, msg.Value)
 	}
 
 	router := chi.NewRouter()

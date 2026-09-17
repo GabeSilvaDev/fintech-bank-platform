@@ -1,31 +1,68 @@
-package handlers
+package processor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime/debug"
 	"time"
 
-	"github.com/fintech-bank-platform/account-service/internal/contracts"
 	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/logger"
 	"github.com/google/uuid"
 )
 
-var ErrPanic = errors.New("handler panicked")
+var (
+	ErrUnknownCommand = errors.New("unknown command")
+	ErrBadPayload     = errors.New("bad payload")
+	ErrPanic          = errors.New("handler panicked")
+)
+
+type Message struct {
+	Topic string
+	Key   string
+	Event *events.Event
+}
+
+type Result struct {
+	Messages []Message
+}
+
+func Reply(topic, key string, event *events.Event) Result {
+	return Result{Messages: []Message{{Topic: topic, Key: key, Event: event}}}
+}
+
+type Dispatcher interface {
+	Dispatch(ctx context.Context, cmd *events.Event) (Result, error)
+}
+
+type Store interface {
+	MarkProcessed(ctx context.Context, eventID uuid.UUID) (bool, error)
+}
+
+type Publisher interface {
+	Publish(ctx context.Context, topic, key string, event *events.Event) error
+}
+
+type Config struct {
+	Source          string
+	FailedEventType string
+	DLQTopic        string
+	Backoff         []time.Duration
+}
 
 type Processor struct {
-	dispatcher CommandDispatcher
-	store      contracts.ProcessedEventStore
-	publisher  contracts.Publisher
-	backoff    []time.Duration
+	dispatcher Dispatcher
+	store      Store
+	publisher  Publisher
+	cfg        Config
 	log        *logger.Logger
 }
 
-func NewProcessor(dispatcher CommandDispatcher, store contracts.ProcessedEventStore, publisher contracts.Publisher, backoff []time.Duration, log *logger.Logger) *Processor {
-	return &Processor{dispatcher: dispatcher, store: store, publisher: publisher, backoff: backoff, log: log}
+func NewProcessor(dispatcher Dispatcher, store Store, publisher Publisher, cfg Config, log *logger.Logger) *Processor {
+	return &Processor{dispatcher: dispatcher, store: store, publisher: publisher, cfg: cfg, log: log}
 }
 
 func (p *Processor) Process(ctx context.Context, key, value []byte) error {
@@ -47,7 +84,7 @@ func (p *Processor) Process(ctx context.Context, key, value []byte) error {
 		return err
 	}
 	if !first {
-		p.log.Info().Str("event_id", cmd.ID).Str("type", cmd.Type).Msg("duplicate command skipped")
+		p.log.Info().Str("event_id", cmd.ID).Str("type", cmd.Type).Msg("duplicate event skipped")
 		return nil
 	}
 
@@ -64,9 +101,22 @@ func (p *Processor) Process(ctx context.Context, key, value []byte) error {
 		return p.deadLetter(ctx, key, cmd, errorCode(err), err.Error(), attempts)
 	}
 
-	if err := p.publisher.Publish(ctx, events.Topics.AccountEvents, res.Key, res.Event); err != nil {
-		p.logUndeliverable(err, res.Event, "publish_failed", "result publish failed")
-		return p.deadLetter(ctx, key, res.Event, "publish_failed", err.Error(), 0)
+	for _, msg := range res.Messages {
+		if err := p.publisher.Publish(ctx, msg.Topic, msg.Key, msg.Event); err != nil {
+			p.logUndeliverable(err, msg.Event, "publish_failed", "result publish failed")
+			return p.deadLetter(ctx, key, msg.Event, "publish_failed", err.Error(), 0)
+		}
+	}
+	return nil
+}
+
+func DecodePayload(cmd *events.Event, dst interface{}) error {
+	raw, err := json.Marshal(cmd.Payload)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrBadPayload, err)
+	}
+	if err := json.Unmarshal(raw, dst); err != nil {
+		return fmt.Errorf("%w: %v", ErrBadPayload, err)
 	}
 	return nil
 }
@@ -84,17 +134,17 @@ func (p *Processor) dispatch(ctx context.Context, cmd *events.Event) (res Result
 func (p *Processor) retry(ctx context.Context, op func() error) (int, error) {
 	for attempt := 1; ; attempt++ {
 		err := op()
-		if err == nil || !isTransient(err) || attempt > len(p.backoff) {
+		if err == nil || !isTransient(err) || attempt > len(p.cfg.Backoff) {
 			return attempt, err
 		}
-		if !sleep(ctx, p.backoff[attempt-1]) {
+		if !sleep(ctx, p.cfg.Backoff[attempt-1]) {
 			return attempt, ctx.Err()
 		}
 	}
 }
 
 func (p *Processor) deadLetter(ctx context.Context, key []byte, original *events.Event, code, message string, retries int) error {
-	failed := events.NewAccountEvent(events.EventTypes.AccountCommandFailed, events.ErrorPayload{
+	failed := events.NewEvent(p.cfg.FailedEventType, p.cfg.Source, events.ErrorPayload{
 		OriginalEvent: original,
 		ErrorCode:     code,
 		ErrorMessage:  message,
@@ -103,7 +153,7 @@ func (p *Processor) deadLetter(ctx context.Context, key []byte, original *events
 	if original != nil {
 		failed.WithTraceID(original.TraceID)
 	}
-	if err := p.publisher.Publish(ctx, events.Topics.AccountDLQ, string(key), failed); err != nil {
+	if err := p.publisher.Publish(ctx, p.cfg.DLQTopic, string(key), failed); err != nil {
 		p.logUndeliverable(err, failed, code, "dead-letter publish failed")
 	}
 	return nil
@@ -144,7 +194,7 @@ func errorCode(err error) string {
 	case domain.IsInvalid(err):
 		return domain.InvalidCode(err)
 	case errors.Is(err, domain.ErrNotFound):
-		return "account_not_found"
+		return "not_found"
 	case errors.Is(err, domain.ErrAmbiguousWrite):
 		return "ambiguous_write"
 	case errors.Is(err, ErrUnknownCommand):
