@@ -6,12 +6,12 @@ import (
 	"fmt"
 
 	"github.com/apache/cassandra-gocql-driver/v2"
-	"github.com/fintech-bank-platform/account-service/internal/app/models"
+	"github.com/fintech-bank-platform/pkg/domain"
 )
 
 func MapWriteError(err error) error {
 	if isAmbiguous(err) {
-		return fmt.Errorf("%w: %v", models.ErrAmbiguousWrite, err)
+		return fmt.Errorf("%w: %v", domain.ErrAmbiguousWrite, err)
 	}
 	return err
 }

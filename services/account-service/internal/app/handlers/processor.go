@@ -7,8 +7,8 @@ import (
 	"runtime/debug"
 	"time"
 
-	"github.com/fintech-bank-platform/account-service/internal/app/models"
 	"github.com/fintech-bank-platform/account-service/internal/contracts"
+	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/logger"
 	"github.com/google/uuid"
@@ -131,9 +131,9 @@ func sleep(ctx context.Context, d time.Duration) bool {
 }
 
 func isTransient(err error) bool {
-	return !models.IsInvalid(err) &&
-		!errors.Is(err, models.ErrNotFound) &&
-		!errors.Is(err, models.ErrAmbiguousWrite) &&
+	return !domain.IsInvalid(err) &&
+		!errors.Is(err, domain.ErrNotFound) &&
+		!errors.Is(err, domain.ErrAmbiguousWrite) &&
 		!errors.Is(err, ErrUnknownCommand) &&
 		!errors.Is(err, ErrBadPayload) &&
 		!errors.Is(err, ErrPanic)
@@ -141,11 +141,11 @@ func isTransient(err error) bool {
 
 func errorCode(err error) string {
 	switch {
-	case models.IsInvalid(err):
-		return models.InvalidCode(err)
-	case errors.Is(err, models.ErrNotFound):
+	case domain.IsInvalid(err):
+		return domain.InvalidCode(err)
+	case errors.Is(err, domain.ErrNotFound):
 		return "account_not_found"
-	case errors.Is(err, models.ErrAmbiguousWrite):
+	case errors.Is(err, domain.ErrAmbiguousWrite):
 		return "ambiguous_write"
 	case errors.Is(err, ErrUnknownCommand):
 		return "unknown_command"
@@ -153,7 +153,7 @@ func errorCode(err error) string {
 		return "bad_payload"
 	case errors.Is(err, ErrPanic):
 		return "panic"
-	case errors.Is(err, models.ErrConflict):
+	case errors.Is(err, domain.ErrConflict):
 		return "conflict"
 	}
 	return "internal_error"

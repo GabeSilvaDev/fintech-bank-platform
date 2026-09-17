@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/fintech-bank-platform/account-service/internal/app/handlers"
-	"github.com/fintech-bank-platform/account-service/internal/app/models"
 	"github.com/fintech-bank-platform/account-service/tests"
+	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/logger"
 	"github.com/stretchr/testify/assert"
@@ -130,9 +130,9 @@ func TestProcessDeadLettersUnprocessableWithoutRetry(t *testing.T) {
 	cases := map[string]error{
 		"unknown_command":   handlers.ErrUnknownCommand,
 		"bad_payload":       handlers.ErrBadPayload,
-		"account_not_found": models.ErrNotFound,
-		"account_closed":    models.Invalid("account_closed", "closed"),
-		"ambiguous_write":   fmt.Errorf("%w: x", models.ErrAmbiguousWrite),
+		"account_not_found": domain.ErrNotFound,
+		"account_closed":    domain.Invalid("account_closed", "closed"),
+		"ambiguous_write":   fmt.Errorf("%w: x", domain.ErrAmbiguousWrite),
 	}
 
 	for code, dispatchErr := range cases {
@@ -156,7 +156,7 @@ func TestProcessDeadLettersUnprocessableWithoutRetry(t *testing.T) {
 
 func TestProcessDeadLettersAmbiguousWriteFromCancelledContext(t *testing.T) {
 	h := newProcessor()
-	h.dispatcher.Errs = []error{fmt.Errorf("%w: %v", models.ErrAmbiguousWrite, context.Canceled)}
+	h.dispatcher.Errs = []error{fmt.Errorf("%w: %v", domain.ErrAmbiguousWrite, context.Canceled)}
 	cmd := command(events.EventTypes.CreateAccount, validCreate())
 
 	assert.NoError(t, h.processor.Process(context.Background(), []byte("k"), encoded(cmd)))
@@ -199,7 +199,7 @@ func TestProcessDeadLettersAfterRetriesExhausted(t *testing.T) {
 
 func TestProcessTreatsConflictAsTransient(t *testing.T) {
 	h := newProcessor()
-	h.dispatcher.Errs = []error{models.ErrConflict, models.ErrConflict, models.ErrConflict, models.ErrConflict}
+	h.dispatcher.Errs = []error{domain.ErrConflict, domain.ErrConflict, domain.ErrConflict, domain.ErrConflict}
 	cmd := command(events.EventTypes.CreditAccount, nil)
 
 	assert.NoError(t, h.processor.Process(context.Background(), []byte("k"), encoded(cmd)))

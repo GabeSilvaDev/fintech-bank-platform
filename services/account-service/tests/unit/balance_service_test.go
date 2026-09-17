@@ -7,6 +7,7 @@ import (
 
 	"github.com/fintech-bank-platform/account-service/internal/app/models"
 	"github.com/fintech-bank-platform/account-service/tests"
+	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -55,7 +56,7 @@ func TestCreditGivesUpAfterFiveConflicts(t *testing.T) {
 
 	_, err := h.service.Credit(context.Background(), credit(account.AccountID.String(), 1))
 
-	assert.ErrorIs(t, err, models.ErrConflict)
+	assert.ErrorIs(t, err, domain.ErrConflict)
 	assert.Equal(t, 5, h.accounts.CASCalls)
 }
 
@@ -74,11 +75,11 @@ func TestCreditRejections(t *testing.T) {
 	}
 	for code, cmd := range cases {
 		_, err := h.service.Credit(context.Background(), cmd)
-		assert.Equal(t, code, models.InvalidCode(err), code)
+		assert.Equal(t, code, domain.InvalidCode(err), code)
 	}
 
 	_, err := h.service.Credit(context.Background(), credit(uuid.NewString(), 1))
-	assert.ErrorIs(t, err, models.ErrNotFound)
+	assert.ErrorIs(t, err, domain.ErrNotFound)
 	assert.Equal(t, 0, h.accounts.CASCalls)
 }
 
@@ -90,7 +91,7 @@ func TestCreditRejectsWhenAccountIsBlockedBeforeCAS(t *testing.T) {
 
 	_, err := h.service.Credit(context.Background(), credit(account.AccountID.String(), 1))
 
-	assert.Equal(t, "account_not_active", models.InvalidCode(err))
+	assert.Equal(t, "account_not_active", domain.InvalidCode(err))
 	assert.Equal(t, 1, h.accounts.CASCalls)
 	assert.Equal(t, int64(100), h.accounts.Accounts[account.AccountID].BalanceCents)
 }
@@ -102,7 +103,7 @@ func TestCreditIsRefusedByRepositoryWhenAccountIsNotActive(t *testing.T) {
 
 	_, err := h.service.Credit(context.Background(), credit(account.AccountID.String(), 1))
 
-	assert.Equal(t, "account_not_active", models.InvalidCode(err))
+	assert.Equal(t, "account_not_active", domain.InvalidCode(err))
 	assert.Equal(t, 1, h.accounts.CASCalls)
 	assert.Equal(t, int64(100), h.accounts.Accounts[account.AccountID].BalanceCents)
 }
@@ -237,7 +238,7 @@ func TestDebitGivesUpAfterFiveConflicts(t *testing.T) {
 
 	_, err := h.service.Debit(context.Background(), debit(account.AccountID.String(), 1))
 
-	assert.ErrorIs(t, err, models.ErrConflict)
+	assert.ErrorIs(t, err, domain.ErrConflict)
 }
 
 func TestDebitValidationAndErrors(t *testing.T) {
@@ -245,16 +246,16 @@ func TestDebitValidationAndErrors(t *testing.T) {
 	account := h.activeAccount(1000)
 
 	_, err := h.service.Debit(context.Background(), debit("x", 1))
-	assert.Equal(t, "invalid_account_id", models.InvalidCode(err))
+	assert.Equal(t, "invalid_account_id", domain.InvalidCode(err))
 
 	_, err = h.service.Debit(context.Background(), debit(account.AccountID.String(), 1.005))
-	assert.Equal(t, "invalid_amount", models.InvalidCode(err))
+	assert.Equal(t, "invalid_amount", domain.InvalidCode(err))
 
 	_, err = h.service.Debit(context.Background(), events.DebitAccountPayload{AccountID: account.AccountID.String(), Amount: 1, Currency: "EUR"})
-	assert.Equal(t, "unsupported_currency", models.InvalidCode(err))
+	assert.Equal(t, "unsupported_currency", domain.InvalidCode(err))
 
 	_, err = h.service.Debit(context.Background(), debit(uuid.NewString(), 1))
-	assert.ErrorIs(t, err, models.ErrNotFound)
+	assert.ErrorIs(t, err, domain.ErrNotFound)
 
 	h.accounts.CASResults = []tests.CASResult{{Err: errors.New("db down")}}
 	_, err = h.service.Debit(context.Background(), debit(account.AccountID.String(), 1))

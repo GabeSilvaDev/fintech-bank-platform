@@ -9,6 +9,7 @@ import (
 
 	"github.com/fintech-bank-platform/account-service/internal/app/models"
 	"github.com/fintech-bank-platform/account-service/internal/infrastructure/database"
+	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
@@ -38,7 +39,7 @@ func TestAccountRepository(t *testing.T) {
 	require.WithinDuration(t, now, got.CreatedAt, time.Millisecond)
 
 	_, err = repo.Get(ctx, uuid.New())
-	require.ErrorIs(t, err, models.ErrNotFound)
+	require.ErrorIs(t, err, domain.ErrNotFound)
 
 	list, err := repo.ListByUser(ctx, account.UserID)
 	require.NoError(t, err)
@@ -127,7 +128,7 @@ func TestCustomerRepository(t *testing.T) {
 	require.Equal(t, "pending", got.KYCStatus)
 
 	_, err = repo.Get(ctx, uuid.New())
-	require.ErrorIs(t, err, models.ErrNotFound)
+	require.ErrorIs(t, err, domain.ErrNotFound)
 
 	name := "Ana Lima"
 	later := now.Add(time.Minute)

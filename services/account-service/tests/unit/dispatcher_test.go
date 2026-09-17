@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/fintech-bank-platform/account-service/internal/app/handlers"
-	"github.com/fintech-bank-platform/account-service/internal/app/models"
+	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -68,19 +68,19 @@ func TestDispatchPropagatesServiceErrors(t *testing.T) {
 	missing := uuid.NewString()
 
 	_, err := dispatcher.Dispatch(context.Background(), command(events.EventTypes.UpdateAccount, events.UpdateAccountPayload{AccountID: missing, Name: strPtr("Ana Lima")}))
-	assert.ErrorIs(t, err, models.ErrNotFound)
+	assert.ErrorIs(t, err, domain.ErrNotFound)
 
 	_, err = dispatcher.Dispatch(context.Background(), command(events.EventTypes.DeleteAccount, events.DeleteAccountPayload{AccountID: "x"}))
-	assert.Equal(t, "invalid_account_id", models.InvalidCode(err))
+	assert.Equal(t, "invalid_account_id", domain.InvalidCode(err))
 
 	_, err = dispatcher.Dispatch(context.Background(), command(events.EventTypes.CreditAccount, events.CreditAccountPayload{AccountID: missing, Amount: 1, Currency: "BRL"}))
-	assert.ErrorIs(t, err, models.ErrNotFound)
+	assert.ErrorIs(t, err, domain.ErrNotFound)
 
 	_, err = dispatcher.Dispatch(context.Background(), command(events.EventTypes.DebitAccount, events.DebitAccountPayload{AccountID: missing, Amount: 1, Currency: "BRL"}))
-	assert.ErrorIs(t, err, models.ErrNotFound)
+	assert.ErrorIs(t, err, domain.ErrNotFound)
 
 	_, err = dispatcher.Dispatch(context.Background(), command(events.EventTypes.CreateAccount, events.CreateAccountPayload{UserID: "x"}))
-	assert.Equal(t, "invalid_user_id", models.InvalidCode(err))
+	assert.Equal(t, "invalid_user_id", domain.InvalidCode(err))
 }
 
 func TestDispatchRejectsUnknownAndMalformed(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/fintech-bank-platform/account-service/internal/app/models"
+	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/google/uuid"
 )
@@ -84,7 +85,7 @@ func (f *FakeAccountRepo) Get(_ context.Context, accountID uuid.UUID) (*models.A
 	}
 	account, ok := f.Accounts[accountID]
 	if !ok {
-		return nil, models.ErrNotFound
+		return nil, domain.ErrNotFound
 	}
 	copied := *account
 	return &copied, nil
@@ -202,7 +203,7 @@ func (f *FakeCustomerRepo) Get(_ context.Context, userID uuid.UUID) (*models.Cus
 	}
 	customer, ok := f.Customers[userID]
 	if !ok {
-		return nil, models.ErrNotFound
+		return nil, domain.ErrNotFound
 	}
 	copied := *customer
 	return &copied, nil

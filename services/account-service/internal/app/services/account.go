@@ -10,6 +10,7 @@ import (
 
 	"github.com/fintech-bank-platform/account-service/internal/app/models"
 	"github.com/fintech-bank-platform/account-service/internal/contracts"
+	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/validation"
 	"github.com/google/uuid"
@@ -46,18 +47,18 @@ func NewAccountService(accounts contracts.AccountRepository, customers contracts
 func (s *AccountService) Create(ctx context.Context, cmd events.CreateAccountPayload) (events.AccountCreatedPayload, error) {
 	userID, err := uuid.Parse(cmd.UserID)
 	if err != nil {
-		return events.AccountCreatedPayload{}, models.Invalid("invalid_user_id", "user_id must be a uuid")
+		return events.AccountCreatedPayload{}, domain.Invalid("invalid_user_id", "user_id must be a uuid")
 	}
 	kind, ok := models.ParseAccountType(cmd.AccountType)
 	if !ok {
-		return events.AccountCreatedPayload{}, models.Invalid("invalid_account_type", "account_type must be checking or savings")
+		return events.AccountCreatedPayload{}, domain.Invalid("invalid_account_type", "account_type must be checking or savings")
 	}
 	if err := validateProfile(&cmd.Name, &cmd.Email, &cmd.Phone); err != nil {
 		return events.AccountCreatedPayload{}, err
 	}
 	document := validation.SanitizeCPF(cmd.Document)
 	if !validation.IsValidCPF(document) && !validation.IsValidCNPJ(document) {
-		return events.AccountCreatedPayload{}, models.Invalid("invalid_document", "document must be a valid CPF or CNPJ")
+		return events.AccountCreatedPayload{}, domain.Invalid("invalid_document", "document must be a valid CPF or CNPJ")
 	}
 
 	now := s.clock.Now()
@@ -100,10 +101,10 @@ func (s *AccountService) Create(ctx context.Context, cmd events.CreateAccountPay
 func (s *AccountService) Update(ctx context.Context, cmd events.UpdateAccountPayload) (events.AccountUpdatedPayload, error) {
 	accountID, err := uuid.Parse(cmd.AccountID)
 	if err != nil {
-		return events.AccountUpdatedPayload{}, models.Invalid("invalid_account_id", "account_id must be a uuid")
+		return events.AccountUpdatedPayload{}, domain.Invalid("invalid_account_id", "account_id must be a uuid")
 	}
 	if cmd.Name == nil && cmd.Email == nil && cmd.Phone == nil && cmd.Status == nil {
-		return events.AccountUpdatedPayload{}, models.Invalid("empty_update", "at least one field must be provided")
+		return events.AccountUpdatedPayload{}, domain.Invalid("empty_update", "at least one field must be provided")
 	}
 
 	account, err := s.accounts.Get(ctx, accountID)
@@ -111,7 +112,7 @@ func (s *AccountService) Update(ctx context.Context, cmd events.UpdateAccountPay
 		return events.AccountUpdatedPayload{}, err
 	}
 	if account.Status == models.AccountStatusClosed {
-		return events.AccountUpdatedPayload{}, models.Invalid("account_closed", "account is closed")
+		return events.AccountUpdatedPayload{}, domain.Invalid("account_closed", "account is closed")
 	}
 	if err := validateProfile(cmd.Name, cmd.Email, cmd.Phone); err != nil {
 		return events.AccountUpdatedPayload{}, err
@@ -121,7 +122,7 @@ func (s *AccountService) Update(ctx context.Context, cmd events.UpdateAccountPay
 	if cmd.Status != nil {
 		parsed, ok := models.ParseAccountStatus(*cmd.Status)
 		if !ok || parsed == models.AccountStatusClosed {
-			return events.AccountUpdatedPayload{}, models.Invalid("invalid_status", "status must be active or blocked")
+			return events.AccountUpdatedPayload{}, domain.Invalid("invalid_status", "status must be active or blocked")
 		}
 		status = parsed
 	}
@@ -163,7 +164,7 @@ func (s *AccountService) Update(ctx context.Context, cmd events.UpdateAccountPay
 func (s *AccountService) Close(ctx context.Context, cmd events.DeleteAccountPayload) (events.AccountDeletedPayload, error) {
 	accountID, err := uuid.Parse(cmd.AccountID)
 	if err != nil {
-		return events.AccountDeletedPayload{}, models.Invalid("invalid_account_id", "account_id must be a uuid")
+		return events.AccountDeletedPayload{}, domain.Invalid("invalid_account_id", "account_id must be a uuid")
 	}
 
 	account, err := s.accounts.Get(ctx, accountID)
@@ -171,10 +172,10 @@ func (s *AccountService) Close(ctx context.Context, cmd events.DeleteAccountPayl
 		return events.AccountDeletedPayload{}, err
 	}
 	if account.Status == models.AccountStatusClosed {
-		return events.AccountDeletedPayload{}, models.Invalid("account_closed", "account is already closed")
+		return events.AccountDeletedPayload{}, domain.Invalid("account_closed", "account is already closed")
 	}
 	if account.BalanceCents != 0 {
-		return events.AccountDeletedPayload{}, models.Invalid("account_has_balance", "account balance must be zero before closing")
+		return events.AccountDeletedPayload{}, domain.Invalid("account_has_balance", "account balance must be zero before closing")
 	}
 
 	now := s.clock.Now()
@@ -187,9 +188,9 @@ func (s *AccountService) Close(ctx context.Context, cmd events.DeleteAccountPayl
 			return events.AccountDeletedPayload{}, err
 		}
 		if account.Status == models.AccountStatusClosed {
-			return events.AccountDeletedPayload{}, models.Invalid("account_closed", "account is already closed")
+			return events.AccountDeletedPayload{}, domain.Invalid("account_closed", "account is already closed")
 		}
-		return events.AccountDeletedPayload{}, models.Invalid("account_has_balance", "account balance must be zero before closing")
+		return events.AccountDeletedPayload{}, domain.Invalid("account_has_balance", "account balance must be zero before closing")
 	}
 
 	return events.AccountDeletedPayload{
@@ -210,7 +211,7 @@ func (s *AccountService) ListByUser(ctx context.Context, userID uuid.UUID) ([]*m
 
 func (s *AccountService) upsertCustomer(ctx context.Context, userID uuid.UUID, name, email, document, phone string, now time.Time) error {
 	existing, err := s.customers.Get(ctx, userID)
-	if errors.Is(err, models.ErrNotFound) {
+	if errors.Is(err, domain.ErrNotFound) {
 		return s.customers.Upsert(ctx, &models.Customer{
 			UserID:    userID,
 			Name:      name,
@@ -245,18 +246,18 @@ func (s *AccountService) reserveNumber(ctx context.Context, accountID uuid.UUID)
 			return number, nil
 		}
 	}
-	return "", models.ErrConflict
+	return "", domain.ErrConflict
 }
 
 func validateProfile(name, email, phone *string) error {
 	if name != nil && len(strings.TrimSpace(*name)) < 3 {
-		return models.Invalid("invalid_name", "name must have at least 3 characters")
+		return domain.Invalid("invalid_name", "name must have at least 3 characters")
 	}
 	if email != nil && validation.ValidateVar(*email, "required,email") != nil {
-		return models.Invalid("invalid_email", "email is not valid")
+		return domain.Invalid("invalid_email", "email is not valid")
 	}
 	if phone != nil && *phone != "" && !validation.IsValidBrazilianPhone(*phone) {
-		return models.Invalid("invalid_phone", "phone is not a valid Brazilian number")
+		return domain.Invalid("invalid_phone", "phone is not a valid Brazilian number")
 	}
 	return nil
 }
@@ -277,7 +278,7 @@ func (s *AccountService) Credit(ctx context.Context, cmd events.CreditAccountPay
 		return events.AccountCreditedPayload{}, err
 	}
 	if account.Status != models.AccountStatusActive {
-		return events.AccountCreditedPayload{}, models.Invalid("account_not_active", "account is not active")
+		return events.AccountCreditedPayload{}, domain.Invalid("account_not_active", "account is not active")
 	}
 
 	now := s.clock.Now()
@@ -290,8 +291,8 @@ func (s *AccountService) Credit(ctx context.Context, cmd events.CreditAccountPay
 		if applied {
 			return events.AccountCreditedPayload{
 				AccountID:      accountID.String(),
-				Amount:         models.FromCents(cents),
-				BalanceAfter:   models.FromCents(next),
+				Amount:         domain.FromCents(cents),
+				BalanceAfter:   domain.FromCents(next),
 				Reference:      cmd.Reference,
 				IdempotencyKey: cmd.IdempotencyKey,
 				OccurredAt:     now,
@@ -301,10 +302,10 @@ func (s *AccountService) Credit(ctx context.Context, cmd events.CreditAccountPay
 			return events.AccountCreditedPayload{}, err
 		}
 		if account.Status != models.AccountStatusActive {
-			return events.AccountCreditedPayload{}, models.Invalid("account_not_active", "account is not active")
+			return events.AccountCreditedPayload{}, domain.Invalid("account_not_active", "account is not active")
 		}
 	}
-	return events.AccountCreditedPayload{}, models.ErrConflict
+	return events.AccountCreditedPayload{}, domain.ErrConflict
 }
 
 func (s *AccountService) Debit(ctx context.Context, cmd events.DebitAccountPayload) (DebitResult, error) {
@@ -334,8 +335,8 @@ func (s *AccountService) Debit(ctx context.Context, cmd events.DebitAccountPaylo
 		if applied {
 			return DebitResult{Debited: &events.AccountDebitedPayload{
 				AccountID:      accountID.String(),
-				Amount:         models.FromCents(cents),
-				BalanceAfter:   models.FromCents(next),
+				Amount:         domain.FromCents(cents),
+				BalanceAfter:   domain.FromCents(next),
 				Reference:      cmd.Reference,
 				IdempotencyKey: cmd.IdempotencyKey,
 				OccurredAt:     now,
@@ -348,14 +349,14 @@ func (s *AccountService) Debit(ctx context.Context, cmd events.DebitAccountPaylo
 			return rejected(cmd, cents, account, "account_not_active"), nil
 		}
 	}
-	return DebitResult{}, models.ErrConflict
+	return DebitResult{}, domain.ErrConflict
 }
 
 func rejected(cmd events.DebitAccountPayload, cents int64, account *models.Account, reason string) DebitResult {
 	return DebitResult{Rejected: &events.DebitRejectedPayload{
 		AccountID:      account.AccountID.String(),
-		Amount:         models.FromCents(cents),
-		Balance:        models.FromCents(account.BalanceCents),
+		Amount:         domain.FromCents(cents),
+		Balance:        domain.FromCents(account.BalanceCents),
 		Reason:         reason,
 		Reference:      cmd.Reference,
 		IdempotencyKey: cmd.IdempotencyKey,
@@ -365,14 +366,14 @@ func rejected(cmd events.DebitAccountPayload, cents int64, account *models.Accou
 func parseBalanceCommand(accountID string, amount float64, currency string) (uuid.UUID, int64, error) {
 	id, err := uuid.Parse(accountID)
 	if err != nil {
-		return uuid.Nil, 0, models.Invalid("invalid_account_id", "account_id must be a uuid")
+		return uuid.Nil, 0, domain.Invalid("invalid_account_id", "account_id must be a uuid")
 	}
-	cents, err := models.ToCents(amount)
+	cents, err := domain.ToCents(amount)
 	if err != nil {
 		return uuid.Nil, 0, err
 	}
 	if !strings.EqualFold(currency, models.Currency) {
-		return uuid.Nil, 0, models.Invalid("unsupported_currency", "only BRL is supported")
+		return uuid.Nil, 0, domain.Invalid("unsupported_currency", "only BRL is supported")
 	}
 	return id, cents, nil
 }

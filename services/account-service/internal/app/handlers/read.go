@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/fintech-bank-platform/account-service/internal/app/models"
+	"github.com/fintech-bank-platform/pkg/domain"
 	apperrors "github.com/fintech-bank-platform/pkg/errors"
 	"github.com/fintech-bank-platform/pkg/response"
 	"github.com/go-chi/chi/v5"
@@ -85,7 +86,7 @@ func parseID(raw, field string) (uuid.UUID, error) {
 }
 
 func mapReadError(err error) error {
-	if errors.Is(err, models.ErrNotFound) {
+	if errors.Is(err, domain.ErrNotFound) {
 		return apperrors.NotFound("ACCOUNT_NOT_FOUND", "account not found")
 	}
 	return err
@@ -100,7 +101,7 @@ func toResponse(account *models.Account) accountResponse {
 		Type:      string(account.Type),
 		Status:    string(account.Status),
 		Currency:  account.Currency,
-		Balance:   models.FromCents(account.BalanceCents),
+		Balance:   domain.FromCents(account.BalanceCents),
 		CreatedAt: account.CreatedAt,
 		UpdatedAt: account.UpdatedAt,
 		ClosedAt:  account.ClosedAt,

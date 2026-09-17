@@ -8,6 +8,7 @@ import (
 
 	"github.com/apache/cassandra-gocql-driver/v2"
 	"github.com/fintech-bank-platform/account-service/internal/app/models"
+	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/google/uuid"
 )
 
@@ -34,7 +35,7 @@ func (r *CustomerRepository) Get(ctx context.Context, userID uuid.UUID) (*models
 	err := r.session.Query("SELECT user_id, name, email, document, phone, kyc_status, created_at, updated_at FROM customers WHERE user_id = ?", gocql.UUID(userID)).
 		WithContext(ctx).Scan(&id, &name, &email, &document, &phone, &kycStatus, &createdAt, &updatedAt)
 	if errors.Is(err, gocql.ErrNotFound) {
-		return nil, models.ErrNotFound
+		return nil, domain.ErrNotFound
 	}
 	if err != nil {
 		return nil, err

@@ -7,6 +7,7 @@ import (
 
 	"github.com/apache/cassandra-gocql-driver/v2"
 	"github.com/fintech-bank-platform/account-service/internal/app/models"
+	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/google/uuid"
 )
 
@@ -52,7 +53,7 @@ func (r *AccountRepository) ListByUser(ctx context.Context, userID uuid.UUID) ([
 	accounts := make([]*models.Account, 0, len(ids))
 	for _, id := range ids {
 		account, err := scanAccount(r.session.Query("SELECT "+accountColumns+" FROM accounts WHERE account_id = ?", id).WithContext(ctx))
-		if errors.Is(err, models.ErrNotFound) {
+		if errors.Is(err, domain.ErrNotFound) {
 			continue
 		}
 		if err != nil {
@@ -93,7 +94,7 @@ func scanAccount(query *gocql.Query) (*models.Account, error) {
 	)
 	err := query.Scan(&accountID, &userID, &agency, &number, &kind, &status, &currency, &balance, &createdAt, &updatedAt, &closedAt)
 	if errors.Is(err, gocql.ErrNotFound) {
-		return nil, models.ErrNotFound
+		return nil, domain.ErrNotFound
 	}
 	if err != nil {
 		return nil, err

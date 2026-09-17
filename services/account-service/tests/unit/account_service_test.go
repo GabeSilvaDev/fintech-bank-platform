@@ -9,6 +9,7 @@ import (
 	"github.com/fintech-bank-platform/account-service/internal/app/models"
 	"github.com/fintech-bank-platform/account-service/internal/app/services"
 	"github.com/fintech-bank-platform/account-service/tests"
+	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -109,7 +110,7 @@ func TestCreateAccountGivesUpAfterFiveCollisions(t *testing.T) {
 
 	_, err := h.service.Create(context.Background(), validCreate())
 
-	assert.ErrorIs(t, err, models.ErrConflict)
+	assert.ErrorIs(t, err, domain.ErrConflict)
 	assert.Empty(t, h.accounts.Created)
 }
 
@@ -130,7 +131,7 @@ func TestCreateAccountValidation(t *testing.T) {
 
 		_, err := h.service.Create(context.Background(), cmd)
 
-		assert.Equal(t, code, models.InvalidCode(err), code)
+		assert.Equal(t, code, domain.InvalidCode(err), code)
 		assert.Empty(t, h.accounts.Created, code)
 		assert.Empty(t, h.customers.Upserts, code)
 	}
@@ -215,11 +216,11 @@ func TestUpdateAccountRejections(t *testing.T) {
 
 	for code, cmd := range cases {
 		_, err := h.service.Update(context.Background(), cmd)
-		assert.Equal(t, code, models.InvalidCode(err), code)
+		assert.Equal(t, code, domain.InvalidCode(err), code)
 	}
 
 	_, err := h.service.Update(context.Background(), events.UpdateAccountPayload{AccountID: uuid.NewString(), Name: tests.Ptr("Ana Lima")})
-	assert.ErrorIs(t, err, models.ErrNotFound)
+	assert.ErrorIs(t, err, domain.ErrNotFound)
 	assert.Empty(t, h.customers.Profiles)
 	assert.Empty(t, h.accounts.Statuses)
 }
@@ -288,7 +289,7 @@ func TestCloseRejectsWhenBalanceArrivesBeforeClosing(t *testing.T) {
 
 	_, err := h.service.Close(context.Background(), events.DeleteAccountPayload{AccountID: account.AccountID.String()})
 
-	assert.Equal(t, "account_has_balance", models.InvalidCode(err))
+	assert.Equal(t, "account_has_balance", domain.InvalidCode(err))
 	assert.Equal(t, 1, h.accounts.CloseCalls)
 	assert.Equal(t, models.AccountStatusActive, h.accounts.Accounts[account.AccountID].Status)
 	assert.Empty(t, h.accounts.Statuses)
@@ -301,7 +302,7 @@ func TestCloseRejectsWhenClosedConcurrently(t *testing.T) {
 
 	_, err := h.service.Close(context.Background(), events.DeleteAccountPayload{AccountID: account.AccountID.String()})
 
-	assert.Equal(t, "account_closed", models.InvalidCode(err))
+	assert.Equal(t, "account_closed", domain.InvalidCode(err))
 	assert.Equal(t, 1, h.accounts.CloseCalls)
 	assert.Empty(t, h.accounts.Statuses)
 }
@@ -325,16 +326,16 @@ func TestCloseAccountRejections(t *testing.T) {
 	h.accounts.Put(closed)
 
 	_, err := h.service.Close(context.Background(), events.DeleteAccountPayload{AccountID: funded.AccountID.String()})
-	assert.Equal(t, "account_has_balance", models.InvalidCode(err))
+	assert.Equal(t, "account_has_balance", domain.InvalidCode(err))
 
 	_, err = h.service.Close(context.Background(), events.DeleteAccountPayload{AccountID: closed.AccountID.String()})
-	assert.Equal(t, "account_closed", models.InvalidCode(err))
+	assert.Equal(t, "account_closed", domain.InvalidCode(err))
 
 	_, err = h.service.Close(context.Background(), events.DeleteAccountPayload{AccountID: "x"})
-	assert.Equal(t, "invalid_account_id", models.InvalidCode(err))
+	assert.Equal(t, "invalid_account_id", domain.InvalidCode(err))
 
 	_, err = h.service.Close(context.Background(), events.DeleteAccountPayload{AccountID: uuid.NewString()})
-	assert.ErrorIs(t, err, models.ErrNotFound)
+	assert.ErrorIs(t, err, domain.ErrNotFound)
 	assert.Empty(t, h.accounts.Statuses)
 }
 

@@ -1,9 +1,9 @@
-package models
+package domain
 
 import "errors"
 
 var (
-	ErrNotFound       = errors.New("account not found")
+	ErrNotFound       = errors.New("not found")
 	ErrConflict       = errors.New("concurrent update conflict")
 	ErrAmbiguousWrite = errors.New("ambiguous write")
 )
