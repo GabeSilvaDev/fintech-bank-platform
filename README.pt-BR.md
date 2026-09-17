@@ -116,8 +116,8 @@ Comandos que ele trata (tópico `account.commands`) e os eventos com que ele res
 | `account.create` | `account.created` | dados inválidos, colisão de número após 5 tentativas |
 | `account.update` | `account.updated` | conta desconhecida, conta fechada, update vazio |
 | `account.delete` | `account.deleted` | conta desconhecida, saldo diferente de zero |
-| `account.credit` | `account.credited` | conta desconhecida ou inativa, valor inválido |
-| `account.debit` | `account.debited` ou `account.debit_rejected` (`insufficient_funds`, `account_not_active`) | conta desconhecida, valor inválido |
+| `account.credit` | `account.credited` ou `account.credit_rejected` (`account_not_active`, `account_not_found`) | valor ou moeda inválidos |
+| `account.debit` | `account.debited` ou `account.debit_rejected` (`insufficient_funds`, `account_not_active`, `account_not_found`) | valor ou moeda inválidos |
 
 Cada comando é aplicado no máximo uma vez (`processed_events`, TTL de 7 dias); falhas transitórias são retentadas com `CONSUMER_RETRY_BACKOFF` e depois enviadas para a dead-letter como `account.command_failed`, com `retries` contando as tentativas de despacho. Um write timeout ou unavailable do Cassandra, um timeout do lado do cliente, ou uma escrita cujo contexto foi cancelado ou expirou vai direto para a dead-letter como `ambiguous_write`, porque a escrita pode ou não ter sido aplicada e retentar poderia aplicá-la duas vezes. Como o id do evento é marcado antes do despacho, um comando da dead-letter reenviado tal como está é ignorado como duplicado: replays precisam de um novo id de evento. No shutdown o consumer termina a mensagem em andamento (até `CONSUMER_DRAIN_TIMEOUT`) antes de fazer o commit, e um consumer que para por erro é reiniciado com `CONSUMER_RETRY_BACKOFF` enquanto a API de leitura continua atendendo.
 

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/fintech-bank-platform/account-service/internal/app/handlers"
+	"github.com/fintech-bank-platform/account-service/internal/app/models"
 	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/processor"
@@ -58,6 +59,14 @@ func TestDispatchUpdateCloseCreditDebit(t *testing.T) {
 	assert.Equal(t, events.EventTypes.DebitRejected, result.Messages[0].Event.Type)
 	assert.Equal(t, "insufficient_funds", result.Messages[0].Event.Payload.(events.DebitRejectedPayload).Reason)
 
+	blocked := h.activeAccount(0)
+	blocked.Status = models.AccountStatusBlocked
+	h.accounts.Put(blocked)
+	result, err = dispatcher.Dispatch(context.Background(), command(events.EventTypes.CreditAccount, events.CreditAccountPayload{AccountID: blocked.AccountID.String(), Amount: 1, Currency: "BRL"}))
+	assert.NoError(t, err)
+	assert.Equal(t, events.EventTypes.CreditRejected, result.Messages[0].Event.Type)
+	assert.Equal(t, "account_not_active", result.Messages[0].Event.Payload.(events.CreditRejectedPayload).Reason)
+
 	result, err = dispatcher.Dispatch(context.Background(), command(events.EventTypes.DeleteAccount, events.DeleteAccountPayload{AccountID: id}))
 	assert.NoError(t, err)
 	assert.Equal(t, events.EventTypes.AccountDeleted, result.Messages[0].Event.Type)
@@ -75,11 +84,21 @@ func TestDispatchPropagatesServiceErrors(t *testing.T) {
 	_, err = dispatcher.Dispatch(context.Background(), command(events.EventTypes.DeleteAccount, events.DeleteAccountPayload{AccountID: "x"}))
 	assert.Equal(t, "invalid_account_id", domain.InvalidCode(err))
 
-	_, err = dispatcher.Dispatch(context.Background(), command(events.EventTypes.CreditAccount, events.CreditAccountPayload{AccountID: missing, Amount: 1, Currency: "BRL"}))
-	assert.ErrorIs(t, err, domain.ErrNotFound)
+	result, err := dispatcher.Dispatch(context.Background(), command(events.EventTypes.CreditAccount, events.CreditAccountPayload{AccountID: missing, Amount: 1, Currency: "BRL"}))
+	assert.NoError(t, err)
+	assert.Equal(t, events.EventTypes.CreditRejected, result.Messages[0].Event.Type)
+	assert.Equal(t, "account_not_found", result.Messages[0].Event.Payload.(events.CreditRejectedPayload).Reason)
 
-	_, err = dispatcher.Dispatch(context.Background(), command(events.EventTypes.DebitAccount, events.DebitAccountPayload{AccountID: missing, Amount: 1, Currency: "BRL"}))
-	assert.ErrorIs(t, err, domain.ErrNotFound)
+	result, err = dispatcher.Dispatch(context.Background(), command(events.EventTypes.DebitAccount, events.DebitAccountPayload{AccountID: missing, Amount: 1, Currency: "BRL"}))
+	assert.NoError(t, err)
+	assert.Equal(t, events.EventTypes.DebitRejected, result.Messages[0].Event.Type)
+	assert.Equal(t, "account_not_found", result.Messages[0].Event.Payload.(events.DebitRejectedPayload).Reason)
+
+	_, err = dispatcher.Dispatch(context.Background(), command(events.EventTypes.CreditAccount, events.CreditAccountPayload{AccountID: "x", Amount: 1, Currency: "BRL"}))
+	assert.Equal(t, "invalid_account_id", domain.InvalidCode(err))
+
+	_, err = dispatcher.Dispatch(context.Background(), command(events.EventTypes.DebitAccount, events.DebitAccountPayload{AccountID: "x", Amount: 1, Currency: "BRL"}))
+	assert.Equal(t, "invalid_account_id", domain.InvalidCode(err))
 
 	_, err = dispatcher.Dispatch(context.Background(), command(events.EventTypes.CreateAccount, events.CreateAccountPayload{UserID: "x"}))
 	assert.Equal(t, "invalid_user_id", domain.InvalidCode(err))

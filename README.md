@@ -116,8 +116,8 @@ Commands it handles (topic `account.commands`) and the events it answers with (t
 | `account.create` | `account.created` | invalid data, number collision after 5 tries |
 | `account.update` | `account.updated` | unknown account, closed account, empty update |
 | `account.delete` | `account.deleted` | unknown account, non-zero balance |
-| `account.credit` | `account.credited` | unknown or inactive account, invalid amount |
-| `account.debit` | `account.debited` or `account.debit_rejected` (`insufficient_funds`, `account_not_active`) | unknown account, invalid amount |
+| `account.credit` | `account.credited` or `account.credit_rejected` (`account_not_active`, `account_not_found`) | invalid amount or currency |
+| `account.debit` | `account.debited` or `account.debit_rejected` (`insufficient_funds`, `account_not_active`, `account_not_found`) | invalid amount or currency |
 
 Every command is applied at most once (`processed_events`, 7-day TTL); transient failures are retried with `CONSUMER_RETRY_BACKOFF` and then dead-lettered as `account.command_failed`, with `retries` counting the dispatch attempts. A Cassandra write timeout or unavailable error, a client-side write timeout, or a write whose context was cancelled or expired is dead-lettered right away as `ambiguous_write`, since the write may or may not have been applied and retrying could apply it twice. Because the event id is marked before dispatch, a dead-lettered command replayed as-is is skipped as a duplicate: replays need a new event id. On shutdown the consumer finishes the message in flight (up to `CONSUMER_DRAIN_TIMEOUT`) before committing, and a consumer that stops on an error is restarted with `CONSUMER_RETRY_BACKOFF` while the read API keeps serving.
 

@@ -57,11 +57,14 @@ func (d *Dispatcher) Dispatch(ctx context.Context, cmd *events.Event) (processor
 		if err := processor.DecodePayload(cmd, &payload); err != nil {
 			return processor.Result{}, err
 		}
-		credited, err := d.accounts.Credit(ctx, payload)
+		outcome, err := d.accounts.Credit(ctx, payload)
 		if err != nil {
 			return processor.Result{}, err
 		}
-		return processor.Reply(events.Topics.AccountEvents, credited.AccountID, events.NewAccountEvent(events.EventTypes.AccountCredited, credited).WithTraceID(cmd.TraceID)), nil
+		if outcome.Rejected != nil {
+			return processor.Reply(events.Topics.AccountEvents, outcome.Rejected.AccountID, events.NewAccountEvent(events.EventTypes.CreditRejected, *outcome.Rejected).WithTraceID(cmd.TraceID)), nil
+		}
+		return processor.Reply(events.Topics.AccountEvents, outcome.Credited.AccountID, events.NewAccountEvent(events.EventTypes.AccountCredited, *outcome.Credited).WithTraceID(cmd.TraceID)), nil
 
 	case events.EventTypes.DebitAccount:
 		var payload events.DebitAccountPayload
