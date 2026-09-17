@@ -116,6 +116,7 @@ func TestTransferCompensationThroughProcessors(t *testing.T) {
 	assert.Equal(t, events.EventTypes.TransferFailed, results[len(results)-1].Event.Type)
 	assert.Equal(t, "reversed", results[len(results)-1].Event.Payload.(events.TransferFailedPayload).Status)
 	assert.Equal(t, models.StatusReversed, p.repo.Transactions[p.repo.Created[0].ID].Status)
+	assert.Empty(t, p.publisher.ByTopic(events.Topics.TransactionDLQ))
 }
 
 func TestDepositRejectedAndUnrelatedEvents(t *testing.T) {
