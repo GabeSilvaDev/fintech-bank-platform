@@ -3,6 +3,7 @@ module github.com/fintech-bank-platform/transaction-service
 go 1.25.0
 
 require (
+	github.com/apache/cassandra-gocql-driver/v2 v2.1.2
 	github.com/fintech-bank-platform/pkg v0.0.0
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/google/uuid v1.6.0
@@ -17,6 +18,7 @@ require (
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/rs/zerolog v1.34.0 // indirect
 	golang.org/x/sys v0.31.0 // indirect
+	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
