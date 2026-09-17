@@ -145,6 +145,8 @@ Consumes `transaction.commands` and the account service's replies on `account.ev
 
 A transaction is recorded as `pending` with its idempotency key reserved first — a repeated key is a no-op — then driven as a saga over `account.commands`: a deposit or withdrawal asks for a single credit or debit and settles as `completed` or `failed` (`insufficient_funds`, `account_not_active`, `account_not_found`); a transfer debits the source (`pending` → `debited`), credits the counterparty (`debited` → `completed`), and compensates with a credit back to the source if that credit is rejected (`reversing` → `reversed`, or `reversal_failed` plus a `transaction.dlq` entry if the compensation itself is rejected). Every step carries its own idempotency key (`<transaction id>:debit`, `:credit` or `:reversal`) and every status change is a Cassandra lightweight transaction guarded by the expected status, so a duplicate or stale reply is ignored. Results are published on `transaction.events` (`transaction.created`, `transaction.completed`/`transaction.failed`, `transaction.transfer_completed`/`transaction.transfer_failed`); transient failures are retried with `CONSUMER_RETRY_BACKOFF` and then dead-lettered on `transaction.dlq` as `transaction.command_failed`.
 
+**Known limitations.** A transaction stays `pending`, `debited` or `reversing` if the account service's reply never arrives — for example after a crash between the reply being marked as processed and the status change, or when the account side dead-letters the command as `ambiguous_write`. Non-terminal transactions can be found through `GET /accounts/{account_id}/transactions`. As with the account service, a dead-lettered event replayed as-is is skipped as a duplicate, so a replay needs a new event id. On first deployment the `-replies` group reads `account.events` from the beginning; that is harmless and one-off, since a reply that does not match a known step is ignored. A reconciliation sweeper for stuck transactions is planned for Sprint 6 (see the [roadmap](#roadmap)).
+
 #### Command endpoints
 
 Every write is accepted asynchronously: the gateway validates the body, publishes a command to Kafka and answers `202` with the command id and the trace id (`X-Request-ID`).
@@ -260,7 +262,7 @@ fintech-bank-platform/
         │   │   ├── services/              transaction use cases and saga transitions
         │   │   └── handlers/              command and reply dispatchers, read endpoints
         │   └── infrastructure/
-        │       ├── database/              Cassandra repositories
+        │       ├── database/              Cassandra repositories and migrations
         │       └── http/                  server, router, health, read handlers
         ├── tests/  (unit/ · feature/ · integration/)
         ├── Makefile · Dockerfile · docker-compose.yml · .air.toml
@@ -278,7 +280,7 @@ Each future service follows the same layout: `cmd/`, `internal/{config,contracts
 - [x] **Sprint 3 — Transaction Service** — deposits, withdrawals and transfers as sagas over the account service, idempotency keys, compensation, read API proxied by the gateway
 - [ ] **Sprint 4 — Payment Service** — PIX, TED and boleto flows
 - [ ] **Sprint 5 — Notification Service** — e-mail, SMS and push consumers
-- [ ] **Sprint 6** — end-to-end tests and load tests
+- [ ] **Sprint 6** — end-to-end tests, load tests and a reconciliation sweeper for stuck transactions
 - [ ] **Sprint 7** — observability (Prometheus, Jaeger) and docs
 
 ## License
