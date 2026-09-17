@@ -91,6 +91,25 @@ func TestListAccountTransactions(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 }
 
+func TestGetTransactionReportsReversing(t *testing.T) {
+	h := newHarness()
+	tx := h.pending(models.TypeTransfer, models.StatusReversing)
+	tx.FailureReason = "account_not_active"
+	h.repo.Put(tx)
+
+	rec, body := get(readRouter(h), "/transactions/"+tx.ID.String())
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	data := body["data"].(map[string]interface{})
+	assert.Equal(t, "transfer", data["type"])
+	assert.Equal(t, "reversing", data["status"])
+	assert.Equal(t, "account_not_active", data["failure_reason"])
+	assert.Equal(t, tx.CounterpartyID.String(), data["counterparty_id"])
+	assert.Equal(t, 70.0, data["from_balance_after"])
+	assert.NotContains(t, data, "to_balance_after")
+	assert.NotContains(t, data, "completed_at")
+}
+
 func TestGetTransactionIncludesToBalanceAfter(t *testing.T) {
 	h := newHarness()
 	tx := h.pending(models.TypeTransfer, models.StatusCompleted)
