@@ -214,9 +214,9 @@ func (s *TransactionService) ApplyAccountEvent(ctx context.Context, reply Reply)
 	case reply.Kind == events.EventTypes.CreditRejected && step == models.StepCredit:
 		return s.onCreditRejected(ctx, tx, reply, now)
 	case reply.Kind == events.EventTypes.AccountCredited && step == models.StepReversal && tx.Type == models.TypeTransfer:
-		return s.settle(ctx, tx, models.StatusDebited, models.StatusReversed, models.Patch{UpdatedAt: now}, reply, now, false)
+		return s.settle(ctx, tx, models.StatusReversing, models.StatusReversed, models.Patch{UpdatedAt: now}, reply, now, false)
 	case reply.Kind == events.EventTypes.CreditRejected && step == models.StepReversal && tx.Type == models.TypeTransfer:
-		return s.settle(ctx, tx, models.StatusDebited, models.StatusReversalFailed, models.Patch{UpdatedAt: now}, reply, now, true)
+		return s.settle(ctx, tx, models.StatusReversing, models.StatusReversalFailed, models.Patch{UpdatedAt: now}, reply, now, true)
 	}
 	return processor.Result{}, nil
 }
@@ -231,7 +231,7 @@ func (s *TransactionService) onDebited(ctx context.Context, tx *models.Transacti
 		if tx.CounterpartyID == nil {
 			return processor.Result{}, nil
 		}
-		applied, err := s.transition(ctx, tx, models.StatusPending, models.StatusDebited, models.Patch{FromBalanceCents: &balance, UpdatedAt: now})
+		applied, err := s.repo.Transition(ctx, tx.ID, models.StatusPending, models.StatusDebited, models.Patch{FromBalanceCents: &balance, UpdatedAt: now})
 		if err != nil || !applied {
 			return processor.Result{}, err
 		}
@@ -252,7 +252,7 @@ func (s *TransactionService) onCredited(ctx context.Context, tx *models.Transact
 		if tx.CounterpartyID == nil {
 			return processor.Result{}, nil
 		}
-		applied, err := s.transition(ctx, tx, models.StatusDebited, models.StatusCompleted, models.Patch{ToBalanceCents: &balance, CompletedAt: &now, UpdatedAt: now})
+		applied, err := s.repo.Transition(ctx, tx.ID, models.StatusDebited, models.StatusCompleted, models.Patch{ToBalanceCents: &balance, CompletedAt: &now, UpdatedAt: now})
 		if err != nil || !applied {
 			return processor.Result{}, err
 		}
@@ -278,7 +278,7 @@ func (s *TransactionService) onCreditRejected(ctx context.Context, tx *models.Tr
 		if tx.CounterpartyID == nil {
 			return processor.Result{}, nil
 		}
-		applied, err := s.transition(ctx, tx, models.StatusDebited, models.StatusDebited, models.Patch{FailureReason: &reply.Reason, UpdatedAt: now})
+		applied, err := s.repo.Transition(ctx, tx.ID, models.StatusDebited, models.StatusReversing, models.Patch{FailureReason: &reply.Reason, UpdatedAt: now})
 		if err != nil || !applied {
 			return processor.Result{}, err
 		}
@@ -290,7 +290,7 @@ func (s *TransactionService) onCreditRejected(ctx context.Context, tx *models.Tr
 }
 
 func (s *TransactionService) complete(ctx context.Context, tx *models.Transaction, from models.TransactionStatus, patch models.Patch, reply Reply, now time.Time) (processor.Result, error) {
-	applied, err := s.transition(ctx, tx, from, models.StatusCompleted, patch)
+	applied, err := s.repo.Transition(ctx, tx.ID, from, models.StatusCompleted, patch)
 	if err != nil || !applied {
 		return processor.Result{}, err
 	}
@@ -307,7 +307,7 @@ func (s *TransactionService) complete(ctx context.Context, tx *models.Transactio
 }
 
 func (s *TransactionService) fail(ctx context.Context, tx *models.Transaction, from models.TransactionStatus, reply Reply, now time.Time) (processor.Result, error) {
-	applied, err := s.transition(ctx, tx, from, models.StatusFailed, models.Patch{FailureReason: &reply.Reason, UpdatedAt: now})
+	applied, err := s.repo.Transition(ctx, tx.ID, from, models.StatusFailed, models.Patch{FailureReason: &reply.Reason, UpdatedAt: now})
 	if err != nil || !applied {
 		return processor.Result{}, err
 	}
@@ -326,7 +326,7 @@ func (s *TransactionService) fail(ctx context.Context, tx *models.Transaction, f
 }
 
 func (s *TransactionService) settle(ctx context.Context, tx *models.Transaction, from, to models.TransactionStatus, patch models.Patch, reply Reply, now time.Time, escalate bool) (processor.Result, error) {
-	applied, err := s.transition(ctx, tx, from, to, patch)
+	applied, err := s.repo.Transition(ctx, tx.ID, from, to, patch)
 	if err != nil || !applied {
 		return processor.Result{}, err
 	}
@@ -342,13 +342,6 @@ func (s *TransactionService) settle(ctx context.Context, tx *models.Transaction,
 		})
 	}
 	return result, nil
-}
-
-func (s *TransactionService) transition(ctx context.Context, tx *models.Transaction, from, to models.TransactionStatus, patch models.Patch) (bool, error) {
-	if tx.Status != from {
-		return false, nil
-	}
-	return s.repo.Transition(ctx, tx.ID, from, to, patch)
 }
 
 func (s *TransactionService) publish(tx *models.Transaction, eventType string, payload interface{}, trace string) processor.Result {

@@ -22,6 +22,7 @@ const (
 	StatusDebited        TransactionStatus = "debited"
 	StatusCompleted      TransactionStatus = "completed"
 	StatusFailed         TransactionStatus = "failed"
+	StatusReversing      TransactionStatus = "reversing"
 	StatusReversed       TransactionStatus = "reversed"
 	StatusReversalFailed TransactionStatus = "reversal_failed"
 )

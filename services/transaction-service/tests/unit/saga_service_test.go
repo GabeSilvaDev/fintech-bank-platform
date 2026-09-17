@@ -19,7 +19,7 @@ func (h *harness) pending(kind models.TransactionType, status models.Transaction
 		to := uuid.New()
 		tx.CounterpartyID = &to
 	}
-	if status == models.StatusDebited {
+	if status == models.StatusDebited || status == models.StatusReversing {
 		from := int64(7000)
 		tx.FromBalanceCents = &from
 	}
@@ -142,7 +142,7 @@ func TestTransferCreditRejectedReversesThenReversed(t *testing.T) {
 	res, err := h.service.ApplyAccountEvent(context.Background(), reply(events.EventTypes.CreditRejected, tx, models.StepCredit, 0, "account_not_active"))
 	assert.NoError(t, err)
 	stored := h.repo.Transactions[tx.ID]
-	assert.Equal(t, models.StatusDebited, stored.Status)
+	assert.Equal(t, models.StatusReversing, stored.Status)
 	assert.Equal(t, "account_not_active", stored.FailureReason)
 	assert.Len(t, res.Messages, 1)
 	assert.Equal(t, events.Topics.AccountCommands, res.Messages[0].Topic)
@@ -162,7 +162,7 @@ func TestTransferCreditRejectedReversesThenReversed(t *testing.T) {
 
 func TestTransferReversalRejectedNeedsManualHandling(t *testing.T) {
 	h := newHarness()
-	tx := h.pending(models.TypeTransfer, models.StatusDebited)
+	tx := h.pending(models.TypeTransfer, models.StatusReversing)
 	tx.FailureReason = "account_not_active"
 	h.repo.Put(tx)
 
@@ -187,24 +187,37 @@ func TestApplyIgnoresUnrelatedOrStaleReplies(t *testing.T) {
 	tx := h.pending(models.TypeTransfer, models.StatusPending)
 	other := uuid.New()
 
-	ignored := []services.Reply{
+	neverReachesRepo := []services.Reply{
 		{Kind: events.EventTypes.AccountCredited, Reference: "", IdempotencyKey: ""},
 		{Kind: events.EventTypes.AccountCredited, Reference: "nope", IdempotencyKey: models.StepKey(tx.ID, models.StepCredit)},
 		{Kind: events.EventTypes.AccountCredited, Reference: tx.ID.String(), IdempotencyKey: "free-form-key"},
 		{Kind: events.EventTypes.AccountCredited, Reference: tx.ID.String(), IdempotencyKey: models.StepKey(other, models.StepCredit)},
 		{Kind: events.EventTypes.AccountCredited, Reference: other.String(), IdempotencyKey: models.StepKey(other, models.StepCredit)},
-		reply(events.EventTypes.AccountCredited, tx, models.StepCredit, 1, ""),
 		reply(events.EventTypes.AccountDebited, tx, models.StepCredit, 1, ""),
 		reply(events.EventTypes.AccountCreated, tx, models.StepDebit, 1, ""),
-		reply(events.EventTypes.AccountCredited, tx, models.StepReversal, 1, ""),
 	}
-	for i, r := range ignored {
+	for i, r := range neverReachesRepo {
 		res, err := h.service.ApplyAccountEvent(context.Background(), r)
 		assert.NoError(t, err, i)
 		assert.Empty(t, res.Messages, i)
 	}
 	assert.Equal(t, models.StatusPending, h.repo.Transactions[tx.ID].Status)
 	assert.Empty(t, h.repo.Transitions)
+
+	staleButAttempted := []services.Reply{
+		reply(events.EventTypes.AccountCredited, tx, models.StepCredit, 1, ""),
+		reply(events.EventTypes.AccountCredited, tx, models.StepReversal, 1, ""),
+	}
+	for i, r := range staleButAttempted {
+		res, err := h.service.ApplyAccountEvent(context.Background(), r)
+		assert.NoError(t, err, i)
+		assert.Empty(t, res.Messages, i)
+	}
+	assert.Equal(t, models.StatusPending, h.repo.Transactions[tx.ID].Status)
+	assert.Len(t, h.repo.Transitions, len(staleButAttempted))
+	for i, call := range h.repo.Transitions {
+		assert.NotEqual(t, models.StatusPending, call.From, i)
+	}
 }
 
 func TestApplyTreatsLostTransitionAsAlreadyApplied(t *testing.T) {
