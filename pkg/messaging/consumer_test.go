@@ -153,9 +153,6 @@ func TestConsumerFinishesInFlightMessageAfterCancel(t *testing.T) {
 		handled++
 		cancel()
 		assert.NoError(t, handlerCtx.Err())
-		deadline, ok := handlerCtx.Deadline()
-		assert.True(t, ok)
-		assert.WithinDuration(t, time.Now().Add(time.Minute), deadline, 5*time.Second)
 		return nil
 	})
 
@@ -164,6 +161,42 @@ func TestConsumerFinishesInFlightMessageAfterCancel(t *testing.T) {
 	assert.Len(t, reader.committed, 1)
 	assert.NoError(t, reader.commitCtxErr)
 	assert.Len(t, reader.messages, 1)
+}
+
+func TestConsumerDoesNotBoundHandlersWhileRunning(t *testing.T) {
+	reader := &fakeReader{messages: []kafka.Message{{Value: []byte("a")}}}
+	consumer := NewConsumerWithReader(reader, 10*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := consumer.Run(ctx, func(handlerCtx context.Context, _ kafka.Message) error {
+		time.Sleep(50 * time.Millisecond)
+		assert.NoError(t, handlerCtx.Err())
+		cancel()
+		return nil
+	})
+
+	assert.NoError(t, err)
+	assert.Len(t, reader.committed, 1)
+}
+
+func TestConsumerAbortsInFlightMessageAfterDrainTimeout(t *testing.T) {
+	reader := &fakeReader{messages: []kafka.Message{{Value: []byte("a")}}}
+	consumer := NewConsumerWithReader(reader, 20*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	start := time.Now()
+	err := consumer.Run(ctx, func(handlerCtx context.Context, _ kafka.Message) error {
+		cancel()
+		<-handlerCtx.Done()
+		return handlerCtx.Err()
+	})
+	elapsed := time.Since(start)
+
+	assert.NoError(t, err)
+	assert.Empty(t, reader.committed)
+	assert.Less(t, elapsed, time.Second)
 }
 
 func TestRunWithRestartRestartsFailedConsumers(t *testing.T) {

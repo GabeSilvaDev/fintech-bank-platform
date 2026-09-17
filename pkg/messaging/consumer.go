@@ -72,8 +72,25 @@ func (c *Consumer) Run(ctx context.Context, handle Handler) error {
 }
 
 func (c *Consumer) process(ctx context.Context, msg kafka.Message, handle Handler) error {
-	workCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), c.drainTimeout)
-	defer cancel()
+	workCtx, cancelWork := context.WithCancel(context.WithoutCancel(ctx))
+	defer cancelWork()
+
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-done:
+			return
+		case <-ctx.Done():
+		}
+		timer := time.NewTimer(c.drainTimeout)
+		defer timer.Stop()
+		select {
+		case <-done:
+		case <-timer.C:
+			cancelWork()
+		}
+	}()
 
 	if err := handle(workCtx, msg); err != nil {
 		if ctx.Err() != nil {
