@@ -111,12 +111,19 @@ func (s *TransactionService) record(ctx context.Context, tx *models.Transaction)
 	tx.CreatedAt = now
 	tx.UpdatedAt = now
 
-	reserved, err := s.repo.ReserveKey(ctx, tx.IdempotencyKey, tx.ID)
+	owner, err := s.repo.ReserveKey(ctx, tx.IdempotencyKey, tx.ID)
 	if err != nil {
 		return err
 	}
-	if !reserved {
-		return models.ErrDuplicateKey
+	if owner != tx.ID {
+		_, err := s.repo.Get(ctx, owner)
+		if err == nil {
+			return models.ErrDuplicateKey
+		}
+		if !errors.Is(err, domain.ErrNotFound) {
+			return err
+		}
+		tx.ID = owner
 	}
 	return s.repo.Create(ctx, tx)
 }

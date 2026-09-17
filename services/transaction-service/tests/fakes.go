@@ -57,18 +57,18 @@ func (f *FakeTransactionRepo) Create(_ context.Context, tx *models.Transaction) 
 	return nil
 }
 
-func (f *FakeTransactionRepo) ReserveKey(_ context.Context, key string, id uuid.UUID) (bool, error) {
+func (f *FakeTransactionRepo) ReserveKey(_ context.Context, key string, id uuid.UUID) (uuid.UUID, error) {
 	if f.ReserveErr != nil {
-		return false, f.ReserveErr
+		return uuid.Nil, f.ReserveErr
 	}
 	if f.Err != nil {
-		return false, f.Err
+		return uuid.Nil, f.Err
 	}
-	if _, taken := f.Keys[key]; taken {
-		return false, nil
+	if owner, taken := f.Keys[key]; taken {
+		return owner, nil
 	}
 	f.Keys[key] = id
-	return true, nil
+	return id, nil
 }
 
 func (f *FakeTransactionRepo) Get(_ context.Context, id uuid.UUID) (*models.Transaction, error) {

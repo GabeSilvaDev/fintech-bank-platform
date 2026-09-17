@@ -23,12 +23,12 @@ func TestTransactionRepository(t *testing.T) {
 
 	transfer := &models.Transaction{ID: uuid.New(), Type: models.TypeTransfer, Status: models.StatusPending, AccountID: from, CounterpartyID: &to, AmountCents: 3000, Currency: "BRL", Description: "rent", IdempotencyKey: "tr-1", CreatedAt: now, UpdatedAt: now}
 
-	reserved, err := repo.ReserveKey(ctx, "tr-1", transfer.ID)
+	owner, err := repo.ReserveKey(ctx, "tr-1", transfer.ID)
 	require.NoError(t, err)
-	require.True(t, reserved)
-	reserved, err = repo.ReserveKey(ctx, "tr-1", uuid.New())
+	require.Equal(t, transfer.ID, owner)
+	owner, err = repo.ReserveKey(ctx, "tr-1", uuid.New())
 	require.NoError(t, err)
-	require.False(t, reserved)
+	require.Equal(t, transfer.ID, owner)
 
 	require.NoError(t, repo.Create(ctx, transfer))
 

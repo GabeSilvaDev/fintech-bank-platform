@@ -10,7 +10,7 @@ import (
 
 type TransactionRepository interface {
 	Create(ctx context.Context, tx *models.Transaction) error
-	ReserveKey(ctx context.Context, key string, id uuid.UUID) (bool, error)
+	ReserveKey(ctx context.Context, key string, id uuid.UUID) (uuid.UUID, error)
 	Get(ctx context.Context, id uuid.UUID) (*models.Transaction, error)
 	ListByAccount(ctx context.Context, accountID uuid.UUID, limit int) ([]*models.Transaction, error)
 	Transition(ctx context.Context, id uuid.UUID, from, to models.TransactionStatus, patch models.Patch) (bool, error)

@@ -130,13 +130,40 @@ func TestCreateValidation(t *testing.T) {
 
 func TestCreateDuplicateKeyIsNoOp(t *testing.T) {
 	h := newHarness()
-	h.repo.Keys["dep-1"] = uuid.New()
+	existing := h.pending(models.TypeDeposit, models.StatusPending)
+	h.repo.Keys["dep-1"] = existing.ID
 
 	res, err := h.service.Create(context.Background(), deposit(uuid.NewString()), "t")
 
 	assert.ErrorIs(t, err, models.ErrDuplicateKey)
 	assert.Empty(t, res.Messages)
 	assert.Empty(t, h.repo.Created)
+	assert.Equal(t, existing.ID, h.repo.Keys["dep-1"])
+}
+
+func TestCreateRecoversAReservedKeyWithoutARow(t *testing.T) {
+	h := newHarness()
+	account := uuid.New()
+	h.repo.CreateErr = errors.New("db down")
+	_, err := h.service.Create(context.Background(), deposit(account.String()), "t")
+	assert.EqualError(t, err, "db down")
+	reserved := h.repo.Keys["dep-1"]
+	assert.Equal(t, h.nextID, reserved)
+	assert.Empty(t, h.repo.Created)
+
+	h.repo.CreateErr = nil
+	h.nextID = uuid.New()
+	res, err := h.service.Create(context.Background(), deposit(account.String()), "t")
+
+	assert.NoError(t, err)
+	assert.Len(t, h.repo.Created, 1)
+	assert.Equal(t, reserved, h.repo.Created[0].ID)
+	assert.Equal(t, h.repo.Keys["dep-1"], h.repo.Created[0].ID)
+	assert.Equal(t, models.StatusPending, h.repo.Created[0].Status)
+	assert.Len(t, res.Messages, 2)
+	assert.Equal(t, reserved.String(), res.Messages[0].Event.Payload.(events.TransactionCreatedPayload).TransactionID)
+	assert.Equal(t, reserved.String(), res.Messages[1].Event.Payload.(events.CreditAccountPayload).Reference)
+	assert.Equal(t, models.StepKey(reserved, models.StepCredit), res.Messages[1].Event.Payload.(events.CreditAccountPayload).IdempotencyKey)
 }
 
 func TestCreatePropagatesRepositoryErrors(t *testing.T) {
@@ -149,6 +176,13 @@ func TestCreatePropagatesRepositoryErrors(t *testing.T) {
 	h.repo.CreateErr = errors.New("db down")
 	_, err = h.service.Create(context.Background(), deposit(uuid.NewString()), "t")
 	assert.EqualError(t, err, "db down")
+
+	h = newHarness()
+	h.repo.Keys["dep-1"] = uuid.New()
+	h.repo.GetErrs = []error{errors.New("db down")}
+	_, err = h.service.Create(context.Background(), deposit(uuid.NewString()), "t")
+	assert.EqualError(t, err, "db down")
+	assert.Empty(t, h.repo.Created)
 }
 
 func TestTransferRecordsAndRequestsDebit(t *testing.T) {
@@ -196,9 +230,10 @@ func TestTransferValidation(t *testing.T) {
 	}
 
 	h := newHarness()
-	h.repo.Keys["tr-1"] = uuid.New()
+	h.repo.Keys["tr-1"] = h.pending(models.TypeTransfer, models.StatusPending).ID
 	_, err := h.service.Transfer(context.Background(), transfer(uuid.NewString(), uuid.NewString()), "t")
 	assert.ErrorIs(t, err, models.ErrDuplicateKey)
+	assert.Empty(t, h.repo.Created)
 }
 
 func TestGetAndListByAccount(t *testing.T) {
