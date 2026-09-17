@@ -3,10 +3,11 @@ module github.com/fintech-bank-platform/pkg
 go 1.25
 
 require (
+	github.com/apache/cassandra-gocql-driver/v2 v2.1.2
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/go-playground/validator/v10 v10.23.0
 	github.com/google/uuid v1.6.0
-	github.com/rs/zerolog v1.33.0
+	github.com/rs/zerolog v1.34.0
 	github.com/segmentio/kafka-go v0.4.51
 	github.com/stretchr/testify v1.10.0
 )
@@ -26,5 +27,6 @@ require (
 	golang.org/x/net v0.38.0 // indirect
 	golang.org/x/sys v0.31.0 // indirect
 	golang.org/x/text v0.23.0 // indirect
+	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

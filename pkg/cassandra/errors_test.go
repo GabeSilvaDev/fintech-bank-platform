@@ -1,4 +1,4 @@
-package unit
+package cassandra
 
 import (
 	"context"
@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/apache/cassandra-gocql-driver/v2"
-	"github.com/fintech-bank-platform/account-service/internal/infrastructure/database"
 	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/stretchr/testify/assert"
 )
@@ -25,7 +24,7 @@ func TestMapWriteErrorFlagsAmbiguousWrites(t *testing.T) {
 	}
 
 	for name, err := range cases {
-		mapped := database.MapWriteError(err)
+		mapped := MapWriteError(err)
 		assert.ErrorIs(t, mapped, domain.ErrAmbiguousWrite, name)
 		assert.ErrorContains(t, mapped, "ambiguous write", name)
 	}
@@ -35,9 +34,9 @@ func TestMapWriteErrorLeavesOtherErrorsUntouched(t *testing.T) {
 	boom := errors.New("boom")
 	other := errors.New("other")
 
-	assert.Same(t, boom, database.MapWriteError(boom))
-	assert.NoError(t, database.MapWriteError(nil))
-	assert.NotErrorIs(t, database.MapWriteError(&gocql.RequestErrReadTimeout{}), domain.ErrAmbiguousWrite)
-	assert.Same(t, gocql.ErrNotFound, database.MapWriteError(gocql.ErrNotFound))
-	assert.Same(t, other, database.MapWriteError(other))
+	assert.Same(t, boom, MapWriteError(boom))
+	assert.NoError(t, MapWriteError(nil))
+	assert.NotErrorIs(t, MapWriteError(&gocql.RequestErrReadTimeout{}), domain.ErrAmbiguousWrite)
+	assert.Same(t, gocql.ErrNotFound, MapWriteError(gocql.ErrNotFound))
+	assert.Same(t, other, MapWriteError(other))
 }

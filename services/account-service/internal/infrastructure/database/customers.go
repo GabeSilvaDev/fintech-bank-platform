@@ -8,6 +8,7 @@ import (
 
 	"github.com/apache/cassandra-gocql-driver/v2"
 	"github.com/fintech-bank-platform/account-service/internal/app/models"
+	"github.com/fintech-bank-platform/pkg/cassandra"
 	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/google/uuid"
 )
@@ -21,7 +22,7 @@ func NewCustomerRepository(session *gocql.Session) *CustomerRepository {
 }
 
 func (r *CustomerRepository) Upsert(ctx context.Context, customer *models.Customer) error {
-	return MapWriteError(r.session.Query("INSERT INTO customers (user_id, name, email, document, phone, kyc_status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+	return cassandra.MapWriteError(r.session.Query("INSERT INTO customers (user_id, name, email, document, phone, kyc_status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
 		gocql.UUID(customer.UserID), customer.Name, customer.Email, customer.Document, customer.Phone, customer.KYCStatus, customer.CreatedAt, customer.UpdatedAt).
 		WithContext(ctx).Exec())
 }
@@ -60,5 +61,5 @@ func (r *CustomerRepository) UpdateProfile(ctx context.Context, userID uuid.UUID
 	}
 	values = append(values, gocql.UUID(userID))
 
-	return MapWriteError(r.session.Query("UPDATE customers SET "+strings.Join(assignments, ", ")+" WHERE user_id = ?", values...).WithContext(ctx).Exec())
+	return cassandra.MapWriteError(r.session.Query("UPDATE customers SET "+strings.Join(assignments, ", ")+" WHERE user_id = ?", values...).WithContext(ctx).Exec())
 }
