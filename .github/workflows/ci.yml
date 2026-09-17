@@ -257,6 +257,7 @@ jobs:
         with:
           name: coverage-report-account-service
           path: services/account-service/coverage.out
+          retention-days: 30
 
   transaction-service:
     name: Transaction Service Tests
