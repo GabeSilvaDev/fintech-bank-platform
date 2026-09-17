@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -14,7 +15,7 @@ type ReadProxy struct {
 	proxy *httputil.ReverseProxy
 }
 
-func NewReadProxy(upstream *url.URL) *ReadProxy {
+func NewReadProxy(upstream *url.URL, serviceName string) *ReadProxy {
 	proxy := httputil.NewSingleHostReverseProxy(upstream)
 	director := proxy.Director
 	proxy.Director = func(req *http.Request) {
@@ -27,7 +28,7 @@ func NewReadProxy(upstream *url.URL) *ReadProxy {
 		return nil
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		response.FromError(w, apperrors.New("UPSTREAM_UNAVAILABLE", "account service is unavailable", http.StatusBadGateway).Wrap(err))
+		response.FromError(w, apperrors.New("UPSTREAM_UNAVAILABLE", fmt.Sprintf("%s is unavailable", serviceName), http.StatusBadGateway).Wrap(err))
 	}
 	return &ReadProxy{proxy: proxy}
 }

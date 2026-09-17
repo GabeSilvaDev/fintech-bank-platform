@@ -14,9 +14,9 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func proxyRouter(upstream string) http.Handler {
+func proxyRouter(upstream, serviceName string) http.Handler {
 	target, _ := url.Parse(upstream)
-	proxy := http.StripPrefix("/api/v1", handlers.NewReadProxy(target))
+	proxy := http.StripPrefix("/api/v1", handlers.NewReadProxy(target, serviceName))
 	r := chi.NewRouter()
 	r.Get("/api/v1/accounts/{id}", proxy.ServeHTTP)
 	r.Get("/api/v1/users/{user_id}/accounts", proxy.ServeHTTP)
@@ -39,7 +39,7 @@ func TestReadProxyForwardsPathAndRequestID(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/abc", nil)
 	req = req.WithContext(context.WithValue(req.Context(), middleware.RequestIDKey, "req-9"))
 	rec := httptest.NewRecorder()
-	proxyRouter(upstream.URL).ServeHTTP(rec, req)
+	proxyRouter(upstream.URL, "account service").ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "/accounts/abc", gotPath)
@@ -58,7 +58,7 @@ func TestReadProxyKeepsASingleRequestIDHeader(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/abc", nil)
 	req.Header.Set(middleware.RequestIDHeader, "req-9")
 	rec := httptest.NewRecorder()
-	middleware.RequestID(proxyRouter(upstream.URL)).ServeHTTP(rec, req)
+	middleware.RequestID(proxyRouter(upstream.URL, "account service")).ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, []string{"req-9"}, rec.Header().Values(middleware.RequestIDHeader))
@@ -73,7 +73,7 @@ func TestReadProxyPassesUpstreamStatusThrough(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/users/u1/accounts", nil)
 	rec := httptest.NewRecorder()
-	proxyRouter(upstream.URL).ServeHTTP(rec, req)
+	proxyRouter(upstream.URL, "account service").ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 	assert.Contains(t, rec.Body.String(), "ACCOUNT_NOT_FOUND")
@@ -85,10 +85,26 @@ func TestReadProxyAnswers502WhenUpstreamIsDown(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/abc", nil)
 	rec := httptest.NewRecorder()
-	proxyRouter(upstream.URL).ServeHTTP(rec, req)
+	proxyRouter(upstream.URL, "account service").ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusBadGateway, rec.Code)
-	assert.Equal(t, "UPSTREAM_UNAVAILABLE", tests.FromJson(rec.Body.String())["error"].(map[string]interface{})["code"])
+	errorBody := tests.FromJson(rec.Body.String())["error"].(map[string]interface{})
+	assert.Equal(t, "UPSTREAM_UNAVAILABLE", errorBody["code"])
+	assert.Equal(t, "account service is unavailable", errorBody["message"])
+}
+
+func TestReadProxyAnswers502NamingTheTransactionServiceWhenItIsDown(t *testing.T) {
+	upstream := httptest.NewServer(http.NotFoundHandler())
+	upstream.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/transactions/abc", nil)
+	rec := httptest.NewRecorder()
+	proxyRouter(upstream.URL, "transaction service").ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadGateway, rec.Code)
+	errorBody := tests.FromJson(rec.Body.String())["error"].(map[string]interface{})
+	assert.Equal(t, "UPSTREAM_UNAVAILABLE", errorBody["code"])
+	assert.Equal(t, "transaction service is unavailable", errorBody["message"])
 }
 
 func TestReadProxyForwardsTransactionPaths(t *testing.T) {
@@ -102,7 +118,7 @@ func TestReadProxyForwardsTransactionPaths(t *testing.T) {
 
 	for _, path := range []string{"/api/v1/transactions/abc", "/api/v1/accounts/a1/transactions?limit=5"} {
 		rec := httptest.NewRecorder()
-		proxyRouter(upstream.URL).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		proxyRouter(upstream.URL, "account service").ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 		assert.Equal(t, http.StatusOK, rec.Code)
 	}
 	assert.Equal(t, []string{"/transactions/abc", "/accounts/a1/transactions?limit=5"}, paths)

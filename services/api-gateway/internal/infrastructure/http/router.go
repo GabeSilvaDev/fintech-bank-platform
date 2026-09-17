@@ -35,8 +35,8 @@ func SetupRouter(router *chi.Mux, cfg *config.Config, deps Dependencies) {
 	account := handlers.NewAccountHandler(deps.Publisher)
 	transaction := handlers.NewTransactionHandler(deps.Publisher)
 	payment := handlers.NewPaymentHandler(deps.Publisher)
-	accountReads := nethttp.StripPrefix("/api/v1", handlers.NewReadProxy(deps.AccountService))
-	transactionReads := nethttp.StripPrefix("/api/v1", handlers.NewReadProxy(deps.TransactionService))
+	accountReads := nethttp.StripPrefix("/api/v1", handlers.NewReadProxy(deps.AccountService, "account service"))
+	transactionReads := nethttp.StripPrefix("/api/v1", handlers.NewReadProxy(deps.TransactionService, "transaction service"))
 
 	router.Route("/api/v1", func(r chi.Router) {
 		r.Post("/accounts", account.Create)
