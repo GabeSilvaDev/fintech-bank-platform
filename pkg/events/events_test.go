@@ -363,3 +363,30 @@ func TestBalancePayloadsRoundTrip(t *testing.T) {
 		assert.Equal(t, payload, reflect.ValueOf(decoded).Elem().Interface())
 	}
 }
+
+func TestSprintThreeEventTypes(t *testing.T) {
+	assert.Equal(t, "account.credit_rejected", EventTypes.CreditRejected)
+	assert.Equal(t, "transaction.command_failed", EventTypes.TransactionCommandFailed)
+}
+
+func TestSprintThreePayloadsRoundTrip(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	cases := []interface{}{
+		CreditRejectedPayload{AccountID: "a", Amount: 5, Balance: 1, Reason: "account_not_active", Reference: "t1", IdempotencyKey: "t1:credit"},
+		TransactionCreatedPayload{TransactionID: "t1", Type: "transfer", AccountID: "a", CounterpartyID: "b", Amount: 5, Currency: "BRL", Description: "rent", IdempotencyKey: "k", CreatedAt: now},
+		TransactionFailedPayload{TransactionID: "t1", AccountID: "a", Type: "deposit", Amount: 5, Currency: "BRL", Reason: "account_not_active", FailedAt: now},
+		TransferFailedPayload{TransferID: "t1", FromAccountID: "a", ToAccountID: "b", Amount: 5, Currency: "BRL", Reason: "insufficient_funds", Status: "failed", FailedAt: now},
+	}
+
+	for _, payload := range cases {
+		data, err := json.Marshal(payload)
+		assert.NoError(t, err)
+		decoded := reflect.New(reflect.TypeOf(payload)).Interface()
+		assert.NoError(t, json.Unmarshal(data, decoded))
+		assert.Equal(t, payload, reflect.ValueOf(decoded).Elem().Interface())
+	}
+
+	data, _ := json.Marshal(CreditRejectedPayload{AccountID: "a"})
+	assert.Contains(t, string(data), `"account_id":"a"`)
+	assert.Contains(t, string(data), `"reason":""`)
+}

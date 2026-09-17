@@ -115,6 +115,7 @@ var EventTypes = struct {
 	AccountCredited      string
 	AccountDebited       string
 	DebitRejected        string
+	CreditRejected       string
 	AccountCommandFailed string
 
 	// Transaction Commands
@@ -123,12 +124,13 @@ var EventTypes = struct {
 	ReverseTransaction string
 
 	// Transaction Events
-	TransactionCreated   string
-	TransactionCompleted string
-	TransactionFailed    string
-	TransactionReversed  string
-	TransferCompleted    string
-	TransferFailed       string
+	TransactionCreated       string
+	TransactionCompleted     string
+	TransactionFailed        string
+	TransactionReversed      string
+	TransferCompleted        string
+	TransferFailed           string
+	TransactionCommandFailed string
 
 	// Payment Commands
 	ProcessPayment string
@@ -165,6 +167,7 @@ var EventTypes = struct {
 	AccountCredited:      "account.credited",
 	AccountDebited:       "account.debited",
 	DebitRejected:        "account.debit_rejected",
+	CreditRejected:       "account.credit_rejected",
 	AccountCommandFailed: "account.command_failed",
 
 	// Transaction Commands
@@ -173,12 +176,13 @@ var EventTypes = struct {
 	ReverseTransaction: "transaction.reverse",
 
 	// Transaction Events
-	TransactionCreated:   "transaction.created",
-	TransactionCompleted: "transaction.completed",
-	TransactionFailed:    "transaction.failed",
-	TransactionReversed:  "transaction.reversed",
-	TransferCompleted:    "transaction.transfer_completed",
-	TransferFailed:       "transaction.transfer_failed",
+	TransactionCreated:       "transaction.created",
+	TransactionCompleted:     "transaction.completed",
+	TransactionFailed:        "transaction.failed",
+	TransactionReversed:      "transaction.reversed",
+	TransferCompleted:        "transaction.transfer_completed",
+	TransferFailed:           "transaction.transfer_failed",
+	TransactionCommandFailed: "transaction.command_failed",
 
 	// Payment Commands
 	ProcessPayment: "payment.process",
@@ -293,6 +297,15 @@ type DebitRejectedPayload struct {
 	IdempotencyKey string  `json:"idempotency_key"`
 }
 
+type CreditRejectedPayload struct {
+	AccountID      string  `json:"account_id"`
+	Amount         float64 `json:"amount"`
+	Balance        float64 `json:"balance"`
+	Reason         string  `json:"reason"`
+	Reference      string  `json:"reference,omitempty"`
+	IdempotencyKey string  `json:"idempotency_key"`
+}
+
 // CreateTransactionPayload represents the payload for creating a transaction
 type CreateTransactionPayload struct {
 	AccountID      string  `json:"account_id"`
@@ -335,6 +348,39 @@ type TransferCompletedPayload struct {
 	FromBalanceAfter float64   `json:"from_balance_after"`
 	ToBalanceAfter   float64   `json:"to_balance_after"`
 	CompletedAt      time.Time `json:"completed_at"`
+}
+
+type TransactionCreatedPayload struct {
+	TransactionID  string    `json:"transaction_id"`
+	Type           string    `json:"type"`
+	AccountID      string    `json:"account_id"`
+	CounterpartyID string    `json:"counterparty_id,omitempty"`
+	Amount         float64   `json:"amount"`
+	Currency       string    `json:"currency"`
+	Description    string    `json:"description,omitempty"`
+	IdempotencyKey string    `json:"idempotency_key"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+type TransactionFailedPayload struct {
+	TransactionID string    `json:"transaction_id"`
+	AccountID     string    `json:"account_id"`
+	Type          string    `json:"type"`
+	Amount        float64   `json:"amount"`
+	Currency      string    `json:"currency"`
+	Reason        string    `json:"reason"`
+	FailedAt      time.Time `json:"failed_at"`
+}
+
+type TransferFailedPayload struct {
+	TransferID    string    `json:"transfer_id"`
+	FromAccountID string    `json:"from_account_id"`
+	ToAccountID   string    `json:"to_account_id"`
+	Amount        float64   `json:"amount"`
+	Currency      string    `json:"currency"`
+	Reason        string    `json:"reason"`
+	Status        string    `json:"status"`
+	FailedAt      time.Time `json:"failed_at"`
 }
 
 // ProcessPaymentPayload represents the payload for processing a payment
