@@ -1,6 +1,7 @@
 package unit
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
@@ -18,6 +19,9 @@ func TestMapWriteErrorFlagsAmbiguousWrites(t *testing.T) {
 		"unavailable pointer":   &gocql.RequestErrUnavailable{Consistency: gocql.Quorum, Required: 2, Alive: 1},
 		"unavailable value":     gocql.RequestErrUnavailable{Consistency: gocql.Quorum, Required: 2, Alive: 1},
 		"wrapped":               fmt.Errorf("batch: %w", &gocql.RequestErrWriteTimeout{}),
+		"timeout no response":   gocql.ErrTimeoutNoResponse,
+		"context deadline":      fmt.Errorf("x: %w", context.DeadlineExceeded),
+		"context cancelled":     context.Canceled,
 	}
 
 	for name, err := range cases {
@@ -29,8 +33,11 @@ func TestMapWriteErrorFlagsAmbiguousWrites(t *testing.T) {
 
 func TestMapWriteErrorLeavesOtherErrorsUntouched(t *testing.T) {
 	boom := errors.New("boom")
+	other := errors.New("other")
 
 	assert.Same(t, boom, database.MapWriteError(boom))
 	assert.NoError(t, database.MapWriteError(nil))
 	assert.NotErrorIs(t, database.MapWriteError(&gocql.RequestErrReadTimeout{}), models.ErrAmbiguousWrite)
+	assert.Same(t, gocql.ErrNotFound, database.MapWriteError(gocql.ErrNotFound))
+	assert.Same(t, other, database.MapWriteError(other))
 }

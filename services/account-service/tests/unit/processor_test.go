@@ -154,6 +154,24 @@ func TestProcessDeadLettersUnprocessableWithoutRetry(t *testing.T) {
 	}
 }
 
+func TestProcessDeadLettersAmbiguousWriteFromCancelledContext(t *testing.T) {
+	h := newProcessor()
+	h.dispatcher.Errs = []error{fmt.Errorf("%w: %v", models.ErrAmbiguousWrite, context.Canceled)}
+	cmd := command(events.EventTypes.CreateAccount, validCreate())
+
+	assert.NoError(t, h.processor.Process(context.Background(), []byte("k"), encoded(cmd)))
+
+	assert.Equal(t, 1, h.dispatcher.Calls)
+	dlq := h.publisher.ByTopic(events.Topics.AccountDLQ)
+	assert.Len(t, dlq, 1)
+	payload := dlq[0].Event.Payload.(events.ErrorPayload)
+	assert.Equal(t, "ambiguous_write", payload.ErrorCode)
+	assert.Equal(t, cmd.ID, payload.OriginalEvent.ID)
+	assert.Equal(t, 1, payload.Retries)
+	assert.Equal(t, "trace-1", dlq[0].Event.TraceID)
+	assert.Equal(t, "k", dlq[0].Key)
+}
+
 func TestProcessRetriesTransientErrorsThenSucceeds(t *testing.T) {
 	h := newProcessor()
 	h.dispatcher.Errs = []error{errors.New("timeout"), errors.New("timeout"), errors.New("timeout"), nil}

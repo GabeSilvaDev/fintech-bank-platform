@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -25,5 +26,8 @@ func isAmbiguous(err error) bool {
 	return errors.As(err, &writeTimeoutPtr) ||
 		errors.As(err, &writeTimeout) ||
 		errors.As(err, &unavailablePtr) ||
-		errors.As(err, &unavailable)
+		errors.As(err, &unavailable) ||
+		errors.Is(err, gocql.ErrTimeoutNoResponse) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, context.Canceled)
 }
