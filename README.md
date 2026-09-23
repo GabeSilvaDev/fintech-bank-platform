@@ -179,7 +179,7 @@ The sandbox provider reports settlement through a signed webhook: `POST /webhook
 | Boleto code starting with `999` | rejected, `boleto_not_found` |
 | Anything else | settles; TED and boleto settle after `PAYMENT_SETTLEMENT_DELAY` |
 
-**Known limitations.** A payment stays `pending` if the outcome of its debit never arrives, `debited` if the provider keeps failing after the retries and the command is dead-lettered, `submitted` if the settlement never arrives — for example when the sandbox loses a scheduled callback because the service restarted before `PAYMENT_SETTLEMENT_DELAY` elapsed; a resubmission redelivers it — and `refunding` if the outcome of the refund credit never arrives. Non-terminal payments can be found through `GET /accounts/{account_id}/payments`. A settlement that arrives before its external id is bound, or while the submission is still being recorded, is retried and dead-lettered as `conflict` if it never lands. As with the other services, a dead-lettered event replayed as-is is skipped as a duplicate, so a replay needs a new event id. On first deployment the service reads `payment.commands` and `account.events` from the beginning. A reconciliation sweeper is planned for Sprint 6 (see the [roadmap](#roadmap)); before it can safely re-send credits and debits, the account service has to enforce idempotency keys on them.
+**Known limitations.** A payment stays `pending` if the outcome of its debit never arrives, `debited` if the provider keeps failing after the retries and the command is dead-lettered, `submitted` if the settlement never arrives (for example, the sandbox lost a scheduled callback because the service restarted before `PAYMENT_SETTLEMENT_DELAY` elapsed) until a reconciliation re-submits it, and `refunding` if the outcome of the refund credit never arrives. Non-terminal payments can be found through `GET /accounts/{account_id}/payments`. A settlement that arrives before its external id is bound, or while the submission is still being recorded, is retried and dead-lettered as `conflict` if it never lands. As with the other services, a dead-lettered event replayed as-is is skipped as a duplicate, so a replay needs a new event id. On first deployment the service reads `payment.commands` and `account.events` from the beginning. A reconciliation sweeper is planned for Sprint 6 (see the [roadmap](#roadmap)); before it can safely re-send credits and debits, the account service has to enforce idempotency keys on them.
 
 #### Command endpoints
 
@@ -341,7 +341,7 @@ Each future service follows the same layout: `cmd/`, `internal/{config,contracts
 - [x] **Sprint 3 — Transaction Service** — deposits, withdrawals and transfers as sagas over the account service, idempotency keys, compensation, read API proxied by the gateway
 - [x] **Sprint 4 — Payment Service** — PIX, TED and boleto as sagas over the account service, sandbox provider with signed webhooks, refunds, read API proxied by the gateway
 - [ ] **Sprint 5 — Notification Service** — e-mail, SMS and push consumers
-- [ ] **Sprint 6** — end-to-end tests, load tests and a reconciliation sweeper for stuck transactions
+- [ ] **Sprint 6** — end-to-end tests, load tests and a reconciliation sweeper for stuck transactions and payments
 - [ ] **Sprint 7** — observability (Prometheus, Jaeger) and docs
 
 ## License
