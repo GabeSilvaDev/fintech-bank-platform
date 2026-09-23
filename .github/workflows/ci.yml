@@ -575,3 +575,45 @@ jobs:
           name: coverage-report-notification-service
           path: services/notification-service/coverage.out
           retention-days: 30
+
+  e2e:
+    name: End-to-end Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [account-service, transaction-service, payment-service, notification-service, api-gateway]
+    env:
+      RATE_LIMIT_REQUESTS: "100000"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: tests/e2e/go.sum
+
+      - name: Start the stack
+        run: scripts/stack.sh up
+
+      - name: Wait for the stack
+        env:
+          STACK_TIMEOUT: 900
+        run: scripts/stack.sh wait
+
+      - name: Run end-to-end tests
+        working-directory: tests/e2e
+        env:
+          GATEWAY_URL: http://localhost:8081
+          MAILPIT_URL: http://localhost:8025
+          E2E_REQUIRED: "1"
+        run: go test -count=1 -tags e2e ./... -v
+
+      - name: Dump service logs
+        if: failure()
+        run: scripts/stack.sh logs
+
+      - name: Stop the stack
+        if: always()
+        run: scripts/stack.sh down
