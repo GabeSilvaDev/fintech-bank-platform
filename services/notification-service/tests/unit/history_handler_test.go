@@ -45,7 +45,7 @@ func TestListUserNotificationsShape(t *testing.T) {
 	item := data[0].(map[string]interface{})
 	assert.Equal(t, "n1", item["id"])
 	assert.Equal(t, "email", item["channel"])
-	assert.Equal(t, "ana@example.com", item["recipient"])
+	assert.Equal(t, "a***@example.com", item["recipient"])
 	assert.Equal(t, "Bem-vindo(a)", item["subject"])
 	assert.Equal(t, "Ola Ana", item["body"])
 	assert.Equal(t, "evt-1", item["source_event_id"])
@@ -53,6 +53,7 @@ func TestListUserNotificationsShape(t *testing.T) {
 
 	bareItem := data[1].(map[string]interface{})
 	assert.Equal(t, "n2", bareItem["id"])
+	assert.Equal(t, "+55*******7766", bareItem["recipient"])
 	assert.NotContains(t, bareItem, "subject")
 	assert.NotContains(t, bareItem, "source_event_id")
 }

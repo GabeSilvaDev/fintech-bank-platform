@@ -39,6 +39,7 @@ func (s *HistoryAPISuite) TestListThroughRouter() {
 	data := resp.Json()["data"].([]interface{})
 	item := data[0].(map[string]interface{})
 	s.Equal("n1", item["id"])
+	s.Equal("a***@example.com", item["recipient"])
 
 	s.Get("/users/" + userID.String() + "/notifications?limit=x").
 		AssertUnprocessableEntity().AssertErrorCode("VALIDATION_ERROR")

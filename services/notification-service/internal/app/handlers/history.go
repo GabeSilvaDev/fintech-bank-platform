@@ -64,7 +64,7 @@ func (h *HistoryHandler) ListUserNotifications(w http.ResponseWriter, r *http.Re
 		items = append(items, notificationResponse{
 			ID:            record.ID,
 			Channel:       string(record.Channel),
-			Recipient:     record.Recipient,
+			Recipient:     models.MaskRecipient(record.Channel, record.Recipient),
 			Subject:       record.Subject,
 			Body:          record.Body,
 			SourceEventID: record.SourceEventID,
