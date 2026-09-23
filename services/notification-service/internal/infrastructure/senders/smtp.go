@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"mime"
+	"net/mail"
 	"net/smtp"
 	"strings"
 
 	"github.com/fintech-bank-platform/notification-service/internal/app/models"
+	"github.com/fintech-bank-platform/pkg/domain"
 )
 
 type SendMailFunc func(addr string, auth smtp.Auth, from string, to []string, msg []byte) error
@@ -27,6 +29,11 @@ func NewSMTPWith(addr, from string, send SendMailFunc) *SMTP {
 }
 
 func (s *SMTP) Send(_ context.Context, message models.Message) error {
+	address, err := mail.ParseAddress(message.To)
+	if err != nil {
+		return domain.Invalid("invalid_recipient", "e-mail recipient is not a valid address")
+	}
+	message.To = address.Address
 	return s.send(s.addr, nil, s.from, []string{message.To}, BuildEmail(s.from, message))
 }
 

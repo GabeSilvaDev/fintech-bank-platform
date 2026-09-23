@@ -11,6 +11,7 @@ import (
 
 	"github.com/fintech-bank-platform/notification-service/internal/app/models"
 	"github.com/fintech-bank-platform/notification-service/internal/infrastructure/senders"
+	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/fintech-bank-platform/pkg/logger"
 	"github.com/stretchr/testify/assert"
 )
@@ -68,6 +69,20 @@ func TestSMTPSendReturnsNilOnSuccess(t *testing.T) {
 	})
 	err := sender.Send(context.Background(), models.Message{To: "ana@example.com"})
 	assert.NoError(t, err)
+}
+
+func TestSMTPSendRejectsMalformedRecipients(t *testing.T) {
+	for _, to := range []string{"ana@example.com\r\nBcc: x@evil.test", "not an address"} {
+		called := false
+		sender := senders.NewSMTPWith("mailpit:1025", "no-reply@fintech.local", func(addr string, auth smtp.Auth, from string, to []string, msg []byte) error {
+			called = true
+			return nil
+		})
+
+		err := sender.Send(context.Background(), models.Message{To: to})
+		assert.Equal(t, "invalid_recipient", domain.InvalidCode(err), to)
+		assert.False(t, called, to)
+	}
 }
 
 func TestSandboxLogsSMS(t *testing.T) {
