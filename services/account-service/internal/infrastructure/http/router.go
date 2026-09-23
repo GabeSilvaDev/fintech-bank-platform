@@ -25,5 +25,6 @@ func SetupRouter(router *chi.Mux, deps Dependencies) {
 
 	router.Get("/health", healthHandler(deps.Ping))
 	router.Get("/accounts/{id}", deps.Reads.GetAccount)
+	router.Get("/accounts/{id}/owner", deps.Reads.GetOwner)
 	router.Get("/users/{user_id}/accounts", deps.Reads.ListUserAccounts)
 }

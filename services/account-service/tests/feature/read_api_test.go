@@ -40,3 +40,15 @@ func (s *ReadAPISuite) TestGetAccountThroughRouter() {
 	s.Get("/users/"+account.UserID.String()+"/accounts").AssertOk().AssertJsonCount(1, "data")
 	s.Get("/nope").AssertNotFound()
 }
+
+func (s *ReadAPISuite) TestGetOwnerThroughRouter() {
+	account := &models.Account{AccountID: uuid.New(), UserID: uuid.New(), Agency: "0001", Number: "00000002", Type: models.AccountTypeChecking, Status: models.AccountStatusActive, Currency: "BRL"}
+	s.Accounts.Put(account)
+	s.Customers.Put(&models.Customer{UserID: account.UserID, Name: "Ana Souza", Email: "ana@example.com"})
+
+	s.Get("/accounts/"+account.AccountID.String()+"/owner").
+		AssertOk().
+		AssertJsonPath("data.email", "ana@example.com")
+
+	s.Get("/accounts/" + uuid.NewString() + "/owner").AssertNotFound().AssertErrorCode("ACCOUNT_NOT_FOUND")
+}

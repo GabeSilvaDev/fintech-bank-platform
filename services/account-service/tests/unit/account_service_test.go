@@ -352,6 +352,53 @@ func TestGetAndListByUser(t *testing.T) {
 	assert.Len(t, list, 1)
 }
 
+func TestOwnerReturnsAccountAndCustomer(t *testing.T) {
+	h := newHarness()
+	account := h.activeAccount(100)
+
+	got, customer, err := h.service.Owner(context.Background(), account.AccountID)
+
+	assert.NoError(t, err)
+	assert.Equal(t, account.AccountID, got.AccountID)
+	assert.Equal(t, "Ana Souza", customer.Name)
+	assert.Equal(t, "ana@example.com", customer.Email)
+	assert.Equal(t, "11999887766", customer.Phone)
+}
+
+func TestOwnerUnknownAccount(t *testing.T) {
+	h := newHarness()
+
+	_, _, err := h.service.Owner(context.Background(), uuid.New())
+
+	assert.ErrorIs(t, err, domain.ErrNotFound)
+}
+
+func TestOwnerMissingCustomer(t *testing.T) {
+	h := newHarness()
+	account := &models.Account{AccountID: uuid.New(), UserID: uuid.New(), Agency: models.Agency, Number: "00000002", Type: models.AccountTypeChecking, Status: models.AccountStatusActive, Currency: models.Currency, CreatedAt: now, UpdatedAt: now}
+	h.accounts.Put(account)
+
+	_, _, err := h.service.Owner(context.Background(), account.AccountID)
+
+	assert.ErrorIs(t, err, domain.ErrNotFound)
+}
+
+func TestOwnerPropagatesRepositoryErrors(t *testing.T) {
+	h := newHarness()
+	account := h.activeAccount(0)
+	h.accounts.Err = errors.New("db down")
+
+	_, _, err := h.service.Owner(context.Background(), account.AccountID)
+	assert.EqualError(t, err, "db down")
+
+	h = newHarness()
+	account = h.activeAccount(0)
+	h.customers.Err = errors.New("db down")
+
+	_, _, err = h.service.Owner(context.Background(), account.AccountID)
+	assert.EqualError(t, err, "db down")
+}
+
 func TestRandomNumberHasEightDigits(t *testing.T) {
 	assert.Regexp(t, `^\d{8}$`, services.RandomNumber())
 }

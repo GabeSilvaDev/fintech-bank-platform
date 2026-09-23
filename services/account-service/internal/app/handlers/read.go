@@ -17,6 +17,7 @@ import (
 type AccountReader interface {
 	Get(ctx context.Context, accountID uuid.UUID) (*models.Account, error)
 	ListByUser(ctx context.Context, userID uuid.UUID) ([]*models.Account, error)
+	Owner(ctx context.Context, accountID uuid.UUID) (*models.Account, *models.Customer, error)
 }
 
 type ReadHandler struct {
@@ -55,6 +56,36 @@ func (h *ReadHandler) GetAccount(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response.OK(w, toResponse(account))
+}
+
+type ownerResponse struct {
+	AccountID string `json:"account_id"`
+	UserID    string `json:"user_id"`
+	Name      string `json:"name"`
+	Email     string `json:"email"`
+	Phone     string `json:"phone,omitempty"`
+}
+
+func (h *ReadHandler) GetOwner(w http.ResponseWriter, r *http.Request) {
+	accountID, err := parseID(chi.URLParam(r, "id"), "id")
+	if err != nil {
+		response.FromError(w, err)
+		return
+	}
+
+	account, customer, err := h.accounts.Owner(r.Context(), accountID)
+	if err != nil {
+		response.FromError(w, mapReadError(err))
+		return
+	}
+
+	response.OK(w, ownerResponse{
+		AccountID: account.AccountID.String(),
+		UserID:    customer.UserID.String(),
+		Name:      customer.Name,
+		Email:     customer.Email,
+		Phone:     customer.Phone,
+	})
 }
 
 func (h *ReadHandler) ListUserAccounts(w http.ResponseWriter, r *http.Request) {

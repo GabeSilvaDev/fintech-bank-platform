@@ -205,6 +205,18 @@ func (s *AccountService) Get(ctx context.Context, accountID uuid.UUID) (*models.
 	return s.accounts.Get(ctx, accountID)
 }
 
+func (s *AccountService) Owner(ctx context.Context, accountID uuid.UUID) (*models.Account, *models.Customer, error) {
+	account, err := s.accounts.Get(ctx, accountID)
+	if err != nil {
+		return nil, nil, err
+	}
+	customer, err := s.customers.Get(ctx, account.UserID)
+	if err != nil {
+		return nil, nil, err
+	}
+	return account, customer, nil
+}
+
 func (s *AccountService) ListByUser(ctx context.Context, userID uuid.UUID) ([]*models.Account, error) {
 	return s.accounts.ListByUser(ctx, userID)
 }
