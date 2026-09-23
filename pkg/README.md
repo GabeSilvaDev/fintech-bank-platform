@@ -124,6 +124,8 @@ payment := events.NewPaymentCommand(events.EventTypes.ProcessPayment, events.Pro
 
 The payment lifecycle runs through `events.EventTypes.ProcessPayment`/`SubmitPayment`/`SettlePayment` commands and `PaymentCreated`/`PaymentProcessed`/`PaymentCompleted`/`PaymentFailed` events on `events.Topics.PaymentEvents`; `TEDDetails` is only set on `ProcessPaymentPayload.TED` for TED payments.
 
+Every domain follows the same dead-letter pattern: a topic in `events.Topics` (`AccountDLQ`, `TransactionDLQ`, `PaymentDLQ`, `NotificationDLQ`) paired with an `EventTypes.*CommandFailed` type, such as `events.EventTypes.NotificationCommandFailed` for the notification service.
+
 ## env
 
 ```go

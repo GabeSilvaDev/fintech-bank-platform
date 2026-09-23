@@ -17,7 +17,7 @@
 
 </div>
 
-> **Em desenvolvimento.** Infraestrutura, pacotes compartilhados, o API Gateway, o Account Service, o Transaction Service e o Payment Service estão prontos — os comandos fluem do HTTP para o Kafka e para o Cassandra, depósitos, saques e transferências se resolvem como sagas sobre o account service, e pagamentos por PIX, TED e boleto se resolvem da mesma forma através de um provedor sandbox com webhooks assinados, com as leituras voltando pelo gateway; o Notification Service vem a seguir. Veja o [roadmap](#roadmap) para o que está feito e o que está planejado.
+> **Em desenvolvimento.** Infraestrutura, pacotes compartilhados e os cinco serviços — o API Gateway, o Account Service, o Transaction Service, o Payment Service e o Notification Service — estão prontos: os comandos fluem do HTTP para o Kafka e para o Cassandra, depósitos, saques e transferências se resolvem como sagas sobre o account service, pagamentos por PIX, TED e boleto se resolvem da mesma forma através de um provedor sandbox com webhooks assinados, e os eventos de resultado viram e-mail, SMS e push através do notification service, com as leituras voltando pelo gateway. Testes end-to-end, testes de carga e observabilidade vêm a seguir. Veja o [roadmap](#roadmap) para o que está feito e o que está planejado.
 
 ## Arquitetura
 
@@ -30,14 +30,12 @@ flowchart LR
     K --> P[Payment Service]
     K --> N[Notification Service]
     A & T & P --> CS[(Cassandra)]
-    A & T & P --> R[(Redis)]
-    A & T & P -->|eventos| K
-
-    classDef planned stroke-dasharray: 5 5,opacity:0.6
-    class N,R planned
+    A & T & P & N --> R[(Redis)]
+    N --> MP[(Mailpit)]
+    A & T & P & N -->|eventos| K
 ```
 
-Caixas sólidas existem hoje; tracejadas são planejadas. O gateway recebe requisições HTTP e publica-as como comandos no Kafka; cada serviço de domínio consome seu tópico de comandos, persiste no Cassandra e emite eventos de resultado. O Redis guarda leituras quentes e sustenta o rate limiting.
+O gateway recebe requisições HTTP e publica-as como comandos no Kafka; cada serviço de domínio consome seu tópico de comandos, persiste no Cassandra e emite eventos de resultado. O Notification Service transforma esses eventos de resultado em e-mail, SMS e push, usando o Redis para idempotência e histórico e o Mailpit para capturar os e-mails enviados em desenvolvimento.
 
 **Tópicos** (`pkg/events`): `account.commands`, `transaction.commands`, `payment.commands` para comandos; `account.events`, `transaction.events`, `payment.events`, `notification.events` para resultados; um tópico de dead-letter por domínio. O compose raiz pré-cria todos os tópicos com um one-shot `kafka-init`.
 
@@ -45,12 +43,13 @@ Caixas sólidas existem hoje; tracejadas são planejadas. O gateway recebe requi
 
 | Componente | Caminho | Estado |
 |---|---|---|
-| Infraestrutura | `docker-compose.yml` | Kafka 3.7.1 (KRaft), Cassandra 4.1, Redis 7.2, Kafka UI e Cassandra Web opcionais |
+| Infraestrutura | `docker-compose.yml` | Kafka 3.7.1 (KRaft), Cassandra 4.1, Redis 7.2, Mailpit, Kafka UI e Cassandra Web opcionais |
 | Pacotes compartilhados | `pkg/` | `logger`, `errors`, `response`, `validation`, `events`, `env`, `middleware`, `messaging`, `domain`, `cassandra`, `processor` — 100 % de cobertura, exigida no CI |
 | API Gateway | `services/api-gateway/` | Router Chi com middlewares de request-id, real-IP, logging, recovery, CORS e rate limit; `GET /health`; endpoints de comando publicando no Kafka através de um producer protegido por circuit breaker; config tipada a partir do ambiente; testes unitários + de feature com 100 % de cobertura, teste de integração com Kafka no CI; rotas de leitura repassadas por proxy ao account service |
 | Account Service | `services/account-service/` | Consome `account.commands`, persiste clientes e contas no Cassandra (`fintech_accounts`, migrations aplicadas no boot), controla os saldos com créditos/débitos em compare-and-set, publica resultados — incluindo `account.credit_rejected` — em `account.events` e falhas em `account.dlq`; API de leitura na `:8082`; testes unitários + de feature com 100 % de `internal/app`, testes de integração com Cassandra e Kafka no CI |
 | Transaction Service | `services/transaction-service/` | Consome `transaction.commands` e as respostas do account service em `account.events`, registra depósitos, saques e transferências no Cassandra (`fintech_transactions`, migrations aplicadas no boot), orquestra cada um como uma saga sobre `account.commands` (débito → crédito → crédito compensatório em caso de falha) com chaves de idempotência por etapa, publica `transaction.created/completed/failed` e `transaction.transfer_completed/transfer_failed` em `transaction.events`, envia para dead-letter em `transaction.dlq`; API de leitura na `:8083`; testes unitários + de feature com 100 % de `internal/app`, testes de integração com Cassandra e Kafka no CI |
 | Payment Service | `services/payment-service/` | Consome `payment.commands` e as respostas do account service em `account.events`, guarda pagamentos por PIX, TED e boleto no Cassandra (`fintech_payments`, migrations aplicadas no boot), reserva os fundos com `account.debit`, submete a um provedor sandbox — PIX se resolve na hora, TED e boleto se resolvem por um webhook assinado — estorna rejeições com `account.credit`, publica `payment.created/processed/completed/failed` em `payment.events`, envia para dead-letter em `payment.dlq`; API de leitura e webhook na `:8084`; testes unitários + de feature com 100 % de `internal/app`, testes de integração com Cassandra e Kafka no CI |
+| Notification Service | `services/notification-service/` | Consome `account.events`, `transaction.events` e `payment.events` e transforma os resultados em e-mail, SMS e push em português, buscando os contatos no endpoint interno de titular do account service; os comandos de entrega em `notification.events` são enviados por SMTP (Mailpit em desenvolvimento) ou por provedores sandbox de SMS/push, registrados num histórico apoiado em Redis, e enviados para dead-letter em `notification.dlq`; API de leitura na `:8085`; testes unitários + de feature com 100 % de `internal/app`, testes de integração com Kafka, Redis e Mailpit no CI |
 
 ### Pacotes compartilhados
 
@@ -88,9 +87,12 @@ docker compose ps                     # espere tudo ficar healthy (~1–2 min)
 |---|---|---|
 | Kafka (KRaft) | `fintech-kafka` | 9092 |
 | Cassandra | `fintech-cassandra` | 9042 |
-| Redis | `fintech-redis` | 6379 |
+| Redis | `fintech-redis` | 6379 (`REDIS_PORT`) |
+| Mailpit | `fintech-mailpit` | 1025 SMTP (`MAILPIT_SMTP_PORT`) · 8025 UI (`MAILPIT_UI_PORT`) |
 | Kafka UI *(profile `ui`)* | `fintech-kafka-ui` | 8080 |
 | Cassandra Web *(profile `ui`)* | `fintech-cassandra-web` | 3000 |
+
+O Redis sustenta a idempotência e o histórico do notification service; o Mailpit captura os e-mails enviados por ele, com interface web em http://localhost:8025.
 
 ### API Gateway
 
@@ -181,6 +183,46 @@ O provedor sandbox informa a liquidação através de um webhook assinado: `POST
 
 **Limitações conhecidas.** Um pagamento fica em `pending` se o resultado do débito nunca chegar, em `debited` se o provedor continuar falhando depois das tentativas e o comando for para a dead-letter, em `submitted` se a liquidação nunca chegar (por exemplo, quando o sandbox perde um callback agendado porque o serviço reiniciou antes de `PAYMENT_SETTLEMENT_DELAY` passar) até que uma reconciliação o reenvie, e em `refunding` se o resultado do crédito de estorno nunca chegar. Pagamentos não terminais podem ser encontrados por `GET /accounts/{account_id}/payments`. Uma liquidação que chega antes de o id externo ser vinculado, ou enquanto a submissão ainda está sendo registrada, é retentada e enviada para a dead-letter como `conflict` se nunca for aplicada. Como nos outros serviços, um evento da dead-letter reenviado tal como está é ignorado como duplicado, então um replay precisa de um novo id de evento. No primeiro deploy o serviço lê `payment.commands` e `account.events` desde o início. Um sweeper de reconciliação está planejado para o Sprint 6 (veja o [roadmap](#roadmap)); antes que ele possa reenviar créditos e débitos com segurança, o account service precisa garantir as chaves de idempotência nessas operações.
 
+### Notification Service
+
+```bash
+cd services/notification-service
+cp .env.example .env
+docker compose up -d                  # hot reload com Air, publicado em :8085
+curl http://localhost:8085/health     # {"success":true,"data":{"status":"healthy","redis":"up"}}
+```
+
+Configuração: `SERVER_*`, `KAFKA_BROKERS` / `KAFKA_GROUP_ID` (padrão `notification-service`) / `KAFKA_*_TIMEOUT` / `KAFKA_MAX_ATTEMPTS`, `CONSUMER_RETRY_BACKOFF` / `CONSUMER_DRAIN_TIMEOUT`, `REDIS_ADDR` / `REDIS_PASSWORD` / `REDIS_DB`, `ACCOUNT_SERVICE_URL` / `ACCOUNT_DIRECTORY_TTL` (padrão `5m`) / `ACCOUNT_DIRECTORY_TIMEOUT` (padrão `3s`), `SMTP_ADDR` / `SMTP_FROM` (padrão `no-reply@fintech.local`), `NOTIFICATION_HISTORY_SIZE` (padrão `100`), `LOG_LEVEL` / `LOG_PRETTY`.
+
+O serviço roda dois tipos de consumer: o roteamento transforma eventos de resultado dos domínios em comandos de entrega, e a entrega os envia e registra o histórico.
+
+| Tópico | Grupo | Trata |
+|---|---|---|
+| `account.events` | `KAFKA_GROUP_ID-accounts` | roteia `account.created` |
+| `transaction.events` | `KAFKA_GROUP_ID-transactions` | roteia `transaction.completed`, `transaction.failed`, `transaction.transfer_completed`, `transaction.transfer_failed` |
+| `payment.events` | `KAFKA_GROUP_ID-payments` | roteia `payment.completed`, `payment.failed` |
+| `notification.events` | `KAFKA_GROUP_ID` | entrega `notification.email`, `notification.sms`, `notification.push`, com chave por id do usuário |
+
+O roteamento renderiza um entre oito templates em português e transforma cada evento de resultado nos canais abaixo, buscando o titular da conta no account service e ignorando contas que ele não conhece:
+
+| Evento | Destinatário | Canais |
+|---|---|---|
+| `account.created` | titular da conta | e-mail (boas-vindas) |
+| `transaction.completed` | titular da conta | push |
+| `transaction.failed` | titular da conta | push + e-mail |
+| `transaction.transfer_completed` | remetente e contraparte | push para os dois |
+| `transaction.transfer_failed` | remetente | push + e-mail |
+| `payment.completed` | titular da conta | push + e-mail |
+| `payment.failed` | titular da conta | push + e-mail, mais SMS quando `status` é `refund_failed` e o titular tem telefone |
+
+Falhas transitórias de roteamento e de entrega são retentadas com `CONSUMER_RETRY_BACKOFF` e depois enviadas para a dead-letter como `notification.command_failed` em `notification.dlq`. Os contatos vêm do endpoint interno `GET /accounts/{id}/owner` do account service (`{account_id, user_id, name, email, phone?}`, `404 ACCOUNT_NOT_FOUND`) — não exposto pelo gateway — cacheados em memória por `ACCOUNT_DIRECTORY_TTL`.
+
+A entrega envia e-mail por SMTP — Mailpit em desenvolvimento, com interface web em http://localhost:8025 — e SMS e push por provedores sandbox que apenas registram a mensagem em log; os valores nos templates aparecem como `R$ 1.234,56`. Um destinatário de e-mail malformado vai para a dead-letter em vez de ser retentado. A entrega é at-least-once: uma queda entre o envio e o commit pode repetir uma notificação.
+
+O Redis mantém uma marca `notification:processed:<id do evento>` por 7 dias para deduplicar entregas e uma lista `notification:history:<id do usuário>`, mais recentes primeiro e limitada a `NOTIFICATION_HISTORY_SIZE`; o compose raiz roda o Redis com `allkeys-lru` e 128 MB, então a deduplicação é best-effort quando a pressão de memória expulsa chaves antigas. API de histórico: `GET /users/{user_id}/notifications?limit=` (padrão 20, 1–100, `422` caso contrário) → `[{id, channel, recipient, subject?, body, source_event_id?, sent_at}]`.
+
+**Limitações conhecidas.** Os três grupos de consumer de roteamento (`-accounts`, `-transactions`, `-payments`) começam a partir do offset mais recente quando não têm offset registrado — num primeiro deploy, ou depois de um reset do grupo, eventos retidos não são reprocessados e só eventos publicados depois que o serviço sobe geram notificações. O grupo de entrega em `notification.events` continua lendo desde o início, como qualquer outro consumer da plataforma, então nenhum comando de entrega já publicado é perdido num redeploy.
+
 #### Endpoints de comando
 
 Toda escrita é aceita de forma assíncrona: o gateway valida o corpo, publica um comando no Kafka e responde `202` com o id do comando e o trace id (`X-Request-ID`).
@@ -209,7 +251,7 @@ Erros: `400 INVALID_JSON`, `413 PAYLOAD_TOO_LARGE` (corpo acima de 1 MiB), `422 
 
 #### Endpoints de leitura
 
-As leituras são repassadas por proxy ao account service via `ACCOUNT_SERVICE_URL`, ao transaction service via `TRANSACTION_SERVICE_URL` e ao payment service via `PAYMENT_SERVICE_URL`; `502 UPSTREAM_UNAVAILABLE` quando o upstream está fora do ar.
+As leituras são repassadas por proxy ao account service via `ACCOUNT_SERVICE_URL`, ao transaction service via `TRANSACTION_SERVICE_URL`, ao payment service via `PAYMENT_SERVICE_URL` e ao notification service via `NOTIFICATION_SERVICE_URL` (padrão `http://localhost:8085`); `502 UPSTREAM_UNAVAILABLE` quando o upstream está fora do ar.
 
 | Método | Caminho | Upstream |
 |---|---|---|
@@ -219,6 +261,7 @@ As leituras são repassadas por proxy ao account service via `ACCOUNT_SERVICE_UR
 | `GET` | `/api/v1/accounts/{account_id}/transactions` | `GET /accounts/{account_id}/transactions?limit=50` → `200` mais recentes primeiro (`limit` 1–200) |
 | `GET` | `/api/v1/payments/{id}` | `GET /payments/{id}` → `200` pagamento (`status` pending/debited/submitted/completed/failed/refunding/refunded/refund_failed), `404 PAYMENT_NOT_FOUND`, `422` |
 | `GET` | `/api/v1/accounts/{account_id}/payments` | `GET /accounts/{account_id}/payments?limit=50` → `200` mais recentes primeiro (`limit` 1–200) |
+| `GET` | `/api/v1/users/{user_id}/notifications` | `GET /users/{user_id}/notifications?limit=20` → `200` mais recentes primeiro (`limit` 1–100), `422` |
 
 ## Desenvolvimento
 
@@ -249,9 +292,15 @@ cd services/payment-service
 make test                                   # unit + feature, cobertura de ./internal/app/...
 make test-coverage                          # gera coverage.html
 make test-integration                       # precisa de KAFKA_BROKERS e CASSANDRA_HOSTS
+
+# notification service
+cd services/notification-service
+make test                                   # unit + feature, cobertura de ./internal/app/...
+make test-coverage                          # gera coverage.html
+make test-integration                       # precisa de KAFKA_BROKERS, REDIS_ADDR e SMTP_ADDR apontando para o Mailpit
 ```
 
-O CI (`.github/workflows/ci.yml`) roda a cada push e pull request em cinco jobs — `pkg`, `api-gateway` (com um container de serviço Kafka), `account-service`, `transaction-service` e `payment-service` (os três últimos com containers de serviço Kafka e Cassandra) — checagem de `gofmt` e as suítes de `pkg`, `api-gateway`, `account-service`, `transaction-service` e `payment-service`, falhando o build se a cobertura cair abaixo de 100 % (de `internal/app` para o account service, o transaction service e o payment service).
+O CI (`.github/workflows/ci.yml`) roda a cada push e pull request em seis jobs — `pkg`, `api-gateway` (com um container de serviço Kafka), `account-service`, `transaction-service` e `payment-service` (com containers de serviço Kafka e Cassandra) e `notification-service` (com containers de serviço Kafka, Redis e Mailpit) — checagem de `gofmt` e as suítes de `pkg`, `api-gateway`, `account-service`, `transaction-service`, `payment-service` e `notification-service`, falhando o build se a cobertura cair abaixo de 100 % (de `internal/app` para o account service, o transaction service, o payment service e o notification service).
 
 ## Estrutura do projeto
 
@@ -311,26 +360,43 @@ fintech-bank-platform/
     │   ├── tests/  (unit/ · feature/ · integration/)
     │   ├── Makefile · Dockerfile · docker-compose.yml · .air.toml
     │   └── .env.example
-    └── payment-service/
+    ├── payment-service/
+    │   ├── cmd/main.go                    ponto de entrada
+    │   ├── migrations/                    arquivos .cql numerados, aplicados no boot
+    │   ├── internal/
+    │   │   ├── config/                    env → Config tipada
+    │   │   ├── contracts/                 interfaces de config, messaging e repositórios
+    │   │   ├── app/
+    │   │   │   ├── models/                tipos de domínio
+    │   │   │   ├── services/              casos de uso de pagamentos e transições da saga
+    │   │   │   └── handlers/              dispatchers de comando, resposta e webhook, endpoints de leitura
+    │   │   └── infrastructure/
+    │   │       ├── database/              repositórios Cassandra e migrations
+    │   │       ├── gateway/               simulador do provedor sandbox
+    │   │       └── http/                  server, router, health, handlers de leitura
+    │   ├── tests/  (unit/ · feature/ · integration/)
+    │   ├── Makefile · Dockerfile · docker-compose.yml · .air.toml
+    │   └── .env.example
+    └── notification-service/
         ├── cmd/main.go                    ponto de entrada
-        ├── migrations/                    arquivos .cql numerados, aplicados no boot
         ├── internal/
         │   ├── config/                    env → Config tipada
-        │   ├── contracts/                 interfaces de config, messaging e repositórios
+        │   ├── contracts/                 interfaces de config, messaging, senders e storage
         │   ├── app/
         │   │   ├── models/                tipos de domínio
-        │   │   ├── services/              casos de uso de pagamentos e transições da saga
-        │   │   └── handlers/              dispatchers de comando, resposta e webhook, endpoints de leitura
+        │   │   ├── services/              roteamento, renderização e entrega, templates/
+        │   │   └── handlers/              endpoint de leitura do histórico
         │   └── infrastructure/
-        │       ├── database/              repositórios Cassandra e migrations
-        │       ├── gateway/               simulador do provedor sandbox
-        │       └── http/                  server, router, health, handlers de leitura
+        │       ├── directory/             cliente do endpoint de titular do account service, cache em memória
+        │       ├── senders/               senders de SMTP e sandbox de SMS/push
+        │       ├── storage/               cliente Redis, store de idempotência e histórico
+        │       └── http/                  server, router, health, handler do histórico
         ├── tests/  (unit/ · feature/ · integration/)
         ├── Makefile · Dockerfile · docker-compose.yml · .air.toml
         └── .env.example
 ```
 
-Cada serviço futuro segue o mesmo layout: `cmd/`, `internal/{config,contracts,infrastructure,app}`, `migrations/` (CQL) e `tests/`.
+Cada serviço futuro segue o mesmo layout: `cmd/`, `internal/{config,contracts,infrastructure,app}` e `tests/`, com `migrations/` (CQL) para os que persistem no Cassandra.
 
 ## Roadmap
 
@@ -340,7 +406,7 @@ Cada serviço futuro segue o mesmo layout: `cmd/`, `internal/{config,contracts,i
 - [x] **Sprint 2 — Account Service** — clientes e contas no Cassandra, saldo com compare-and-set, eventos de resultado, API de leitura repassada por proxy pelo gateway
 - [x] **Sprint 3 — Transaction Service** — depósitos, saques e transferências como sagas sobre o account service, chaves de idempotência, compensação, API de leitura repassada por proxy pelo gateway
 - [x] **Sprint 4 — Payment Service** — PIX, TED e boleto como sagas sobre o account service, provedor sandbox com webhooks assinados, estornos, API de leitura repassada por proxy pelo gateway
-- [ ] **Sprint 5 — Notification Service** — consumidores de e-mail, SMS e push
+- [x] **Sprint 5 — Notification Service** — e-mail, SMS e push a partir dos eventos de resultado, templates, idempotência e histórico apoiados em Redis, repassado por proxy pelo gateway
 - [ ] **Sprint 6** — testes end-to-end, de carga e um sweeper de reconciliação para transações e pagamentos presos
 - [ ] **Sprint 7** — observabilidade (Prometheus, Jaeger) e docs
 
