@@ -63,10 +63,12 @@ func TestProcessBoletoPaymentPublishesCommand(t *testing.T) {
 func TestProcessTedPaymentPublishesCommand(t *testing.T) {
 	pub := &tests.FakePublisher{}
 
-	rec, _ := call(paymentRouter(pub), http.MethodPost, "/payments", paymentBody(tests.UUID(), "ted", ""))
+	rec, _ := call(paymentRouter(pub), http.MethodPost, "/payments", paymentBody(tests.UUID(), "ted", `,"ted":{"bank_code":"341","branch":"0001","account":"123456","document":"52998224725"}`))
 
 	assert.Equal(t, http.StatusAccepted, rec.Code)
-	assert.Equal(t, "ted", pub.Last().Event.Payload.(events.ProcessPaymentPayload).PaymentMethod)
+	payload := pub.Last().Event.Payload.(events.ProcessPaymentPayload)
+	assert.Equal(t, "ted", payload.PaymentMethod)
+	assert.Equal(t, &events.TEDDetails{BankCode: "341", Branch: "0001", Account: "123456", Document: "52998224725"}, payload.TED)
 }
 
 func TestProcessPaymentRejectsMalformedJSON(t *testing.T) {
@@ -91,7 +93,7 @@ func TestProcessPaymentValidatesFields(t *testing.T) {
 	assert.Equal(t, "gt", details["amount"])
 	assert.Equal(t, "required", details["recipient"])
 	assert.Equal(t, "pix_key", details["pix_key"])
-	assert.Equal(t, "numeric", details["boleto_code"])
+	assert.Equal(t, "boleto", details["boleto_code"])
 	assert.Empty(t, pub.Published)
 }
 
@@ -119,7 +121,7 @@ func TestProcessBoletoPaymentRequiresBoletoCode(t *testing.T) {
 func TestProcessPaymentReturnsPublisherError(t *testing.T) {
 	pub := &tests.FakePublisher{Err: apperrors.ServiceUnavailable("PUBLISH_FAILED", "down")}
 
-	rec, _ := call(paymentRouter(pub), http.MethodPost, "/payments", paymentBody(tests.UUID(), "ted", ""))
+	rec, _ := call(paymentRouter(pub), http.MethodPost, "/payments", paymentBody(tests.UUID(), "ted", `,"ted":{"bank_code":"341","branch":"0001","account":"123456","document":"52998224725"}`))
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 }

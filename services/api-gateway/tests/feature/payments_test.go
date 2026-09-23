@@ -52,3 +52,41 @@ func (s *PaymentsTestSuite) TestPixPaymentWithoutKeyIsRejected() {
 
 	s.Empty(s.Publisher.Published)
 }
+
+func (s *PaymentsTestSuite) TestTedRequiresADestination() {
+	s.Post("/api/v1/payments", map[string]interface{}{
+		"account_id": tests.UUID(), "payment_method": "ted", "amount": 10, "currency": "BRL",
+		"recipient": "Ana Souza", "idempotency_key": "ted-1",
+	}).AssertUnprocessableEntity().AssertJsonPath("error.details.ted", "required")
+}
+
+func (s *PaymentsTestSuite) TestTedDestinationIsValidated() {
+	s.Post("/api/v1/payments", map[string]interface{}{
+		"account_id": tests.UUID(), "payment_method": "ted", "amount": 10, "currency": "BRL",
+		"recipient": "Ana Souza", "idempotency_key": "ted-2",
+		"ted": map[string]string{"bank_code": "34", "branch": "1", "account": "12", "document": "123"},
+	}).AssertUnprocessableEntity().
+		AssertJsonPath("error.details.bank_code", "len").
+		AssertJsonPath("error.details.branch", "agency_number").
+		AssertJsonPath("error.details.account", "account_number").
+		AssertJsonPath("error.details.document", "cpf|cnpj")
+}
+
+func (s *PaymentsTestSuite) TestTedIsPublishedWithItsDestination() {
+	s.Post("/api/v1/payments", map[string]interface{}{
+		"account_id": tests.UUID(), "payment_method": "ted", "amount": 10, "currency": "brl",
+		"recipient": "Ana Souza", "idempotency_key": "ted-3",
+		"ted": map[string]string{"bank_code": "341", "branch": "0001", "account": "123456", "document": "52998224725"},
+	}).AssertAccepted()
+
+	payload := s.Publisher.Last().Event.Payload.(events.ProcessPaymentPayload)
+	s.Equal(&events.TEDDetails{BankCode: "341", Branch: "0001", Account: "123456", Document: "52998224725"}, payload.TED)
+}
+
+func (s *PaymentsTestSuite) TestBoletoCheckDigitsAreValidated() {
+	s.Post("/api/v1/payments", map[string]interface{}{
+		"account_id": tests.UUID(), "payment_method": "boleto", "amount": 150, "currency": "BRL",
+		"recipient": "Energia SA", "idempotency_key": "bol-1",
+		"boleto_code": "34191790020100000012334567812309811000000015000",
+	}).AssertUnprocessableEntity().AssertJsonPath("error.details.boleto_code", "boleto")
+}

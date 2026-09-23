@@ -10,16 +10,24 @@ import (
 	"github.com/fintech-bank-platform/pkg/response"
 )
 
+type tedRequest struct {
+	BankCode string `json:"bank_code" validate:"required,len=3,numeric"`
+	Branch   string `json:"branch" validate:"required,agency_number"`
+	Account  string `json:"account" validate:"required,account_number"`
+	Document string `json:"document" validate:"required,cpf|cnpj"`
+}
+
 type paymentRequest struct {
-	AccountID      string  `json:"account_id" validate:"required,uuid"`
-	PaymentMethod  string  `json:"payment_method" validate:"required,oneof=pix ted boleto"`
-	Amount         float64 `json:"amount" validate:"required,gt=0"`
-	Currency       string  `json:"currency" validate:"required,currency"`
-	Recipient      string  `json:"recipient" validate:"required,max=120"`
-	PixKey         string  `json:"pix_key" validate:"omitempty,pix_key"`
-	BoletoCode     string  `json:"boleto_code" validate:"omitempty,numeric,len=47"`
-	Description    string  `json:"description" validate:"max=255"`
-	IdempotencyKey string  `json:"idempotency_key" validate:"required,max=64"`
+	AccountID      string      `json:"account_id" validate:"required,uuid"`
+	PaymentMethod  string      `json:"payment_method" validate:"required,oneof=pix ted boleto"`
+	Amount         float64     `json:"amount" validate:"required,gt=0"`
+	Currency       string      `json:"currency" validate:"required,currency"`
+	Recipient      string      `json:"recipient" validate:"required,max=120"`
+	PixKey         string      `json:"pix_key" validate:"omitempty,pix_key"`
+	BoletoCode     string      `json:"boleto_code" validate:"omitempty,boleto"`
+	TED            *tedRequest `json:"ted" validate:"omitempty"`
+	Description    string      `json:"description" validate:"max=255"`
+	IdempotencyKey string      `json:"idempotency_key" validate:"required,max=64"`
 }
 
 func (r paymentRequest) missingMethodField() string {
@@ -32,8 +40,19 @@ func (r paymentRequest) missingMethodField() string {
 		if r.BoletoCode == "" {
 			return "boleto_code"
 		}
+	case "ted":
+		if r.TED == nil {
+			return "ted"
+		}
 	}
 	return ""
+}
+
+func (r paymentRequest) tedDetails() *events.TEDDetails {
+	if r.TED == nil {
+		return nil
+	}
+	return &events.TEDDetails{BankCode: r.TED.BankCode, Branch: r.TED.Branch, Account: r.TED.Account, Document: r.TED.Document}
 }
 
 type PaymentHandler struct {
@@ -67,6 +86,7 @@ func (h *PaymentHandler) Process(w http.ResponseWriter, r *http.Request) {
 		Recipient:      req.Recipient,
 		PixKey:         req.PixKey,
 		BoletoCode:     req.BoletoCode,
+		TED:            req.tedDetails(),
 		Description:    req.Description,
 		IdempotencyKey: req.IdempotencyKey,
 	})
