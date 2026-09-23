@@ -6,10 +6,12 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/apache/cassandra-gocql-driver/v2"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/logger"
 	"github.com/fintech-bank-platform/pkg/messaging"
 	"github.com/fintech-bank-platform/pkg/processor"
+	"github.com/fintech-bank-platform/pkg/retry"
 	"github.com/fintech-bank-platform/transaction-service/internal/app/handlers"
 	"github.com/fintech-bank-platform/transaction-service/internal/app/services"
 	"github.com/fintech-bank-platform/transaction-service/internal/config"
@@ -31,22 +33,12 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	bootstrap, err := database.NewSession(cfg.Cassandra, "")
-	if err != nil {
-		log.Fatal().Err(err).Msg("Cassandra connection failed")
-	}
-	applied, err := database.NewMigrator(bootstrap, cfg.Cassandra.Keyspace, os.DirFS(cfg.Cassandra.MigrationsPath)).Up(ctx)
-	bootstrap.Close()
-	if err != nil {
-		log.Fatal().Err(err).Msg("Migrations failed")
-	}
-	log.Info().Ints("versions", applied).Msg("Migrations applied")
-
-	session, err := database.NewSession(cfg.Cassandra, cfg.Cassandra.Keyspace)
+	session, applied, err := connect(ctx, cfg, log)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Cassandra connection failed")
 	}
 	defer session.Close()
+	log.Info().Ints("versions", applied).Msg("Migrations applied")
 
 	service := services.NewTransactionService(database.NewTransactionRepository(session), services.SystemClock{}, uuid.New)
 
@@ -125,4 +117,33 @@ func runConsumer(ctx context.Context, group *errgroup.Group, log *logger.Logger,
 		})
 		return nil
 	})
+}
+
+func connect(ctx context.Context, cfg *config.Config, log *logger.Logger) (*gocql.Session, []int, error) {
+	var session *gocql.Session
+	var applied []int
+	attempt := 0
+	err := retry.Do(ctx, cfg.Startup.Attempts, cfg.Startup.Delay, func() error {
+		attempt++
+		bootstrap, err := database.NewSession(cfg.Cassandra, "")
+		if err != nil {
+			log.Warn().Err(err).Int("attempt", attempt).Msg("cassandra not ready, retrying")
+			return err
+		}
+		versions, err := database.NewMigrator(bootstrap, cfg.Cassandra.Keyspace, os.DirFS(cfg.Cassandra.MigrationsPath)).Up(ctx)
+		bootstrap.Close()
+		if err != nil {
+			log.Warn().Err(err).Int("attempt", attempt).Msg("cassandra not ready, retrying")
+			return err
+		}
+		s, err := database.NewSession(cfg.Cassandra, cfg.Cassandra.Keyspace)
+		if err != nil {
+			log.Warn().Err(err).Int("attempt", attempt).Msg("cassandra not ready, retrying")
+			return err
+		}
+		session = s
+		applied = versions
+		return nil
+	})
+	return session, applied, err
 }

@@ -15,6 +15,7 @@ type Config struct {
 	Consumer  contracts.ConsumerConfig
 	Log       contracts.LogConfig
 	Sweeper   contracts.SweeperConfig
+	Startup   contracts.StartupConfig
 }
 
 func New() (*Config, error) {
@@ -58,6 +59,10 @@ func New() (*Config, error) {
 			Interval:   positiveDuration(env.GetDuration("SWEEPER_INTERVAL", time.Minute), time.Minute),
 			StaleAfter: positiveDuration(env.GetDuration("SWEEPER_STALE_AFTER", 5*time.Minute), 5*time.Minute),
 			Batch:      env.GetIntMin("SWEEPER_BATCH", 100, 1),
+		},
+		Startup: contracts.StartupConfig{
+			Attempts: env.GetIntMin("STARTUP_RETRY_ATTEMPTS", 30, 1),
+			Delay:    positiveDuration(env.GetDuration("STARTUP_RETRY_DELAY", 2*time.Second), 2*time.Second),
 		},
 	}, nil
 }

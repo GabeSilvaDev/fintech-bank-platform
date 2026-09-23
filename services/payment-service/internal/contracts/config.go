@@ -56,3 +56,8 @@ type SweeperConfig struct {
 	StaleAfter time.Duration
 	Batch      int
 }
+
+type StartupConfig struct {
+	Attempts int
+	Delay    time.Duration
+}

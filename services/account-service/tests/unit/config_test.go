@@ -29,6 +29,8 @@ func TestConfigDefaults(t *testing.T) {
 	assert.Equal(t, "migrations", cfg.Cassandra.MigrationsPath)
 	assert.Equal(t, "info", cfg.Log.Level)
 	assert.False(t, cfg.Log.Pretty)
+	assert.Equal(t, 30, cfg.Startup.Attempts)
+	assert.Equal(t, 2*time.Second, cfg.Startup.Delay)
 }
 
 func TestConfigFromEnv(t *testing.T) {
@@ -45,6 +47,8 @@ func TestConfigFromEnv(t *testing.T) {
 	t.Setenv("CASSANDRA_MIGRATIONS_PATH", "/tmp/m")
 	t.Setenv("LOG_LEVEL", "debug")
 	t.Setenv("LOG_PRETTY", "true")
+	t.Setenv("STARTUP_RETRY_ATTEMPTS", "5")
+	t.Setenv("STARTUP_RETRY_DELAY", "500ms")
 
 	cfg, _ := config.New()
 
@@ -60,4 +64,17 @@ func TestConfigFromEnv(t *testing.T) {
 	assert.Equal(t, "/tmp/m", cfg.Cassandra.MigrationsPath)
 	assert.Equal(t, "debug", cfg.Log.Level)
 	assert.True(t, cfg.Log.Pretty)
+	assert.Equal(t, 5, cfg.Startup.Attempts)
+	assert.Equal(t, 500*time.Millisecond, cfg.Startup.Delay)
+}
+
+func TestConfigStartupInvalidValuesFallBackToDefaults(t *testing.T) {
+	t.Setenv("STARTUP_RETRY_ATTEMPTS", "0")
+	t.Setenv("STARTUP_RETRY_DELAY", "-1s")
+
+	cfg, err := config.New()
+
+	assert.NoError(t, err)
+	assert.Equal(t, 30, cfg.Startup.Attempts)
+	assert.Equal(t, 2*time.Second, cfg.Startup.Delay)
 }

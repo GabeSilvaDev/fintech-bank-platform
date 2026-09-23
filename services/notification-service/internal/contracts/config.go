@@ -52,3 +52,8 @@ type SMTPConfig struct {
 	From    string
 	Timeout time.Duration
 }
+
+type StartupConfig struct {
+	Attempts int
+	Delay    time.Duration
+}

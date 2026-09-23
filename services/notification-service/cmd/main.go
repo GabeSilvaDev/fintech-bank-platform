@@ -18,6 +18,7 @@ import (
 	"github.com/fintech-bank-platform/pkg/logger"
 	"github.com/fintech-bank-platform/pkg/messaging"
 	"github.com/fintech-bank-platform/pkg/processor"
+	"github.com/fintech-bank-platform/pkg/retry"
 	"github.com/go-chi/chi/v5"
 	"github.com/segmentio/kafka-go"
 	"golang.org/x/sync/errgroup"
@@ -34,7 +35,16 @@ func main() {
 	defer stop()
 
 	client := storage.NewClient(cfg.Redis)
-	if err := storage.Ping(client)(ctx); err != nil {
+	attempt := 0
+	err = retry.Do(ctx, cfg.Startup.Attempts, cfg.Startup.Delay, func() error {
+		attempt++
+		if err := storage.Ping(client)(ctx); err != nil {
+			log.Warn().Err(err).Int("attempt", attempt).Msg("redis not ready, retrying")
+			return err
+		}
+		return nil
+	})
+	if err != nil {
 		log.Fatal().Err(err).Msg("Redis connection failed")
 	}
 

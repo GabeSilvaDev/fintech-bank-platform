@@ -14,6 +14,7 @@ type Config struct {
 	Cassandra contracts.CassandraConfig
 	Consumer  contracts.ConsumerConfig
 	Log       contracts.LogConfig
+	Startup   contracts.StartupConfig
 }
 
 func New() (*Config, error) {
@@ -52,5 +53,16 @@ func New() (*Config, error) {
 			Level:  env.Get("LOG_LEVEL", "info"),
 			Pretty: env.GetBool("LOG_PRETTY", false),
 		},
+		Startup: contracts.StartupConfig{
+			Attempts: env.GetIntMin("STARTUP_RETRY_ATTEMPTS", 30, 1),
+			Delay:    positiveDuration(env.GetDuration("STARTUP_RETRY_DELAY", 2*time.Second), 2*time.Second),
+		},
 	}, nil
+}
+
+func positiveDuration(value, fallback time.Duration) time.Duration {
+	if value <= 0 {
+		return fallback
+	}
+	return value
 }

@@ -38,6 +38,8 @@ func TestConfigDefaults(t *testing.T) {
 	assert.Equal(t, "no-reply@fintech.local", cfg.SMTP.From)
 	assert.Equal(t, 10*time.Second, cfg.SMTP.Timeout)
 	assert.Equal(t, 100, cfg.HistorySize)
+	assert.Equal(t, 30, cfg.Startup.Attempts)
+	assert.Equal(t, 2*time.Second, cfg.Startup.Delay)
 }
 
 func TestConfigFromEnv(t *testing.T) {
@@ -56,6 +58,8 @@ func TestConfigFromEnv(t *testing.T) {
 	t.Setenv("SMTP_TIMEOUT", "2s")
 	t.Setenv("NOTIFICATION_HISTORY_SIZE", "0")
 	t.Setenv("NOTIFICATION_MAX_EVENT_AGE", "0")
+	t.Setenv("STARTUP_RETRY_ATTEMPTS", "5")
+	t.Setenv("STARTUP_RETRY_DELAY", "500ms")
 
 	cfg, err := config.New()
 
@@ -75,4 +79,17 @@ func TestConfigFromEnv(t *testing.T) {
 	assert.Equal(t, 2*time.Second, cfg.SMTP.Timeout)
 	assert.Equal(t, 100, cfg.HistorySize)
 	assert.Equal(t, time.Duration(0), cfg.Consumer.MaxEventAge)
+	assert.Equal(t, 5, cfg.Startup.Attempts)
+	assert.Equal(t, 500*time.Millisecond, cfg.Startup.Delay)
+}
+
+func TestConfigStartupInvalidValuesFallBackToDefaults(t *testing.T) {
+	t.Setenv("STARTUP_RETRY_ATTEMPTS", "0")
+	t.Setenv("STARTUP_RETRY_DELAY", "-1s")
+
+	cfg, err := config.New()
+
+	assert.NoError(t, err)
+	assert.Equal(t, 30, cfg.Startup.Attempts)
+	assert.Equal(t, 2*time.Second, cfg.Startup.Delay)
 }

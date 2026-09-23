@@ -17,6 +17,7 @@ type Config struct {
 	Directory   contracts.DirectoryConfig
 	SMTP        contracts.SMTPConfig
 	HistorySize int
+	Startup     contracts.StartupConfig
 }
 
 func New() (*Config, error) {
@@ -64,5 +65,16 @@ func New() (*Config, error) {
 			Timeout: env.GetDuration("SMTP_TIMEOUT", 10*time.Second),
 		},
 		HistorySize: env.GetIntMin("NOTIFICATION_HISTORY_SIZE", 100, 1),
+		Startup: contracts.StartupConfig{
+			Attempts: env.GetIntMin("STARTUP_RETRY_ATTEMPTS", 30, 1),
+			Delay:    positiveDuration(env.GetDuration("STARTUP_RETRY_DELAY", 2*time.Second), 2*time.Second),
+		},
 	}, nil
+}
+
+func positiveDuration(value, fallback time.Duration) time.Duration {
+	if value <= 0 {
+		return fallback
+	}
+	return value
 }

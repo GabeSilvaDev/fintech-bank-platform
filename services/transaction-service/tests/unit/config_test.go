@@ -33,6 +33,8 @@ func TestConfigDefaults(t *testing.T) {
 	assert.Equal(t, time.Minute, cfg.Sweeper.Interval)
 	assert.Equal(t, 5*time.Minute, cfg.Sweeper.StaleAfter)
 	assert.Equal(t, 100, cfg.Sweeper.Batch)
+	assert.Equal(t, 30, cfg.Startup.Attempts)
+	assert.Equal(t, 2*time.Second, cfg.Startup.Delay)
 }
 
 func TestConfigFromEnv(t *testing.T) {
@@ -53,6 +55,8 @@ func TestConfigFromEnv(t *testing.T) {
 	t.Setenv("SWEEPER_INTERVAL", "30s")
 	t.Setenv("SWEEPER_STALE_AFTER", "2m")
 	t.Setenv("SWEEPER_BATCH", "0")
+	t.Setenv("STARTUP_RETRY_ATTEMPTS", "5")
+	t.Setenv("STARTUP_RETRY_DELAY", "500ms")
 
 	cfg, _ := config.New()
 
@@ -72,6 +76,8 @@ func TestConfigFromEnv(t *testing.T) {
 	assert.Equal(t, 30*time.Second, cfg.Sweeper.Interval)
 	assert.Equal(t, 2*time.Minute, cfg.Sweeper.StaleAfter)
 	assert.Equal(t, 100, cfg.Sweeper.Batch)
+	assert.Equal(t, 5, cfg.Startup.Attempts)
+	assert.Equal(t, 500*time.Millisecond, cfg.Startup.Delay)
 }
 
 func TestConfigSweeperNonPositiveDurationsFallBackToDefaults(t *testing.T) {
@@ -83,4 +89,15 @@ func TestConfigSweeperNonPositiveDurationsFallBackToDefaults(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, time.Minute, cfg.Sweeper.Interval)
 	assert.Equal(t, 5*time.Minute, cfg.Sweeper.StaleAfter)
+}
+
+func TestConfigStartupInvalidValuesFallBackToDefaults(t *testing.T) {
+	t.Setenv("STARTUP_RETRY_ATTEMPTS", "0")
+	t.Setenv("STARTUP_RETRY_DELAY", "-1s")
+
+	cfg, err := config.New()
+
+	assert.NoError(t, err)
+	assert.Equal(t, 30, cfg.Startup.Attempts)
+	assert.Equal(t, 2*time.Second, cfg.Startup.Delay)
 }

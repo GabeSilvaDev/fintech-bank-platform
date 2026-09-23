@@ -42,3 +42,8 @@ type LogConfig struct {
 	Level  string
 	Pretty bool
 }
+
+type StartupConfig struct {
+	Attempts int
+	Delay    time.Duration
+}
