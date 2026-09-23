@@ -16,7 +16,7 @@ func redisClient(t *testing.T) *redis.Client {
 		t.Skip("REDIS_ADDR must be set")
 	}
 
-	client := redis.NewClient(&redis.Options{Addr: addr})
+	client := redis.NewClient(&redis.Options{Addr: addr, DB: 15})
 	t.Cleanup(func() {
 		client.Close()
 	})
