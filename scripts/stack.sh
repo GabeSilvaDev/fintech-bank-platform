@@ -2,6 +2,31 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+load_env() {
+  local file="$1" line key value
+  [ -f "$file" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    case "$line" in
+      '' | '#'*) continue ;;
+    esac
+    line="${line#export }"
+    key="${line%%=*}"
+    [ "$key" != "$line" ] || continue
+    [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+    [ -z "${!key+set}" ] || continue
+    value="${line#*=}"
+    case "$value" in
+      \"*\") value="${value:1:${#value}-2}" ;;
+      \'*\') value="${value:1:${#value}-2}" ;;
+    esac
+    export "$key=$value"
+  done <"$file"
+}
+
+load_env "$ROOT/.env"
+
 PROJECT=fintech-bank-platform
 SERVICES=(account-service transaction-service payment-service notification-service api-gateway)
 GATEWAY_URL="${GATEWAY_URL:-http://localhost:8081}"
