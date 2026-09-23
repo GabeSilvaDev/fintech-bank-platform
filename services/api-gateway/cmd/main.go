@@ -33,6 +33,11 @@ func main() {
 		log.Fatal().Err(err).Msg("Invalid PAYMENT_SERVICE_URL")
 	}
 
+	notificationService, err := url.Parse(cfg.Upstreams.NotificationService)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Invalid NOTIFICATION_SERVICE_URL")
+	}
+
 	producer := messaging.NewProducer(messaging.ProducerConfig{
 		Brokers:        cfg.Kafka.Brokers,
 		WriteTimeout:   cfg.Kafka.WriteTimeout,
@@ -43,11 +48,12 @@ func main() {
 
 	server := http.NewServer(cfg, log.Logger)
 	http.SetupRouter(server.Router(), cfg, http.Dependencies{
-		Publisher:          gwmsg.NewBreaker(producer, cfg.Kafka),
-		Logger:             log,
-		AccountService:     upstream,
-		TransactionService: transactionService,
-		PaymentService:     paymentService,
+		Publisher:           gwmsg.NewBreaker(producer, cfg.Kafka),
+		Logger:              log,
+		AccountService:      upstream,
+		TransactionService:  transactionService,
+		PaymentService:      paymentService,
+		NotificationService: notificationService,
 	})
 
 	err = server.Start()

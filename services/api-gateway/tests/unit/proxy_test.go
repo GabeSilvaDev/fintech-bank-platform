@@ -24,6 +24,7 @@ func proxyRouter(upstream, serviceName string) http.Handler {
 	r.Get("/api/v1/accounts/{account_id}/transactions", proxy.ServeHTTP)
 	r.Get("/api/v1/payments/{id}", proxy.ServeHTTP)
 	r.Get("/api/v1/accounts/{account_id}/payments", proxy.ServeHTTP)
+	r.Get("/api/v1/users/{user_id}/notifications", proxy.ServeHTTP)
 	return r
 }
 
@@ -155,4 +156,33 @@ func TestReadProxyAnswers502NamingThePaymentServiceWhenItIsDown(t *testing.T) {
 	errorBody := tests.FromJson(rec.Body.String())["error"].(map[string]interface{})
 	assert.Equal(t, "UPSTREAM_UNAVAILABLE", errorBody["code"])
 	assert.Equal(t, "payment service is unavailable", errorBody["message"])
+}
+
+func TestReadProxyForwardsNotificationPaths(t *testing.T) {
+	var paths []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.RequestURI())
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+	}))
+	defer upstream.Close()
+
+	rec := httptest.NewRecorder()
+	proxyRouter(upstream.URL, "notification service").ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/users/u1/notifications?limit=5", nil))
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, []string{"/users/u1/notifications?limit=5"}, paths)
+}
+
+func TestReadProxyAnswers502NamingTheNotificationServiceWhenItIsDown(t *testing.T) {
+	upstream := httptest.NewServer(http.NotFoundHandler())
+	upstream.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/users/u1/notifications", nil)
+	rec := httptest.NewRecorder()
+	proxyRouter(upstream.URL, "notification service").ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadGateway, rec.Code)
+	errorBody := tests.FromJson(rec.Body.String())["error"].(map[string]interface{})
+	assert.Equal(t, "UPSTREAM_UNAVAILABLE", errorBody["code"])
+	assert.Equal(t, "notification service is unavailable", errorBody["message"])
 }

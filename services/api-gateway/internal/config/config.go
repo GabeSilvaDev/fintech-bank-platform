@@ -27,9 +27,10 @@ func New() (*Config, error) {
 		Kafka:     loadKafkaConfig(),
 		Log:       loadLogConfig(),
 		Upstreams: contracts.UpstreamConfig{
-			AccountService:     env.Get("ACCOUNT_SERVICE_URL", "http://localhost:8082"),
-			TransactionService: env.Get("TRANSACTION_SERVICE_URL", "http://localhost:8083"),
-			PaymentService:     env.Get("PAYMENT_SERVICE_URL", "http://localhost:8084"),
+			AccountService:      env.Get("ACCOUNT_SERVICE_URL", "http://localhost:8082"),
+			TransactionService:  env.Get("TRANSACTION_SERVICE_URL", "http://localhost:8083"),
+			PaymentService:      env.Get("PAYMENT_SERVICE_URL", "http://localhost:8084"),
+			NotificationService: env.Get("NOTIFICATION_SERVICE_URL", "http://localhost:8085"),
 		},
 	}, nil
 }

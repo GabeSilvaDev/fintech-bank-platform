@@ -15,11 +15,12 @@ import (
 )
 
 type Dependencies struct {
-	Publisher          contracts.Publisher
-	Logger             *logger.Logger
-	AccountService     *url.URL
-	TransactionService *url.URL
-	PaymentService     *url.URL
+	Publisher           contracts.Publisher
+	Logger              *logger.Logger
+	AccountService      *url.URL
+	TransactionService  *url.URL
+	PaymentService      *url.URL
+	NotificationService *url.URL
 }
 
 func SetupRouter(router *chi.Mux, cfg *config.Config, deps Dependencies) {
@@ -39,6 +40,7 @@ func SetupRouter(router *chi.Mux, cfg *config.Config, deps Dependencies) {
 	accountReads := nethttp.StripPrefix("/api/v1", handlers.NewReadProxy(deps.AccountService, "account service"))
 	transactionReads := nethttp.StripPrefix("/api/v1", handlers.NewReadProxy(deps.TransactionService, "transaction service"))
 	paymentReads := nethttp.StripPrefix("/api/v1", handlers.NewReadProxy(deps.PaymentService, "payment service"))
+	notificationReads := nethttp.StripPrefix("/api/v1", handlers.NewReadProxy(deps.NotificationService, "notification service"))
 
 	router.Route("/api/v1", func(r chi.Router) {
 		r.Post("/accounts", account.Create)
@@ -53,5 +55,6 @@ func SetupRouter(router *chi.Mux, cfg *config.Config, deps Dependencies) {
 		r.Get("/accounts/{account_id}/payments", paymentReads.ServeHTTP)
 		r.Post("/payments", payment.Process)
 		r.Get("/payments/{id}", paymentReads.ServeHTTP)
+		r.Get("/users/{user_id}/notifications", notificationReads.ServeHTTP)
 	})
 }

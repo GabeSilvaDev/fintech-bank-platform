@@ -17,6 +17,7 @@ services:
       - ACCOUNT_SERVICE_URL=http://account-service:8082
       - TRANSACTION_SERVICE_URL=http://transaction-service:8083
       - PAYMENT_SERVICE_URL=http://payment-service:8084
+      - NOTIFICATION_SERVICE_URL=http://notification-service:8085
     networks:
       - fintech-network
     restart: unless-stopped
