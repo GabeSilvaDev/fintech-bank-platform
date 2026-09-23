@@ -47,6 +47,15 @@ func TestGetFloat(t *testing.T) {
 	assert.Equal(t, 1.0, GetFloat("ENV_TEST_MISSING", 1))
 }
 
+func TestGetFloatRejectsNonFiniteValues(t *testing.T) {
+	t.Setenv("ENV_TEST_FLOAT_NAN", "NaN")
+	t.Setenv("ENV_TEST_FLOAT_INF", "Inf")
+	t.Setenv("ENV_TEST_FLOAT_NEG_INF", "-Inf")
+	assert.Equal(t, 1.0, GetFloat("ENV_TEST_FLOAT_NAN", 1))
+	assert.Equal(t, 1.0, GetFloat("ENV_TEST_FLOAT_INF", 1))
+	assert.Equal(t, 1.0, GetFloat("ENV_TEST_FLOAT_NEG_INF", 1))
+}
+
 func TestGetBool(t *testing.T) {
 	t.Setenv("ENV_TEST_BOOL", "true")
 	t.Setenv("ENV_TEST_BOOL_BAD", "maybe")

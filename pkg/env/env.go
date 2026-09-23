@@ -1,6 +1,7 @@
 package env
 
 import (
+	"math"
 	"os"
 	"strconv"
 	"strings"
@@ -41,7 +42,7 @@ func GetUint32(key string, defaultValue uint32) uint32 {
 
 func GetFloat(key string, defaultValue float64) float64 {
 	if value, exists := os.LookupEnv(key); exists {
-		if parsed, err := strconv.ParseFloat(value, 64); err == nil {
+		if parsed, err := strconv.ParseFloat(value, 64); err == nil && !math.IsNaN(parsed) && !math.IsInf(parsed, 0) {
 			return parsed
 		}
 	}
