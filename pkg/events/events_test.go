@@ -390,3 +390,36 @@ func TestSprintThreePayloadsRoundTrip(t *testing.T) {
 	assert.Contains(t, string(data), `"account_id":"a"`)
 	assert.Contains(t, string(data), `"reason":""`)
 }
+
+func TestSprintFourEventTypes(t *testing.T) {
+	assert.Equal(t, "payment.created", EventTypes.PaymentCreated)
+	assert.Equal(t, "payment.submit", EventTypes.SubmitPayment)
+	assert.Equal(t, "payment.settle", EventTypes.SettlePayment)
+	assert.Equal(t, "payment.command_failed", EventTypes.PaymentCommandFailed)
+}
+
+func TestSprintFourPayloadsRoundTrip(t *testing.T) {
+	at := time.Date(2026, 9, 23, 10, 0, 0, 0, time.UTC)
+	payloads := []interface{}{
+		ProcessPaymentPayload{AccountID: "a", PaymentMethod: "ted", Amount: 10, Currency: "BRL", Recipient: "Ana", TED: &TEDDetails{BankCode: "341", Branch: "0001", Account: "123456", Document: "52998224725"}, IdempotencyKey: "k"},
+		SubmitPaymentPayload{PaymentID: "p"},
+		SettlePaymentPayload{ExternalID: "ted_1", Status: "rejected", Reason: "invalid_destination"},
+		PaymentCreatedPayload{PaymentID: "p", AccountID: "a", PaymentMethod: "pix", Amount: 1.5, Currency: "BRL", Recipient: "Ana", IdempotencyKey: "k", CreatedAt: at},
+		PaymentProcessedPayload{PaymentID: "p", AccountID: "a", PaymentMethod: "ted", Amount: 1.5, Currency: "BRL", ExternalID: "ted_1", Status: "submitted", ProcessedAt: at},
+		PaymentFailedPayload{PaymentID: "p", AccountID: "a", PaymentMethod: "boleto", Amount: 1.5, Currency: "BRL", Reason: "boleto_not_found", Status: "refunded", FailedAt: at},
+	}
+	for _, payload := range payloads {
+		raw, err := NewPaymentEvent(EventTypes.PaymentFailed, payload).ToJSON()
+		assert.NoError(t, err)
+		decoded, err := FromJSON(raw)
+		assert.NoError(t, err)
+		assert.NotEmpty(t, decoded.Payload)
+	}
+
+	raw, _ := NewPaymentCommand(EventTypes.ProcessPayment, ProcessPaymentPayload{PaymentMethod: "pix"}).ToJSON()
+	assert.NotContains(t, string(raw), `"ted"`)
+	raw, _ = NewPaymentCommand(EventTypes.ProcessPayment, payloads[0]).ToJSON()
+	assert.Contains(t, string(raw), `"ted":{"bank_code":"341","branch":"0001","account":"123456","document":"52998224725"}`)
+	raw, _ = NewPaymentEvent(EventTypes.SettlePayment, SettlePaymentPayload{ExternalID: "x", Status: "settled"}).ToJSON()
+	assert.NotContains(t, string(raw), `"reason"`)
+}

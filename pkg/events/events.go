@@ -138,11 +138,15 @@ var EventTypes = struct {
 	CancelPayment  string
 
 	// Payment Events
-	PaymentProcessed string
-	PaymentCompleted string
-	PaymentFailed    string
-	PaymentRefunded  string
-	PaymentCancelled string
+	PaymentCreated       string
+	PaymentProcessed     string
+	PaymentCompleted     string
+	SubmitPayment        string
+	SettlePayment        string
+	PaymentFailed        string
+	PaymentRefunded      string
+	PaymentCancelled     string
+	PaymentCommandFailed string
 
 	// Notification Events
 	SendEmail string
@@ -190,11 +194,15 @@ var EventTypes = struct {
 	CancelPayment:  "payment.cancel",
 
 	// Payment Events
-	PaymentProcessed: "payment.processed",
-	PaymentCompleted: "payment.completed",
-	PaymentFailed:    "payment.failed",
-	PaymentRefunded:  "payment.refunded",
-	PaymentCancelled: "payment.cancelled",
+	PaymentCreated:       "payment.created",
+	PaymentProcessed:     "payment.processed",
+	PaymentCompleted:     "payment.completed",
+	SubmitPayment:        "payment.submit",
+	SettlePayment:        "payment.settle",
+	PaymentFailed:        "payment.failed",
+	PaymentRefunded:      "payment.refunded",
+	PaymentCancelled:     "payment.cancelled",
+	PaymentCommandFailed: "payment.command_failed",
 
 	// Notification Events
 	SendEmail: "notification.email",
@@ -383,17 +391,25 @@ type TransferFailedPayload struct {
 	FailedAt      time.Time `json:"failed_at"`
 }
 
+type TEDDetails struct {
+	BankCode string `json:"bank_code"`
+	Branch   string `json:"branch"`
+	Account  string `json:"account"`
+	Document string `json:"document"`
+}
+
 // ProcessPaymentPayload represents the payload for processing a payment
 type ProcessPaymentPayload struct {
-	AccountID      string  `json:"account_id"`
-	PaymentMethod  string  `json:"payment_method"`
-	Amount         float64 `json:"amount"`
-	Currency       string  `json:"currency"`
-	Recipient      string  `json:"recipient"`
-	PixKey         string  `json:"pix_key,omitempty"`
-	BoletoCode     string  `json:"boleto_code,omitempty"`
-	Description    string  `json:"description,omitempty"`
-	IdempotencyKey string  `json:"idempotency_key"`
+	AccountID      string      `json:"account_id"`
+	PaymentMethod  string      `json:"payment_method"`
+	Amount         float64     `json:"amount"`
+	Currency       string      `json:"currency"`
+	Recipient      string      `json:"recipient"`
+	PixKey         string      `json:"pix_key,omitempty"`
+	BoletoCode     string      `json:"boleto_code,omitempty"`
+	TED            *TEDDetails `json:"ted,omitempty"`
+	Description    string      `json:"description,omitempty"`
+	IdempotencyKey string      `json:"idempotency_key"`
 }
 
 // PaymentCompletedPayload represents the payload for payment completed event
@@ -406,6 +422,50 @@ type PaymentCompletedPayload struct {
 	Status        string    `json:"status"`
 	ExternalID    string    `json:"external_id,omitempty"`
 	CompletedAt   time.Time `json:"completed_at"`
+}
+
+type SubmitPaymentPayload struct {
+	PaymentID string `json:"payment_id"`
+}
+
+type SettlePaymentPayload struct {
+	ExternalID string `json:"external_id"`
+	Status     string `json:"status"`
+	Reason     string `json:"reason,omitempty"`
+}
+
+type PaymentCreatedPayload struct {
+	PaymentID      string    `json:"payment_id"`
+	AccountID      string    `json:"account_id"`
+	PaymentMethod  string    `json:"payment_method"`
+	Amount         float64   `json:"amount"`
+	Currency       string    `json:"currency"`
+	Recipient      string    `json:"recipient"`
+	Description    string    `json:"description,omitempty"`
+	IdempotencyKey string    `json:"idempotency_key"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+type PaymentProcessedPayload struct {
+	PaymentID     string    `json:"payment_id"`
+	AccountID     string    `json:"account_id"`
+	PaymentMethod string    `json:"payment_method"`
+	Amount        float64   `json:"amount"`
+	Currency      string    `json:"currency"`
+	ExternalID    string    `json:"external_id"`
+	Status        string    `json:"status"`
+	ProcessedAt   time.Time `json:"processed_at"`
+}
+
+type PaymentFailedPayload struct {
+	PaymentID     string    `json:"payment_id"`
+	AccountID     string    `json:"account_id"`
+	PaymentMethod string    `json:"payment_method"`
+	Amount        float64   `json:"amount"`
+	Currency      string    `json:"currency"`
+	Reason        string    `json:"reason"`
+	Status        string    `json:"status"`
+	FailedAt      time.Time `json:"failed_at"`
 }
 
 // SendEmailPayload represents the payload for sending an email
