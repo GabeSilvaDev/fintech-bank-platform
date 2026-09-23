@@ -157,7 +157,7 @@ docker compose up -d                  # hot reload with Air, published on :8084
 curl http://localhost:8084/health     # {"success":true,"data":{"status":"healthy","cassandra":"up"}}
 ```
 
-Migrations in `migrations/*.cql` run at boot against `CASSANDRA_KEYSPACE` (default `fintech_payments`). Configuration reuses the transaction service's variable names, with `SERVER_PORT` defaulting to `8084`, `KAFKA_GROUP_ID` to `payment-service` and `CASSANDRA_KEYSPACE` to `fintech_payments`, plus `PAYMENT_WEBHOOK_SECRET` (required), `PAYMENT_WEBHOOK_URL` (default `http://localhost:8084/webhooks/gateway`), `PAYMENT_WEBHOOK_TOLERANCE` (default `5m`) and `PAYMENT_SETTLEMENT_DELAY` (default `2s`).
+Migrations in `migrations/*.cql` run at boot against `CASSANDRA_KEYSPACE` (default `fintech_payments`). Configuration reuses the transaction service's variable names, with `SERVER_PORT` defaulting to `8084`, `KAFKA_GROUP_ID` to `payment-service` and `CASSANDRA_KEYSPACE` to `fintech_payments`, plus `PAYMENT_WEBHOOK_SECRET` (required, at least 16 characters), `PAYMENT_WEBHOOK_URL` (default `http://localhost:8084/webhooks/gateway`), `PAYMENT_WEBHOOK_TOLERANCE` (default `5m`) and `PAYMENT_SETTLEMENT_DELAY` (default `2s`). The `dev-webhook-secret` value in `docker-compose.yml` and `.env.example` is for local development only; anywhere else, replace it with a random secret of at least 16 characters.
 
 Consumes `payment.commands` and the account service's replies on `account.events`:
 
@@ -179,7 +179,7 @@ The sandbox provider reports settlement through a signed webhook: `POST /webhook
 | Boleto code starting with `999` | rejected, `boleto_not_found` |
 | Anything else | settles; TED and boleto settle after `PAYMENT_SETTLEMENT_DELAY` |
 
-**Known limitations.** A payment stays `debited` if the provider keeps failing after the retries — the command is dead-lettered and a resubmission sweeper is planned for Sprint 6. A settlement that arrives while the submission is still being recorded is retried and dead-lettered as `conflict` if it never lands.
+**Known limitations.** A payment stays `pending` if the outcome of its debit never arrives, `debited` if the provider keeps failing after the retries and the command is dead-lettered, `submitted` if the settlement never arrives — for example when the sandbox loses a scheduled callback because the service restarted before `PAYMENT_SETTLEMENT_DELAY` elapsed; a resubmission redelivers it — and `refunding` if the outcome of the refund credit never arrives. Non-terminal payments can be found through `GET /accounts/{account_id}/payments`. A settlement that arrives before its external id is bound, or while the submission is still being recorded, is retried and dead-lettered as `conflict` if it never lands. As with the other services, a dead-lettered event replayed as-is is skipped as a duplicate, so a replay needs a new event id. On first deployment the service reads `payment.commands` and `account.events` from the beginning. A reconciliation sweeper is planned for Sprint 6 (see the [roadmap](#roadmap)); before it can safely re-send credits and debits, the account service has to enforce idempotency keys on them.
 
 #### Command endpoints
 

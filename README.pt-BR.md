@@ -157,7 +157,7 @@ docker compose up -d                  # hot reload com Air, publicado em :8084
 curl http://localhost:8084/health     # {"success":true,"data":{"status":"healthy","cassandra":"up"}}
 ```
 
-As migrations em `migrations/*.cql` rodam no boot contra o `CASSANDRA_KEYSPACE` (padrão `fintech_payments`). A configuração reaproveita os nomes de variável do transaction service, com `SERVER_PORT` padrão `8084`, `KAFKA_GROUP_ID` padrão `payment-service` e `CASSANDRA_KEYSPACE` padrão `fintech_payments`, mais `PAYMENT_WEBHOOK_SECRET` (obrigatória), `PAYMENT_WEBHOOK_URL` (padrão `http://localhost:8084/webhooks/gateway`), `PAYMENT_WEBHOOK_TOLERANCE` (padrão `5m`) e `PAYMENT_SETTLEMENT_DELAY` (padrão `2s`).
+As migrations em `migrations/*.cql` rodam no boot contra o `CASSANDRA_KEYSPACE` (padrão `fintech_payments`). A configuração reaproveita os nomes de variável do transaction service, com `SERVER_PORT` padrão `8084`, `KAFKA_GROUP_ID` padrão `payment-service` e `CASSANDRA_KEYSPACE` padrão `fintech_payments`, mais `PAYMENT_WEBHOOK_SECRET` (obrigatória, com pelo menos 16 caracteres), `PAYMENT_WEBHOOK_URL` (padrão `http://localhost:8084/webhooks/gateway`), `PAYMENT_WEBHOOK_TOLERANCE` (padrão `5m`) e `PAYMENT_SETTLEMENT_DELAY` (padrão `2s`). O valor `dev-webhook-secret` em `docker-compose.yml` e `.env.example` serve apenas para desenvolvimento local; em qualquer outro ambiente, substitua-o por um segredo aleatório com pelo menos 16 caracteres.
 
 Consome `payment.commands` e as respostas do account service em `account.events`:
 
@@ -179,7 +179,7 @@ O provedor sandbox informa a liquidação através de um webhook assinado: `POST
 | Código de boleto começando com `999` | rejeitado, `boleto_not_found` |
 | Qualquer outro valor | se resolve; TED e boleto se resolvem depois de `PAYMENT_SETTLEMENT_DELAY` |
 
-**Limitações conhecidas.** Um pagamento fica em `debited` se o provedor continuar falhando depois das tentativas — o comando vai para a dead-letter e um sweeper de resubmissão está planejado para o Sprint 6. Uma liquidação que chega enquanto a submissão ainda está sendo registrada é retentada e enviada para a dead-letter como `conflict` se nunca for aplicada.
+**Limitações conhecidas.** Um pagamento fica em `pending` se o resultado do débito nunca chegar, em `debited` se o provedor continuar falhando depois das tentativas e o comando for para a dead-letter, em `submitted` se a liquidação nunca chegar — por exemplo quando o sandbox perde um callback agendado porque o serviço reiniciou antes de `PAYMENT_SETTLEMENT_DELAY` passar; uma resubmissão o reenvia — e em `refunding` se o resultado do crédito de estorno nunca chegar. Pagamentos não terminais podem ser encontrados por `GET /accounts/{account_id}/payments`. Uma liquidação que chega antes de o id externo ser vinculado, ou enquanto a submissão ainda está sendo registrada, é retentada e enviada para a dead-letter como `conflict` se nunca for aplicada. Como nos outros serviços, um evento da dead-letter reenviado tal como está é ignorado como duplicado, então um replay precisa de um novo id de evento. No primeiro deploy o serviço lê `payment.commands` e `account.events` desde o início. Um sweeper de reconciliação está planejado para o Sprint 6 (veja o [roadmap](#roadmap)); antes que ele possa reenviar créditos e débitos com segurança, o account service precisa garantir as chaves de idempotência nessas operações.
 
 #### Endpoints de comando
 
