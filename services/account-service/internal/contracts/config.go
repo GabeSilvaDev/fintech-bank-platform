@@ -47,3 +47,9 @@ type StartupConfig struct {
 	Attempts int
 	Delay    time.Duration
 }
+
+type ObservabilityConfig struct {
+	MetricsEnabled bool
+	OTLPEndpoint   string
+	SampleRatio    float64
+}

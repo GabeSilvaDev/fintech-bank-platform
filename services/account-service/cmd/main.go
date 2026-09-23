@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/apache/cassandra-gocql-driver/v2"
 	"github.com/fintech-bank-platform/account-service/internal/app/handlers"
@@ -15,8 +16,10 @@ import (
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/logger"
 	"github.com/fintech-bank-platform/pkg/messaging"
+	"github.com/fintech-bank-platform/pkg/metrics"
 	"github.com/fintech-bank-platform/pkg/processor"
 	"github.com/fintech-bank-platform/pkg/retry"
+	"github.com/fintech-bank-platform/pkg/tracing"
 	"github.com/go-chi/chi/v5"
 	"github.com/segmentio/kafka-go"
 	"golang.org/x/sync/errgroup"
@@ -29,6 +32,28 @@ func main() {
 	}
 
 	log := logger.New(logger.Config{Level: cfg.Log.Level, Pretty: cfg.Log.Pretty})
+
+	shutdownTracing, err := tracing.Init(context.Background(), tracing.Config{
+		Service:     "account-service",
+		Endpoint:    cfg.Observability.OTLPEndpoint,
+		SampleRatio: cfg.Observability.SampleRatio,
+	})
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to initialize tracing")
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTracing(ctx); err != nil {
+			log.Error().Err(err).Msg("Failed to shutdown tracing")
+		}
+	}()
+
+	var m *metrics.Metrics
+	if cfg.Observability.MetricsEnabled {
+		m = metrics.New("account-service")
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -53,12 +78,13 @@ func main() {
 		BatchTimeout:   cfg.Kafka.BatchTimeout,
 		PublishTimeout: cfg.Kafka.PublishTimeout,
 		MaxAttempts:    cfg.Kafka.MaxAttempts,
-	})
+	}).WithMetrics(m)
 	proc := processor.NewProcessor(handlers.NewDispatcher(service), database.NewProcessedEventStore(session), producer, processor.Config{
 		Source:          "account-service",
 		FailedEventType: events.EventTypes.AccountCommandFailed,
 		DLQTopic:        events.Topics.AccountDLQ,
 		Backoff:         cfg.Consumer.RetryBackoff,
+		Metrics:         m,
 	}, log)
 	newConsumer := func() *messaging.Consumer {
 		return messaging.NewConsumer(messaging.ConsumerConfig{
@@ -66,6 +92,7 @@ func main() {
 			GroupID:      cfg.Kafka.GroupID,
 			Topic:        events.Topics.AccountCommands,
 			DrainTimeout: cfg.Consumer.DrainTimeout,
+			Metrics:      m,
 		})
 	}
 	handle := func(ctx context.Context, msg kafka.Message) error {
@@ -74,9 +101,10 @@ func main() {
 
 	router := chi.NewRouter()
 	http.SetupRouter(router, http.Dependencies{
-		Reads:  handlers.NewReadHandler(service),
-		Ping:   database.Ping(session),
-		Logger: log,
+		Reads:   handlers.NewReadHandler(service),
+		Ping:    database.Ping(session),
+		Logger:  log,
+		Metrics: m,
 	})
 	server := http.NewServer(cfg.Server, router)
 
