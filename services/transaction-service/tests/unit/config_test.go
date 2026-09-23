@@ -29,6 +29,10 @@ func TestConfigDefaults(t *testing.T) {
 	assert.Equal(t, "migrations", cfg.Cassandra.MigrationsPath)
 	assert.Equal(t, "info", cfg.Log.Level)
 	assert.False(t, cfg.Log.Pretty)
+	assert.True(t, cfg.Sweeper.Enabled)
+	assert.Equal(t, time.Minute, cfg.Sweeper.Interval)
+	assert.Equal(t, 5*time.Minute, cfg.Sweeper.StaleAfter)
+	assert.Equal(t, 100, cfg.Sweeper.Batch)
 }
 
 func TestConfigFromEnv(t *testing.T) {
@@ -45,6 +49,10 @@ func TestConfigFromEnv(t *testing.T) {
 	t.Setenv("CASSANDRA_MIGRATIONS_PATH", "/tmp/m")
 	t.Setenv("LOG_LEVEL", "debug")
 	t.Setenv("LOG_PRETTY", "true")
+	t.Setenv("SWEEPER_ENABLED", "false")
+	t.Setenv("SWEEPER_INTERVAL", "30s")
+	t.Setenv("SWEEPER_STALE_AFTER", "2m")
+	t.Setenv("SWEEPER_BATCH", "0")
 
 	cfg, _ := config.New()
 
@@ -60,4 +68,8 @@ func TestConfigFromEnv(t *testing.T) {
 	assert.Equal(t, "/tmp/m", cfg.Cassandra.MigrationsPath)
 	assert.Equal(t, "debug", cfg.Log.Level)
 	assert.True(t, cfg.Log.Pretty)
+	assert.False(t, cfg.Sweeper.Enabled)
+	assert.Equal(t, 30*time.Second, cfg.Sweeper.Interval)
+	assert.Equal(t, 2*time.Minute, cfg.Sweeper.StaleAfter)
+	assert.Equal(t, 100, cfg.Sweeper.Batch)
 }

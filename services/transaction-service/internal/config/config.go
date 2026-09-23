@@ -14,6 +14,7 @@ type Config struct {
 	Cassandra contracts.CassandraConfig
 	Consumer  contracts.ConsumerConfig
 	Log       contracts.LogConfig
+	Sweeper   contracts.SweeperConfig
 }
 
 func New() (*Config, error) {
@@ -51,6 +52,12 @@ func New() (*Config, error) {
 		Log: contracts.LogConfig{
 			Level:  env.Get("LOG_LEVEL", "info"),
 			Pretty: env.GetBool("LOG_PRETTY", false),
+		},
+		Sweeper: contracts.SweeperConfig{
+			Enabled:    env.GetBool("SWEEPER_ENABLED", true),
+			Interval:   env.GetDuration("SWEEPER_INTERVAL", time.Minute),
+			StaleAfter: env.GetDuration("SWEEPER_STALE_AFTER", 5*time.Minute),
+			Batch:      env.GetIntMin("SWEEPER_BATCH", 100, 1),
 		},
 	}, nil
 }

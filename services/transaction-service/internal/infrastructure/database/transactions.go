@@ -82,6 +82,27 @@ func (r *TransactionRepository) ListByAccount(ctx context.Context, accountID uui
 	return txns, nil
 }
 
+func (r *TransactionRepository) ListStale(ctx context.Context, before time.Time, limit int) ([]*models.Transaction, error) {
+	iter := r.session.Query("SELECT " + transactionColumns + " FROM transactions").WithContext(ctx).PageSize(500).Iter()
+	stale := []*models.Transaction{}
+	for len(stale) < limit {
+		tx, ok := scanTransactionIter(iter)
+		if !ok {
+			break
+		}
+		switch tx.Status {
+		case models.StatusPending, models.StatusDebited, models.StatusReversing:
+			if tx.UpdatedAt.Before(before) {
+				stale = append(stale, tx)
+			}
+		}
+	}
+	if err := iter.Close(); err != nil {
+		return nil, err
+	}
+	return stale, nil
+}
+
 func (r *TransactionRepository) Transition(ctx context.Context, id uuid.UUID, from, to models.TransactionStatus, patch models.Patch) (bool, error) {
 	assignments := []string{"status = ?", "updated_at = ?"}
 	values := []interface{}{string(to), patch.UpdatedAt}
@@ -108,45 +129,62 @@ func (r *TransactionRepository) Transition(ctx context.Context, id uuid.UUID, fr
 	return applied, cassandra.MapWriteError(err)
 }
 
+type transactionRow struct {
+	id, accountID                gocql.UUID
+	counterparty                 *gocql.UUID
+	kind, status, currency       string
+	description, key, reason     string
+	amount                       int64
+	fromBalance, toBalance       *int64
+	createdAt, updatedAt, closed time.Time
+}
+
+func (r *transactionRow) targets() []interface{} {
+	return []interface{}{&r.id, &r.kind, &r.status, &r.accountID, &r.counterparty, &r.amount, &r.currency, &r.description, &r.key, &r.reason, &r.fromBalance, &r.toBalance, &r.createdAt, &r.updatedAt, &r.closed}
+}
+
+func (r *transactionRow) model() *models.Transaction {
+	tx := &models.Transaction{
+		ID:               uuid.UUID(r.id),
+		Type:             models.TransactionType(r.kind),
+		Status:           models.TransactionStatus(r.status),
+		AccountID:        uuid.UUID(r.accountID),
+		AmountCents:      r.amount,
+		Currency:         r.currency,
+		Description:      r.description,
+		IdempotencyKey:   r.key,
+		FailureReason:    r.reason,
+		FromBalanceCents: r.fromBalance,
+		ToBalanceCents:   r.toBalance,
+		CreatedAt:        r.createdAt,
+		UpdatedAt:        r.updatedAt,
+	}
+	if r.counterparty != nil {
+		value := uuid.UUID(*r.counterparty)
+		tx.CounterpartyID = &value
+	}
+	if !r.closed.IsZero() {
+		tx.CompletedAt = &r.closed
+	}
+	return tx
+}
+
 func scanTransaction(query *gocql.Query) (*models.Transaction, error) {
-	var (
-		id, accountID                gocql.UUID
-		counterparty                 *gocql.UUID
-		kind, status, currency       string
-		description, key, reason     string
-		amount                       int64
-		fromBalance, toBalance       *int64
-		createdAt, updatedAt, closed time.Time
-	)
-	err := query.Scan(&id, &kind, &status, &accountID, &counterparty, &amount, &currency, &description, &key, &reason, &fromBalance, &toBalance, &createdAt, &updatedAt, &closed)
+	var row transactionRow
+	err := query.Scan(row.targets()...)
 	if errors.Is(err, gocql.ErrNotFound) {
 		return nil, domain.ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
+	return row.model(), nil
+}
 
-	tx := &models.Transaction{
-		ID:               uuid.UUID(id),
-		Type:             models.TransactionType(kind),
-		Status:           models.TransactionStatus(status),
-		AccountID:        uuid.UUID(accountID),
-		AmountCents:      amount,
-		Currency:         currency,
-		Description:      description,
-		IdempotencyKey:   key,
-		FailureReason:    reason,
-		FromBalanceCents: fromBalance,
-		ToBalanceCents:   toBalance,
-		CreatedAt:        createdAt,
-		UpdatedAt:        updatedAt,
+func scanTransactionIter(iter *gocql.Iter) (*models.Transaction, bool) {
+	var row transactionRow
+	if !iter.Scan(row.targets()...) {
+		return nil, false
 	}
-	if counterparty != nil {
-		value := uuid.UUID(*counterparty)
-		tx.CounterpartyID = &value
-	}
-	if !closed.IsZero() {
-		tx.CompletedAt = &closed
-	}
-	return tx, nil
+	return row.model(), true
 }

@@ -34,6 +34,7 @@ type FakeTransactionRepo struct {
 	CreateErr         error
 	ReserveErr        error
 	OnTransition      func()
+	StaleErr          error
 }
 
 func NewFakeTransactionRepo() *FakeTransactionRepo {
@@ -140,6 +141,30 @@ func (f *FakeTransactionRepo) Transition(_ context.Context, id uuid.UUID, from, 
 		tx.CompletedAt = patch.CompletedAt
 	}
 	return true, nil
+}
+
+func (f *FakeTransactionRepo) ListStale(_ context.Context, before time.Time, limit int) ([]*models.Transaction, error) {
+	if f.StaleErr != nil {
+		return nil, f.StaleErr
+	}
+	if f.Err != nil {
+		return nil, f.Err
+	}
+	result := []*models.Transaction{}
+	for _, tx := range f.Transactions {
+		switch tx.Status {
+		case models.StatusPending, models.StatusDebited, models.StatusReversing:
+			if tx.UpdatedAt.Before(before) {
+				copied := *tx
+				result = append(result, &copied)
+			}
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID.String() < result[j].ID.String() })
+	if len(result) > limit {
+		result = result[:limit]
+	}
+	return result, nil
 }
 
 type FakeStore struct {

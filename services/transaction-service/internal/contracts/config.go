@@ -42,3 +42,10 @@ type LogConfig struct {
 	Level  string
 	Pretty bool
 }
+
+type SweeperConfig struct {
+	Enabled    bool
+	Interval   time.Duration
+	StaleAfter time.Duration
+	Batch      int
+}

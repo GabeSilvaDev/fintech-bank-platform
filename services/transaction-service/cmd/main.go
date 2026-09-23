@@ -57,6 +57,8 @@ func main() {
 		PublishTimeout: cfg.Kafka.PublishTimeout,
 		MaxAttempts:    cfg.Kafka.MaxAttempts,
 	})
+	sweeper := services.NewSweeper(service, producer, services.SystemClock{}, cfg.Sweeper, log)
+
 	store := database.NewProcessedEventStore(session)
 	processorCfg := processor.Config{
 		Source:          "transaction-service",
@@ -78,6 +80,12 @@ func main() {
 	group, groupCtx := errgroup.WithContext(ctx)
 	runConsumer(groupCtx, group, log, cfg, events.Topics.TransactionCommands, cfg.Kafka.GroupID, commands)
 	runConsumer(groupCtx, group, log, cfg, events.Topics.AccountEvents, cfg.Kafka.GroupID+"-replies", replies)
+	if cfg.Sweeper.Enabled {
+		group.Go(func() error {
+			sweeper.Run(groupCtx)
+			return nil
+		})
+	}
 	group.Go(func() error {
 		log.Info().Str("address", cfg.Server.Address()).Msg("Server starting")
 		return server.Start()
