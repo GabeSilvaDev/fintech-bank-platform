@@ -14,8 +14,10 @@ import (
 	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/logger"
+	"github.com/fintech-bank-platform/pkg/metrics"
 	"github.com/fintech-bank-platform/pkg/processor"
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -102,4 +104,50 @@ func TestDeliveryFailuresAndHistoryErrors(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, h.push.Sent, 1)
 	assert.Contains(t, h.logs.String(), "notification history not recorded")
+}
+
+func sentCount(t *testing.T, m *metrics.Metrics, channel, outcome string) float64 {
+	t.Helper()
+	counter := m.CounterVec(services.SentTotalName, services.SentTotalHelp, "channel", "outcome")
+	return testutil.ToFloat64(counter.WithLabelValues(channel, outcome))
+}
+
+func TestDeliveryIncrementsSentCounterOnSuccess(t *testing.T) {
+	h := newDeliveryHarness()
+	m := metrics.New("test-notification-delivery-sent")
+	h.delivery.WithMetrics(m)
+	user := uuid.New()
+
+	_, err := h.delivery.Dispatch(context.Background(), notification(events.EventTypes.SendEmail, events.SendEmailPayload{To: "ana@example.com"}, user))
+
+	assert.NoError(t, err)
+	assert.Equal(t, float64(1), sentCount(t, m, "email", "ok"))
+	assert.Equal(t, float64(0), sentCount(t, m, "email", "error"))
+}
+
+func TestDeliveryIncrementsSentCounterOnSendFailure(t *testing.T) {
+	h := newDeliveryHarness()
+	m := metrics.New("test-notification-delivery-sent-failure")
+	h.delivery.WithMetrics(m)
+	user := uuid.New()
+	h.push.Errs = []error{errors.New("fcm down")}
+
+	_, err := h.delivery.Dispatch(context.Background(), notification(events.EventTypes.SendPush, events.SendPushPayload{UserID: user.String(), Title: "T"}, user))
+
+	assert.EqualError(t, err, "fcm down")
+	assert.Equal(t, float64(1), sentCount(t, m, "push", "error"))
+	assert.Equal(t, float64(0), sentCount(t, m, "push", "ok"))
+}
+
+func TestDeliveryDoesNotIncrementSentCounterOnUnsupportedChannel(t *testing.T) {
+	h := newDeliveryHarness()
+	m := metrics.New("test-notification-delivery-sent-unsupported")
+	user := uuid.New()
+	partial := services.NewDelivery(map[models.Channel]contracts.Sender{}, h.history, tests.FakeClock{T: sentAt}, logger.New(logger.Config{Output: h.logs})).WithMetrics(m)
+
+	_, err := partial.Dispatch(context.Background(), notification(events.EventTypes.SendPush, events.SendPushPayload{UserID: user.String()}, user))
+
+	assert.Equal(t, "unsupported_channel", domain.InvalidCode(err))
+	assert.Equal(t, float64(0), sentCount(t, m, "push", "ok"))
+	assert.Equal(t, float64(0), sentCount(t, m, "push", "error"))
 }

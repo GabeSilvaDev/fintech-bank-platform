@@ -4,6 +4,7 @@ import (
 	"context"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/fintech-bank-platform/notification-service/internal/app/handlers"
 	"github.com/fintech-bank-platform/notification-service/internal/app/models"
@@ -17,8 +18,10 @@ import (
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/logger"
 	"github.com/fintech-bank-platform/pkg/messaging"
+	"github.com/fintech-bank-platform/pkg/metrics"
 	"github.com/fintech-bank-platform/pkg/processor"
 	"github.com/fintech-bank-platform/pkg/retry"
+	"github.com/fintech-bank-platform/pkg/tracing"
 	"github.com/go-chi/chi/v5"
 	"github.com/segmentio/kafka-go"
 	"golang.org/x/sync/errgroup"
@@ -31,6 +34,28 @@ func main() {
 	}
 
 	log := logger.New(logger.Config{Level: cfg.Log.Level, Pretty: cfg.Log.Pretty})
+
+	shutdownTracing, err := tracing.Init(context.Background(), tracing.Config{
+		Service:     "notification-service",
+		Endpoint:    cfg.Observability.OTLPEndpoint,
+		SampleRatio: cfg.Observability.SampleRatio,
+	})
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to initialize tracing")
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTracing(ctx); err != nil {
+			log.Error().Err(err).Msg("Failed to shutdown tracing")
+		}
+	}()
+
+	var m *metrics.Metrics
+	if cfg.Observability.MetricsEnabled {
+		m = metrics.New("notification-service")
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -61,7 +86,7 @@ func main() {
 		models.ChannelPush:  senders.NewSandbox(models.ChannelPush, log),
 	}
 	history := storage.NewHistory(client, cfg.HistorySize)
-	delivery := services.NewDelivery(senderMap, history, services.SystemClock{}, log)
+	delivery := services.NewDelivery(senderMap, history, services.SystemClock{}, log).WithMetrics(m)
 
 	producer := messaging.NewProducer(messaging.ProducerConfig{
 		Brokers:        cfg.Kafka.Brokers,
@@ -69,7 +94,7 @@ func main() {
 		BatchTimeout:   cfg.Kafka.BatchTimeout,
 		PublishTimeout: cfg.Kafka.PublishTimeout,
 		MaxAttempts:    cfg.Kafka.MaxAttempts,
-	})
+	}).WithMetrics(m)
 
 	store := storage.NewStore(client)
 	processorCfg := processor.Config{
@@ -77,6 +102,7 @@ func main() {
 		FailedEventType: events.EventTypes.NotificationCommandFailed,
 		DLQTopic:        events.Topics.NotificationDLQ,
 		Backoff:         cfg.Consumer.RetryBackoff,
+		Metrics:         m,
 	}
 	routingProcessor := processor.NewProcessor(router, store, producer, processorCfg, log)
 	deliveryProcessor := processor.NewProcessor(delivery, store, producer, processorCfg, log)
@@ -86,14 +112,15 @@ func main() {
 		History: handlers.NewHistoryHandler(history),
 		Ping:    storage.Ping(client),
 		Logger:  log,
+		Metrics: m,
 	})
 	server := appHttp.NewServer(cfg.Server, chiRouter)
 
 	group, groupCtx := errgroup.WithContext(ctx)
-	runConsumer(groupCtx, group, log, cfg, events.Topics.AccountEvents, cfg.Kafka.GroupID+"-accounts", kafka.FirstOffset, routingProcessor)
-	runConsumer(groupCtx, group, log, cfg, events.Topics.TransactionEvents, cfg.Kafka.GroupID+"-transactions", kafka.FirstOffset, routingProcessor)
-	runConsumer(groupCtx, group, log, cfg, events.Topics.PaymentEvents, cfg.Kafka.GroupID+"-payments", kafka.FirstOffset, routingProcessor)
-	runConsumer(groupCtx, group, log, cfg, events.Topics.NotificationEvents, cfg.Kafka.GroupID, kafka.FirstOffset, deliveryProcessor)
+	runConsumer(groupCtx, group, log, cfg, m, events.Topics.AccountEvents, cfg.Kafka.GroupID+"-accounts", kafka.FirstOffset, routingProcessor)
+	runConsumer(groupCtx, group, log, cfg, m, events.Topics.TransactionEvents, cfg.Kafka.GroupID+"-transactions", kafka.FirstOffset, routingProcessor)
+	runConsumer(groupCtx, group, log, cfg, m, events.Topics.PaymentEvents, cfg.Kafka.GroupID+"-payments", kafka.FirstOffset, routingProcessor)
+	runConsumer(groupCtx, group, log, cfg, m, events.Topics.NotificationEvents, cfg.Kafka.GroupID, kafka.FirstOffset, deliveryProcessor)
 	group.Go(func() error {
 		log.Info().Str("address", cfg.Server.Address()).Msg("Server starting")
 		return server.Start()
@@ -115,7 +142,7 @@ func main() {
 	log.Info().Msg("Service stopped")
 }
 
-func runConsumer(ctx context.Context, group *errgroup.Group, log *logger.Logger, cfg *config.Config, topic, groupID string, startOffset int64, proc *processor.Processor) {
+func runConsumer(ctx context.Context, group *errgroup.Group, log *logger.Logger, cfg *config.Config, m *metrics.Metrics, topic, groupID string, startOffset int64, proc *processor.Processor) {
 	newConsumer := func() *messaging.Consumer {
 		return messaging.NewConsumer(messaging.ConsumerConfig{
 			Brokers:      cfg.Kafka.Brokers,
@@ -123,6 +150,7 @@ func runConsumer(ctx context.Context, group *errgroup.Group, log *logger.Logger,
 			Topic:        topic,
 			DrainTimeout: cfg.Consumer.DrainTimeout,
 			StartOffset:  startOffset,
+			Metrics:      m,
 		})
 	}
 	handle := func(ctx context.Context, msg kafka.Message) error {

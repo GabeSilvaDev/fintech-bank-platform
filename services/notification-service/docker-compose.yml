@@ -18,6 +18,7 @@ services:
       - REDIS_ADDR=redis:6379
       - ACCOUNT_SERVICE_URL=http://account-service:8082
       - SMTP_ADDR=mailpit:1025
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-}
     networks:
       - fintech-network
     restart: unless-stopped

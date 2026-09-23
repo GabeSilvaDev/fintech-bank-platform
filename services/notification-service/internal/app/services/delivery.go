@@ -9,8 +9,15 @@ import (
 	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/logger"
+	"github.com/fintech-bank-platform/pkg/metrics"
 	"github.com/fintech-bank-platform/pkg/processor"
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
+)
+
+const (
+	SentTotalName = "notifications_sent_total"
+	SentTotalHelp = "Total number of notification send attempts by channel and outcome"
 )
 
 type Delivery struct {
@@ -18,10 +25,16 @@ type Delivery struct {
 	history contracts.History
 	clock   contracts.Clock
 	log     *logger.Logger
+	sent    *prometheus.CounterVec
 }
 
 func NewDelivery(senders map[models.Channel]contracts.Sender, history contracts.History, clock contracts.Clock, log *logger.Logger) *Delivery {
-	return &Delivery{senders: senders, history: history, clock: clock, log: log}
+	return (&Delivery{senders: senders, history: history, clock: clock, log: log}).WithMetrics(nil)
+}
+
+func (d *Delivery) WithMetrics(m *metrics.Metrics) *Delivery {
+	d.sent = m.CounterVec(SentTotalName, SentTotalHelp, "channel", "outcome")
+	return d
 }
 
 func (d *Delivery) Dispatch(ctx context.Context, event *events.Event) (processor.Result, error) {
@@ -42,8 +55,10 @@ func (d *Delivery) Dispatch(ctx context.Context, event *events.Event) (processor
 		return processor.Result{}, domain.Invalid("unsupported_channel", "no sender for channel "+string(message.Channel))
 	}
 	if err := sender.Send(ctx, message); err != nil {
+		d.sent.WithLabelValues(string(message.Channel), "error").Inc()
 		return processor.Result{}, err
 	}
+	d.sent.WithLabelValues(string(message.Channel), "ok").Inc()
 
 	record := models.Record{
 		ID:            event.ID,
