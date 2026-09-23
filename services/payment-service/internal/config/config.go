@@ -9,7 +9,11 @@ import (
 	"github.com/joho/godotenv"
 )
 
-const minWebhookSecretLength = 16
+const (
+	minWebhookSecretLength = 16
+	defaultSweeperMaxAge   = 24 * time.Hour
+	balanceOperationTTL    = 720 * time.Hour
+)
 
 type Config struct {
 	Server    contracts.ServerConfig
@@ -36,6 +40,11 @@ func New() (*Config, error) {
 	}
 	if len(payment.WebhookSecret) < minWebhookSecretLength {
 		return nil, errors.New("PAYMENT_WEBHOOK_SECRET must have at least 16 characters")
+	}
+
+	maxAge := positiveDuration(env.GetDuration("SWEEPER_MAX_AGE", defaultSweeperMaxAge), defaultSweeperMaxAge)
+	if maxAge >= balanceOperationTTL {
+		return nil, errors.New("SWEEPER_MAX_AGE must be shorter than 720h, the balance operation retention")
 	}
 
 	return &Config{
@@ -76,6 +85,7 @@ func New() (*Config, error) {
 			Enabled:    env.GetBool("SWEEPER_ENABLED", true),
 			Interval:   positiveDuration(env.GetDuration("SWEEPER_INTERVAL", time.Minute), time.Minute),
 			StaleAfter: positiveDuration(env.GetDuration("SWEEPER_STALE_AFTER", 5*time.Minute), 5*time.Minute),
+			MaxAge:     maxAge,
 			Batch:      env.GetIntMin("SWEEPER_BATCH", 100, 1),
 		},
 		Startup: contracts.StartupConfig{

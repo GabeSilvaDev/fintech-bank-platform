@@ -46,6 +46,7 @@ type FakePaymentRepo struct {
 	BindErr           error
 	FindErr           error
 	StaleErr          error
+	StaleMaxAges      []time.Duration
 }
 
 func NewFakePaymentRepo() *FakePaymentRepo {
@@ -173,7 +174,8 @@ func (f *FakePaymentRepo) Touch(_ context.Context, id uuid.UUID, status models.S
 	return true, nil
 }
 
-func (f *FakePaymentRepo) ListStale(_ context.Context, before time.Time, limit int) ([]*models.Payment, error) {
+func (f *FakePaymentRepo) ListStale(_ context.Context, before time.Time, maxAge time.Duration, limit int) ([]*models.Payment, error) {
+	f.StaleMaxAges = append(f.StaleMaxAges, maxAge)
 	if f.StaleErr != nil {
 		return nil, f.StaleErr
 	}

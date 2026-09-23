@@ -122,7 +122,7 @@ func (r *PaymentRepository) FindByExternalID(ctx context.Context, externalID str
 	return uuid.UUID(id), nil
 }
 
-func (r *PaymentRepository) ListStale(ctx context.Context, before time.Time, limit int) ([]*models.Payment, error) {
+func (r *PaymentRepository) ListStale(ctx context.Context, before time.Time, maxAge time.Duration, limit int) ([]*models.Payment, error) {
 	iter := r.session.Query("SELECT " + paymentColumns + " FROM payments").WithContext(ctx).PageSize(500).Iter()
 	stale := []*models.Payment{}
 	for len(stale) < limit {
@@ -132,7 +132,7 @@ func (r *PaymentRepository) ListStale(ctx context.Context, before time.Time, lim
 		}
 		switch payment.Status {
 		case models.StatusPending, models.StatusDebited, models.StatusSubmitted, models.StatusRefunding:
-			if payment.UpdatedAt.Before(before) {
+			if payment.UpdatedAt.Before(before) && !payment.UpdatedAt.After(payment.CreatedAt.Add(maxAge)) {
 				stale = append(stale, payment)
 			}
 		}

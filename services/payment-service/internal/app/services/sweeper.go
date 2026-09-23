@@ -23,8 +23,8 @@ func NewSweeper(service *PaymentService, publisher contracts.Publisher, clock co
 }
 
 func (s *Sweeper) RunOnce(ctx context.Context) (int, error) {
-	before := s.clock.Now().Add(-s.cfg.StaleAfter)
-	stale, err := s.service.ListStale(ctx, before, s.cfg.Batch)
+	now := s.clock.Now()
+	stale, err := s.service.ListStale(ctx, now.Add(-s.cfg.StaleAfter), s.cfg.MaxAge, s.cfg.Batch)
 	if err != nil {
 		return 0, err
 	}
@@ -33,6 +33,10 @@ func (s *Sweeper) RunOnce(ctx context.Context) (int, error) {
 	for _, payment := range stale {
 		if err := ctx.Err(); err != nil {
 			return resent, err
+		}
+		if now.Sub(payment.CreatedAt) > s.cfg.MaxAge {
+			s.exhaust(ctx, payment, now)
+			continue
 		}
 
 		res, err := s.service.Reconcile(ctx, payment)
@@ -64,6 +68,24 @@ func (s *Sweeper) RunOnce(ctx context.Context) (int, error) {
 		resent++
 	}
 	return resent, nil
+}
+
+func (s *Sweeper) exhaust(ctx context.Context, payment *models.Payment, now time.Time) {
+	if payment.UpdatedAt.After(payment.CreatedAt.Add(s.cfg.MaxAge)) {
+		return
+	}
+	alert, err := s.service.Exhaust(ctx, payment)
+	if errors.Is(err, ErrTouchLost) {
+		return
+	}
+	if err != nil {
+		s.log.Error().Err(err).Str("payment_id", payment.ID.String()).Str("status", string(payment.Status)).Msg("reconciliation failed")
+		return
+	}
+	if err := s.publisher.Publish(ctx, alert.Topic, alert.Key, alert.Event); err != nil {
+		s.log.Error().Err(err).Str("payment_id", payment.ID.String()).Str("status", string(payment.Status)).Msg("reconciliation alert publish failed")
+	}
+	s.log.Error().Str("payment_id", payment.ID.String()).Str("status", string(payment.Status)).Dur("age", now.Sub(payment.CreatedAt)).Msg("reconciliation exhausted")
 }
 
 func (s *Sweeper) Run(ctx context.Context) {

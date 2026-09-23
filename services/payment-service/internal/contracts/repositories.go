@@ -16,7 +16,7 @@ type PaymentRepository interface {
 	Transition(ctx context.Context, id uuid.UUID, from, to models.Status, patch models.Patch) (bool, error)
 	BindExternalID(ctx context.Context, externalID string, id uuid.UUID) error
 	FindByExternalID(ctx context.Context, externalID string) (uuid.UUID, error)
-	ListStale(ctx context.Context, before time.Time, limit int) ([]*models.Payment, error)
+	ListStale(ctx context.Context, before time.Time, maxAge time.Duration, limit int) ([]*models.Payment, error)
 	Touch(ctx context.Context, id uuid.UUID, status models.Status, observed, now time.Time) (bool, error)
 }
 
