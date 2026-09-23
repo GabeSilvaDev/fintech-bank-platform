@@ -69,6 +69,10 @@ func (h *PaymentHandler) Process(w http.ResponseWriter, r *http.Request) {
 		response.FromError(w, err)
 		return
 	}
+	if req.TED != nil && req.PaymentMethod != "ted" {
+		response.FromError(w, errors.UnprocessableEntity("VALIDATION_ERROR", "request validation failed").WithDetail("ted", "excluded"))
+		return
+	}
 	if err := validate(req); err != nil {
 		response.FromError(w, err)
 		return

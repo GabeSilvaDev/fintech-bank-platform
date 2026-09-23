@@ -83,6 +83,25 @@ func (s *PaymentsTestSuite) TestTedIsPublishedWithItsDestination() {
 	s.Equal(&events.TEDDetails{BankCode: "341", Branch: "0001", Account: "123456", Document: "52998224725"}, payload.TED)
 }
 
+func (s *PaymentsTestSuite) TestTedDestinationIsRejectedOnOtherMethods() {
+	s.Post("/api/v1/payments", map[string]interface{}{
+		"account_id": tests.UUID(), "payment_method": "pix", "amount": 80, "currency": "BRL",
+		"recipient": "Mercado Y", "pix_key": "11999887766", "idempotency_key": "ted-4",
+		"ted": map[string]string{"bank_code": "341", "branch": "0001", "account": "123456", "document": "52998224725"},
+	}).AssertUnprocessableEntity().AssertJsonPath("error.details.ted", "excluded")
+
+	s.Empty(s.Publisher.Published)
+
+	s.Post("/api/v1/payments", map[string]interface{}{
+		"account_id": tests.UUID(), "payment_method": "boleto", "amount": 150, "currency": "BRL",
+		"recipient": "Energia SA", "idempotency_key": "ted-5",
+		"boleto_code": "34191790010100000012334567812309811000000015000",
+		"ted":         map[string]string{"bank_code": "34"},
+	}).AssertUnprocessableEntity().AssertJsonPath("error.details.ted", "excluded")
+
+	s.Empty(s.Publisher.Published)
+}
+
 func (s *PaymentsTestSuite) TestBoletoCheckDigitsAreValidated() {
 	s.Post("/api/v1/payments", map[string]interface{}{
 		"account_id": tests.UUID(), "payment_method": "boleto", "amount": 150, "currency": "BRL",
