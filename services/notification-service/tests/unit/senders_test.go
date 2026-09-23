@@ -270,7 +270,8 @@ func TestSandboxLogsSMS(t *testing.T) {
 
 	logged := buf.String()
 	assert.Contains(t, logged, `"channel":"sms"`)
-	assert.Contains(t, logged, `"to":"+5511999887766"`)
+	assert.Contains(t, logged, `"to":"+55*******7766"`)
+	assert.NotContains(t, logged, "+5511999887766")
 	assert.Contains(t, logged, `"priority":"high"`)
 	assert.Contains(t, logged, `"body":"Pagamento de R$ 10,00 confirmado"`)
 	assert.Contains(t, logged, `"message":"notification sent"`)

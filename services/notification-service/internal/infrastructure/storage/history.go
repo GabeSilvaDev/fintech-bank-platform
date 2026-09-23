@@ -10,6 +10,8 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
+const historyTTL = 90 * 24 * time.Hour
+
 type History struct {
 	client *redis.Client
 	size   int
@@ -52,6 +54,7 @@ func (h *History) Append(ctx context.Context, record models.Record) error {
 	pipe := h.client.TxPipeline()
 	pipe.LPush(ctx, key, raw)
 	pipe.LTrim(ctx, key, 0, int64(h.size-1))
+	pipe.Expire(ctx, key, historyTTL)
 	_, err = pipe.Exec(ctx)
 	return err
 }

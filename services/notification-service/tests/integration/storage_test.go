@@ -101,6 +101,11 @@ func TestHistoryKeepsTheNewestRecords(t *testing.T) {
 	require.Len(t, limited, 1)
 	require.Equal(t, records[2], limited[0])
 
+	ttl, err := client.TTL(context.Background(), key).Result()
+	require.NoError(t, err)
+	require.Greater(t, ttl, 89*24*time.Hour)
+	require.LessOrEqual(t, ttl, 90*24*time.Hour)
+
 	empty, err := history.List(context.Background(), otherUserID, 10)
 	require.NoError(t, err)
 	require.Empty(t, empty)

@@ -82,7 +82,7 @@ func TestLabels(t *testing.T) {
 	title, lower = services.OperationLabel("withdrawal")
 	assert.Equal(t, []string{"Saque", "saque"}, []string{title, lower})
 	title, lower = services.OperationLabel("other")
-	assert.Equal(t, []string{"Transação", "transação"}, []string{title, lower})
+	assert.Equal(t, []string{"Lançamento", "lançamento"}, []string{title, lower})
 
 	assert.Equal(t, "corrente", services.AccountTypeLabel("checking"))
 	assert.Equal(t, "poupança", services.AccountTypeLabel("savings"))

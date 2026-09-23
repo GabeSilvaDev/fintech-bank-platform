@@ -8,7 +8,7 @@ help:
 	@echo "  make test            - Run all tests with coverage"
 	@echo "  make test-unit       - Run unit tests only"
 	@echo "  make test-feature    - Run feature tests only"
-	@echo "  make test-integration - Run Kafka and Cassandra integration tests (needs KAFKA_BROKERS and CASSANDRA_HOSTS)"
+	@echo "  make test-integration - Run Kafka, Redis and Mailpit integration tests (needs KAFKA_BROKERS, REDIS_ADDR, SMTP_ADDR and MAILPIT_URL)"
 	@echo "  make test-verbose    - Run tests with verbose output"
 	@echo "  make test-coverage   - Generate HTML coverage report"
 	@echo "  make clean           - Remove generated files"

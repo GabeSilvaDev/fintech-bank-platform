@@ -24,7 +24,7 @@ func OperationLabel(transactionType string) (string, string) {
 	case "withdrawal":
 		return "Saque", "saque"
 	}
-	return "Transação", "transação"
+	return "Lançamento", "lançamento"
 }
 
 func AccountTypeLabel(accountType string) string {

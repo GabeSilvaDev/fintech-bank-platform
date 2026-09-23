@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -73,7 +74,7 @@ func (c *Client) Lookup(ctx context.Context, accountID uuid.UUID) (models.Contac
 	}
 
 	var body ownerBody
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&body); err != nil {
 		return models.Contact{}, err
 	}
 	userID, err := uuid.Parse(body.Data.UserID)

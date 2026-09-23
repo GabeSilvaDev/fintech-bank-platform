@@ -66,10 +66,11 @@ func (r *Router) notify(ctx context.Context, source *events.Event, n notice) ([]
 	if err != nil {
 		return nil, err
 	}
-	data := map[string]string{"name": contact.Name}
+	data := map[string]string{}
 	for key, value := range n.data {
 		data[key] = value
 	}
+	data["name"] = contact.Name
 	rendered, err := r.renderer.Render(n.kind, data)
 	if err != nil {
 		return nil, domain.Invalid("template_error", err.Error())

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -121,5 +122,24 @@ func TestDirectoryLookupTransportError(t *testing.T) {
 
 	client := directory.NewClient(server.URL, time.Second, time.Minute)
 	_, err := client.Lookup(context.Background(), uuid.New())
+	assert.Error(t, err)
+}
+
+func TestDirectoryLookupRejectsOversizedBodies(t *testing.T) {
+	accountID := uuid.New()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": map[string]string{
+				"account_id": accountID.String(),
+				"user_id":    uuid.NewString(),
+				"name":       strings.Repeat("a", 2<<20),
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := directory.NewClient(server.URL, time.Second, time.Minute)
+	_, err := client.Lookup(context.Background(), accountID)
 	assert.Error(t, err)
 }

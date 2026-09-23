@@ -19,7 +19,7 @@ func NewSandbox(channel models.Channel, log *logger.Logger) *Sandbox {
 func (s *Sandbox) Send(_ context.Context, message models.Message) error {
 	s.log.Info().
 		Str("channel", string(s.channel)).
-		Str("to", message.To).
+		Str("to", models.MaskRecipient(s.channel, message.To)).
 		Str("priority", message.Priority).
 		Str("subject", message.Subject).
 		Str("body", message.Body).
