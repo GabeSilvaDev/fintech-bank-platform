@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,9 +20,10 @@ import (
 )
 
 const (
-	pollInterval   = 250 * time.Millisecond
-	defaultTimeout = 30 * time.Second
-	maxAttempts    = 10
+	pollInterval    = 250 * time.Millisecond
+	defaultTimeout  = 30 * time.Second
+	maxRetryWait    = 2 * time.Second
+	rateLimitBudget = 30 * time.Second
 )
 
 var (
@@ -33,14 +35,16 @@ var (
 	paymentFinal     = []string{"completed", "failed", "refunded", "refund_failed"}
 )
 
+type apiError struct {
+	Code    string            `json:"code"`
+	Message string            `json:"message"`
+	Details map[string]string `json:"details"`
+}
+
 type envelope struct {
 	Success bool            `json:"success"`
 	Data    json.RawMessage `json:"data"`
-	Error   *struct {
-		Code    string            `json:"code"`
-		Message string            `json:"message"`
-		Details map[string]string `json:"details"`
-	} `json:"error"`
+	Error   *apiError       `json:"error"`
 }
 
 func env(key, fallback string) string {
@@ -58,19 +62,35 @@ func mailpit() string {
 	return env("MAILPIT_URL", "http://localhost:8025")
 }
 
-func TestMain(m *testing.M) {
+func required() bool {
+	value := strings.ToLower(os.Getenv("E2E_REQUIRED"))
+	return value == "1" || value == "true"
+}
+
+func healthy() bool {
 	resp, err := httpClient.Get(gateway() + "/health")
-	if err != nil || resp.StatusCode != http.StatusOK {
-		fmt.Printf("skipping e2e suite: gateway at %s is unreachable\n", gateway())
-		os.Exit(0)
+	if err != nil {
+		return false
 	}
 	resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
+}
+
+func TestMain(m *testing.M) {
+	if !healthy() {
+		if required() {
+			fmt.Printf("e2e suite failed: gateway at %s is unreachable or unhealthy and E2E_REQUIRED is set\n", gateway())
+			os.Exit(1)
+		}
+		fmt.Printf("skipping e2e suite: gateway at %s is unreachable or unhealthy\n", gateway())
+		os.Exit(0)
+	}
 	os.Exit(m.Run())
 }
 
 func retryAfter(header string) time.Duration {
 	if seconds, err := strconv.Atoi(header); err == nil && seconds > 0 {
-		return time.Duration(seconds) * time.Second
+		return min(time.Duration(seconds)*time.Second, maxRetryWait)
 	}
 	return time.Second
 }
@@ -83,7 +103,8 @@ func send(t *testing.T, method, url string, body interface{}) (int, []byte) {
 		require.NoError(t, err)
 		payload = encoded
 	}
-	for attempt := 1; ; attempt++ {
+	deadline := time.Now().Add(rateLimitBudget)
+	for {
 		var reader io.Reader
 		if payload != nil {
 			reader = bytes.NewReader(payload)
@@ -98,11 +119,14 @@ func send(t *testing.T, method, url string, body interface{}) (int, []byte) {
 		raw, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		require.NoError(t, err)
-		if resp.StatusCode == http.StatusTooManyRequests && attempt < maxAttempts {
-			time.Sleep(retryAfter(resp.Header.Get("Retry-After")))
-			continue
+		if resp.StatusCode != http.StatusTooManyRequests {
+			return resp.StatusCode, raw
 		}
-		return resp.StatusCode, raw
+		wait := retryAfter(resp.Header.Get("Retry-After"))
+		if time.Now().Add(wait).After(deadline) {
+			require.FailNow(t, fmt.Sprintf("%s %s was still rate limited (429) after retrying for %s; raise RATE_LIMIT_REQUESTS on the gateway", method, url, rateLimitBudget))
+		}
+		time.Sleep(wait)
 	}
 }
 
@@ -122,6 +146,15 @@ func post(t *testing.T, path string, body interface{}) (int, map[string]interfac
 		require.NoError(t, json.Unmarshal(out.Data, &data))
 	}
 	return status, data
+}
+
+func postRejected(t *testing.T, path string, body interface{}) (int, apiError) {
+	t.Helper()
+	status, raw := send(t, http.MethodPost, gateway()+path, body)
+	out := decodeEnvelope(t, raw)
+	require.False(t, out.Success, "POST %s unexpectedly succeeded: %s", path, raw)
+	require.NotNil(t, out.Error, "POST %s has no error: %s", path, raw)
+	return status, *out.Error
 }
 
 func get(t *testing.T, path string) (int, interface{}) {

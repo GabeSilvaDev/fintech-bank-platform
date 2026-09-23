@@ -78,7 +78,7 @@ func TestPaymentSandboxPaths(t *testing.T) {
 	require.InDelta(t, 1707.50, balance(t, accountID), 0.001)
 
 	invalidBoleto := settledBoleto[:len(settledBoleto)-1] + "1"
-	status, _ := post(t, "/api/v1/payments", map[string]interface{}{
+	status, rejection := postRejected(t, "/api/v1/payments", map[string]interface{}{
 		"account_id":      accountID,
 		"payment_method":  "boleto",
 		"amount":          150,
@@ -88,8 +88,10 @@ func TestPaymentSandboxPaths(t *testing.T) {
 		"idempotency_key": key(),
 	})
 	require.Equal(t, http.StatusUnprocessableEntity, status)
+	require.Equal(t, "VALIDATION_ERROR", rejection.Code)
+	require.Equal(t, map[string]string{"boleto_code": "boleto"}, rejection.Details)
 
-	status, _ = post(t, "/api/v1/payments", map[string]interface{}{
+	status, rejection = postRejected(t, "/api/v1/payments", map[string]interface{}{
 		"account_id":      accountID,
 		"payment_method":  "ted",
 		"amount":          100,
@@ -98,4 +100,6 @@ func TestPaymentSandboxPaths(t *testing.T) {
 		"idempotency_key": key(),
 	})
 	require.Equal(t, http.StatusUnprocessableEntity, status)
+	require.Equal(t, "VALIDATION_ERROR", rejection.Code)
+	require.Equal(t, map[string]string{"ted": "required"}, rejection.Details)
 }
