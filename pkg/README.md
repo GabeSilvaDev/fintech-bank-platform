@@ -170,6 +170,7 @@ newConsumer := func() *messaging.Consumer {
         GroupID:      "account-service",
         Topic:        "account.commands",
         DrainTimeout: 30 * time.Second, // how long the in-flight message may finish after ctx is cancelled
+        StartOffset:  kafka.FirstOffset, // where a group without a committed offset starts; 0 means kafka.FirstOffset, kafka.LastOffset starts new groups at the end
     })
 }
 err = newConsumer().Run(ctx, handle) // handle(ctx, kafka.Message) error; committed per message on success
