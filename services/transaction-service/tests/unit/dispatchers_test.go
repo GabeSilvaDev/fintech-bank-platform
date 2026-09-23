@@ -94,4 +94,12 @@ func TestReplyDispatcherRoutesAccountEvents(t *testing.T) {
 
 	_, err = dispatcher.Dispatch(context.Background(), events.NewAccountEvent(events.EventTypes.AccountDebited, "not an object"))
 	assert.ErrorIs(t, err, processor.ErrBadPayload)
+
+	logs.Reset()
+	paymentID := uuid.New()
+	foreign := events.NewAccountEvent(events.EventTypes.AccountDebited, events.AccountDebitedPayload{AccountID: tx.AccountID.String(), Amount: 30, BalanceAfter: 70, Reference: "payment:" + paymentID.String(), IdempotencyKey: "payment:" + paymentID.String() + ":debit"})
+	res, err = dispatcher.Dispatch(context.Background(), foreign)
+	assert.NoError(t, err)
+	assert.Empty(t, res.Messages)
+	assert.Empty(t, logs.String())
 }
