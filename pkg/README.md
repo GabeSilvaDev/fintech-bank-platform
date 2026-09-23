@@ -85,9 +85,12 @@ err := validation.Validate(account)
 validation.FormatCPF("52998224725")   // "529.982.247-25"
 validation.FormatCNPJ("11222333000181")
 validation.FormatPhone("11912345678")
+
+validation.IsValidBoleto("34191790010100000012334567812309811000000015000")   // true
+cents, ok := validation.BoletoAmountCents("34191790010100000012334567812309811000000015000") // 15000, true
 ```
 
-Struct tags: `cpf`, `cnpj`, `phone_br`, `pix_key`, `agency_number`, `account_number`, `currency`, `password_strength`.
+Struct tags: `cpf`, `cnpj`, `phone_br`, `pix_key`, `agency_number`, `account_number`, `currency`, `password_strength`, `boleto`.
 
 ## events
 
@@ -107,7 +110,19 @@ data, _ := event.ToJSON()
 back, _ := events.FromJSON(data)
 
 topic := events.Topics.AccountCommands // "account.commands"
+
+payment := events.NewPaymentCommand(events.EventTypes.ProcessPayment, events.ProcessPaymentPayload{
+    AccountID:      "5d1e7c2a-0a6b-4c1e-9f4e-2b6f7a8c9d01",
+    PaymentMethod:  "ted",
+    Amount:         150.00,
+    Currency:       "BRL",
+    Recipient:      "Ana Souza",
+    TED:            &events.TEDDetails{BankCode: "341", Branch: "0001", Account: "123456", Document: "52998224725"},
+    IdempotencyKey: "idem-123",
+})
 ```
+
+The payment lifecycle runs through `events.EventTypes.ProcessPayment`/`SubmitPayment`/`SettlePayment` commands and `PaymentCreated`/`PaymentProcessed`/`PaymentCompleted`/`PaymentFailed` events on `events.Topics.PaymentEvents`; `TEDDetails` is only set on `ProcessPaymentPayload.TED` for TED payments.
 
 ## env
 
