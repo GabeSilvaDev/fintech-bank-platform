@@ -80,10 +80,10 @@ func main() {
 	server := appHttp.NewServer(cfg.Server, chiRouter)
 
 	group, groupCtx := errgroup.WithContext(ctx)
-	runConsumer(groupCtx, group, log, cfg, events.Topics.AccountEvents, cfg.Kafka.GroupID+"-accounts", routingProcessor)
-	runConsumer(groupCtx, group, log, cfg, events.Topics.TransactionEvents, cfg.Kafka.GroupID+"-transactions", routingProcessor)
-	runConsumer(groupCtx, group, log, cfg, events.Topics.PaymentEvents, cfg.Kafka.GroupID+"-payments", routingProcessor)
-	runConsumer(groupCtx, group, log, cfg, events.Topics.NotificationEvents, cfg.Kafka.GroupID, deliveryProcessor)
+	runConsumer(groupCtx, group, log, cfg, events.Topics.AccountEvents, cfg.Kafka.GroupID+"-accounts", kafka.LastOffset, routingProcessor)
+	runConsumer(groupCtx, group, log, cfg, events.Topics.TransactionEvents, cfg.Kafka.GroupID+"-transactions", kafka.LastOffset, routingProcessor)
+	runConsumer(groupCtx, group, log, cfg, events.Topics.PaymentEvents, cfg.Kafka.GroupID+"-payments", kafka.LastOffset, routingProcessor)
+	runConsumer(groupCtx, group, log, cfg, events.Topics.NotificationEvents, cfg.Kafka.GroupID, 0, deliveryProcessor)
 	group.Go(func() error {
 		log.Info().Str("address", cfg.Server.Address()).Msg("Server starting")
 		return server.Start()
@@ -105,13 +105,14 @@ func main() {
 	log.Info().Msg("Service stopped")
 }
 
-func runConsumer(ctx context.Context, group *errgroup.Group, log *logger.Logger, cfg *config.Config, topic, groupID string, proc *processor.Processor) {
+func runConsumer(ctx context.Context, group *errgroup.Group, log *logger.Logger, cfg *config.Config, topic, groupID string, startOffset int64, proc *processor.Processor) {
 	newConsumer := func() *messaging.Consumer {
 		return messaging.NewConsumer(messaging.ConsumerConfig{
 			Brokers:      cfg.Kafka.Brokers,
 			GroupID:      groupID,
 			Topic:        topic,
 			DrainTimeout: cfg.Consumer.DrainTimeout,
+			StartOffset:  startOffset,
 		})
 	}
 	handle := func(ctx context.Context, msg kafka.Message) error {
