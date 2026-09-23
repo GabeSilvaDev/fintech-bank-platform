@@ -49,3 +49,10 @@ type PaymentConfig struct {
 	WebhookTolerance time.Duration
 	SettlementDelay  time.Duration
 }
+
+type SweeperConfig struct {
+	Enabled    bool
+	Interval   time.Duration
+	StaleAfter time.Duration
+	Batch      int
+}

@@ -35,6 +35,10 @@ func TestConfigDefaults(t *testing.T) {
 	assert.Equal(t, "http://localhost:8084/webhooks/gateway", cfg.Payment.WebhookURL)
 	assert.Equal(t, 5*time.Minute, cfg.Payment.WebhookTolerance)
 	assert.Equal(t, 2*time.Second, cfg.Payment.SettlementDelay)
+	assert.True(t, cfg.Sweeper.Enabled)
+	assert.Equal(t, time.Minute, cfg.Sweeper.Interval)
+	assert.Equal(t, 5*time.Minute, cfg.Sweeper.StaleAfter)
+	assert.Equal(t, 100, cfg.Sweeper.Batch)
 }
 
 func TestConfigFromEnv(t *testing.T) {
@@ -55,6 +59,10 @@ func TestConfigFromEnv(t *testing.T) {
 	t.Setenv("PAYMENT_WEBHOOK_URL", "http://svc/hook")
 	t.Setenv("PAYMENT_WEBHOOK_TOLERANCE", "1m")
 	t.Setenv("PAYMENT_SETTLEMENT_DELAY", "10ms")
+	t.Setenv("SWEEPER_ENABLED", "false")
+	t.Setenv("SWEEPER_INTERVAL", "30s")
+	t.Setenv("SWEEPER_STALE_AFTER", "2m")
+	t.Setenv("SWEEPER_BATCH", "0")
 
 	cfg, _ := config.New()
 
@@ -73,6 +81,22 @@ func TestConfigFromEnv(t *testing.T) {
 	assert.Equal(t, "http://svc/hook", cfg.Payment.WebhookURL)
 	assert.Equal(t, time.Minute, cfg.Payment.WebhookTolerance)
 	assert.Equal(t, 10*time.Millisecond, cfg.Payment.SettlementDelay)
+	assert.False(t, cfg.Sweeper.Enabled)
+	assert.Equal(t, 30*time.Second, cfg.Sweeper.Interval)
+	assert.Equal(t, 2*time.Minute, cfg.Sweeper.StaleAfter)
+	assert.Equal(t, 100, cfg.Sweeper.Batch)
+}
+
+func TestConfigSweeperNonPositiveDurationsFallBackToDefaults(t *testing.T) {
+	t.Setenv("PAYMENT_WEBHOOK_SECRET", "s3cret-s3cret-s3cret")
+	t.Setenv("SWEEPER_INTERVAL", "0s")
+	t.Setenv("SWEEPER_STALE_AFTER", "-1m")
+
+	cfg, err := config.New()
+
+	assert.NoError(t, err)
+	assert.Equal(t, time.Minute, cfg.Sweeper.Interval)
+	assert.Equal(t, 5*time.Minute, cfg.Sweeper.StaleAfter)
 }
 
 func TestConfigRequiresAWebhookSecret(t *testing.T) {

@@ -23,6 +23,13 @@ type TransitionResult struct {
 	Err     error
 }
 
+type TouchCall struct {
+	ID       uuid.UUID
+	Status   models.Status
+	Observed time.Time
+	Now      time.Time
+}
+
 type FakePaymentRepo struct {
 	Payments          map[uuid.UUID]*models.Payment
 	Keys              map[string]uuid.UUID
@@ -30,12 +37,15 @@ type FakePaymentRepo struct {
 	Created           []*models.Payment
 	Transitions       []TransitionCall
 	TransitionResults []TransitionResult
+	Touches           []TouchCall
+	TouchResults      []TransitionResult
 	GetErrs           []error
 	Err               error
 	CreateErr         error
 	ReserveErr        error
 	BindErr           error
 	FindErr           error
+	StaleErr          error
 }
 
 func NewFakePaymentRepo() *FakePaymentRepo {
@@ -143,6 +153,45 @@ func (f *FakePaymentRepo) Transition(_ context.Context, id uuid.UUID, from, to m
 		payment.CompletedAt = patch.CompletedAt
 	}
 	return true, nil
+}
+
+func (f *FakePaymentRepo) Touch(_ context.Context, id uuid.UUID, status models.Status, observed, now time.Time) (bool, error) {
+	f.Touches = append(f.Touches, TouchCall{ID: id, Status: status, Observed: observed, Now: now})
+	if len(f.TouchResults) > 0 {
+		result := f.TouchResults[0]
+		f.TouchResults = f.TouchResults[1:]
+		return result.Applied, result.Err
+	}
+	if f.Err != nil {
+		return false, f.Err
+	}
+	payment, ok := f.Payments[id]
+	if !ok || payment.Status != status || !payment.UpdatedAt.Equal(observed) {
+		return false, nil
+	}
+	payment.UpdatedAt = now
+	return true, nil
+}
+
+func (f *FakePaymentRepo) ListStale(_ context.Context, before time.Time, limit int) ([]*models.Payment, error) {
+	if f.StaleErr != nil {
+		return nil, f.StaleErr
+	}
+	if f.Err != nil {
+		return nil, f.Err
+	}
+	result := []*models.Payment{}
+	for _, payment := range f.Payments {
+		if payment.UpdatedAt.Before(before) {
+			copied := *payment
+			result = append(result, &copied)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID.String() < result[j].ID.String() })
+	if len(result) > limit {
+		result = result[:limit]
+	}
+	return result, nil
 }
 
 func (f *FakePaymentRepo) BindExternalID(_ context.Context, externalID string, id uuid.UUID) error {

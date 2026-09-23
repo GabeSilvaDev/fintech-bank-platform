@@ -18,6 +18,7 @@ type Config struct {
 	Consumer  contracts.ConsumerConfig
 	Log       contracts.LogConfig
 	Payment   contracts.PaymentConfig
+	Sweeper   contracts.SweeperConfig
 }
 
 func New() (*Config, error) {
@@ -70,5 +71,18 @@ func New() (*Config, error) {
 			Pretty: env.GetBool("LOG_PRETTY", false),
 		},
 		Payment: payment,
+		Sweeper: contracts.SweeperConfig{
+			Enabled:    env.GetBool("SWEEPER_ENABLED", true),
+			Interval:   positiveDuration(env.GetDuration("SWEEPER_INTERVAL", time.Minute), time.Minute),
+			StaleAfter: positiveDuration(env.GetDuration("SWEEPER_STALE_AFTER", 5*time.Minute), 5*time.Minute),
+			Batch:      env.GetIntMin("SWEEPER_BATCH", 100, 1),
+		},
 	}, nil
+}
+
+func positiveDuration(value, fallback time.Duration) time.Duration {
+	if value <= 0 {
+		return fallback
+	}
+	return value
 }

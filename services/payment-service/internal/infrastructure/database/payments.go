@@ -122,50 +122,94 @@ func (r *PaymentRepository) FindByExternalID(ctx context.Context, externalID str
 	return uuid.UUID(id), nil
 }
 
+func (r *PaymentRepository) ListStale(ctx context.Context, before time.Time, limit int) ([]*models.Payment, error) {
+	iter := r.session.Query("SELECT " + paymentColumns + " FROM payments").WithContext(ctx).PageSize(500).Iter()
+	stale := []*models.Payment{}
+	for len(stale) < limit {
+		payment, ok := scanPaymentIter(iter)
+		if !ok {
+			break
+		}
+		switch payment.Status {
+		case models.StatusPending, models.StatusDebited, models.StatusSubmitted, models.StatusRefunding:
+			if payment.UpdatedAt.Before(before) {
+				stale = append(stale, payment)
+			}
+		}
+	}
+	if err := iter.Close(); err != nil {
+		return nil, err
+	}
+	return stale, nil
+}
+
+func (r *PaymentRepository) Touch(ctx context.Context, id uuid.UUID, status models.Status, observed, now time.Time) (bool, error) {
+	applied, err := r.session.Query("UPDATE payments SET updated_at = ? WHERE payment_id = ? IF status = ? AND updated_at = ?", now, gocql.UUID(id), string(status), observed).
+		WithContext(ctx).MapScanCAS(map[string]interface{}{})
+	return applied, cassandra.MapWriteError(err)
+}
+
+type paymentRow struct {
+	id, accountID                        gocql.UUID
+	method, status, currency, recipient  string
+	pixKey, boletoCode                   string
+	bankCode, branch, account, document  string
+	description, key, externalID, reason string
+	amount                               int64
+	balance                              *int64
+	createdAt, updatedAt, completedAt    time.Time
+}
+
+func (r *paymentRow) targets() []interface{} {
+	return []interface{}{&r.id, &r.accountID, &r.method, &r.status, &r.amount, &r.currency, &r.recipient, &r.pixKey, &r.boletoCode,
+		&r.bankCode, &r.branch, &r.account, &r.document, &r.description, &r.key, &r.externalID, &r.reason, &r.balance,
+		&r.createdAt, &r.updatedAt, &r.completedAt}
+}
+
+func (r *paymentRow) model() *models.Payment {
+	payment := &models.Payment{
+		ID:                uuid.UUID(r.id),
+		AccountID:         uuid.UUID(r.accountID),
+		Method:            models.Method(r.method),
+		Status:            models.Status(r.status),
+		AmountCents:       r.amount,
+		Currency:          r.currency,
+		Recipient:         r.recipient,
+		PixKey:            r.pixKey,
+		BoletoCode:        r.boletoCode,
+		Description:       r.description,
+		IdempotencyKey:    r.key,
+		ExternalID:        r.externalID,
+		FailureReason:     r.reason,
+		BalanceAfterCents: r.balance,
+		CreatedAt:         r.createdAt,
+		UpdatedAt:         r.updatedAt,
+	}
+	if r.bankCode != "" {
+		payment.TED = &models.TEDDetails{BankCode: r.bankCode, Branch: r.branch, Account: r.account, Document: r.document}
+	}
+	if !r.completedAt.IsZero() {
+		payment.CompletedAt = &r.completedAt
+	}
+	return payment
+}
+
 func scanPayment(query *gocql.Query) (*models.Payment, error) {
-	var (
-		id, accountID                        gocql.UUID
-		method, status, currency, recipient  string
-		pixKey, boletoCode                   string
-		bankCode, branch, account, document  string
-		description, key, externalID, reason string
-		amount                               int64
-		balance                              *int64
-		createdAt, updatedAt, completedAt    time.Time
-	)
-	err := query.Scan(&id, &accountID, &method, &status, &amount, &currency, &recipient, &pixKey, &boletoCode,
-		&bankCode, &branch, &account, &document, &description, &key, &externalID, &reason, &balance,
-		&createdAt, &updatedAt, &completedAt)
+	var row paymentRow
+	err := query.Scan(row.targets()...)
 	if errors.Is(err, gocql.ErrNotFound) {
 		return nil, domain.ErrNotFound
 	}
 	if err != nil {
 		return nil, err
 	}
+	return row.model(), nil
+}
 
-	payment := &models.Payment{
-		ID:                uuid.UUID(id),
-		AccountID:         uuid.UUID(accountID),
-		Method:            models.Method(method),
-		Status:            models.Status(status),
-		AmountCents:       amount,
-		Currency:          currency,
-		Recipient:         recipient,
-		PixKey:            pixKey,
-		BoletoCode:        boletoCode,
-		Description:       description,
-		IdempotencyKey:    key,
-		ExternalID:        externalID,
-		FailureReason:     reason,
-		BalanceAfterCents: balance,
-		CreatedAt:         createdAt,
-		UpdatedAt:         updatedAt,
+func scanPaymentIter(iter *gocql.Iter) (*models.Payment, bool) {
+	var row paymentRow
+	if !iter.Scan(row.targets()...) {
+		return nil, false
 	}
-	if bankCode != "" {
-		payment.TED = &models.TEDDetails{BankCode: bankCode, Branch: branch, Account: account, Document: document}
-	}
-	if !completedAt.IsZero() {
-		payment.CompletedAt = &completedAt
-	}
-	return payment, nil
+	return row.model(), true
 }

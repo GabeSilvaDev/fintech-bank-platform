@@ -63,6 +63,7 @@ func main() {
 		Delay:      cfg.Payment.SettlementDelay,
 	}, log)
 	service := services.NewPaymentService(database.NewPaymentRepository(session), simulator, services.SystemClock{}, uuid.New)
+	sweeper := services.NewSweeper(service, producer, services.SystemClock{}, cfg.Sweeper, log)
 
 	store := database.NewProcessedEventStore(session)
 	processorCfg := processor.Config{
@@ -86,6 +87,12 @@ func main() {
 	group, groupCtx := errgroup.WithContext(ctx)
 	runConsumer(groupCtx, group, log, cfg, events.Topics.PaymentCommands, cfg.Kafka.GroupID, commands)
 	runConsumer(groupCtx, group, log, cfg, events.Topics.AccountEvents, cfg.Kafka.GroupID+"-replies", replies)
+	if cfg.Sweeper.Enabled {
+		group.Go(func() error {
+			sweeper.Run(groupCtx)
+			return nil
+		})
+	}
 	group.Go(func() error {
 		log.Info().Str("address", cfg.Server.Address()).Msg("Server starting")
 		return server.Start()

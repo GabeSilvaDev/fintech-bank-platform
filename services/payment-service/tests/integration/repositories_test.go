@@ -105,6 +105,37 @@ func TestPaymentRepository(t *testing.T) {
 	require.WithinDuration(t, later, got.UpdatedAt, time.Millisecond)
 }
 
+func TestPaymentRepositoryTouch(t *testing.T) {
+	session, _ := throwawayKeyspace(t)
+	repo := database.NewPaymentRepository(session)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	payment := &models.Payment{ID: uuid.New(), AccountID: uuid.New(), Method: models.MethodPix, Status: models.StatusPending, AmountCents: 1000, Currency: "BRL", Recipient: "Ana", PixKey: "ana@example.com", IdempotencyKey: "touch-1", CreatedAt: now, UpdatedAt: now}
+	require.NoError(t, repo.Create(ctx, payment))
+
+	touchedAt := now.Add(time.Minute)
+	applied, err := repo.Touch(ctx, payment.ID, models.StatusPending, now, touchedAt)
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	got, err := repo.Get(ctx, payment.ID)
+	require.NoError(t, err)
+	require.WithinDuration(t, touchedAt, got.UpdatedAt, time.Millisecond)
+
+	applied, err = repo.Touch(ctx, payment.ID, models.StatusPending, now, now.Add(2*time.Minute))
+	require.NoError(t, err)
+	require.False(t, applied)
+
+	applied, err = repo.Touch(ctx, payment.ID, models.StatusDebited, touchedAt, now.Add(3*time.Minute))
+	require.NoError(t, err)
+	require.False(t, applied)
+
+	got, err = repo.Get(ctx, payment.ID)
+	require.NoError(t, err)
+	require.WithinDuration(t, touchedAt, got.UpdatedAt, time.Millisecond)
+}
+
 func TestProcessedEventStore(t *testing.T) {
 	session, _ := throwawayKeyspace(t)
 	store := database.NewProcessedEventStore(session)
