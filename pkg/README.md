@@ -15,7 +15,8 @@ pkg/
 ├── domain/        shared domain errors and money helpers
 ├── cassandra/     migrator and write-error mapping
 ├── processor/     idempotent Kafka command processor
-└── retry/         fixed-delay retry with context cancellation
+├── retry/         fixed-delay retry with context cancellation
+└── metrics/       prometheus registry, http middleware and /metrics handler
 ```
 
 ## logger
@@ -255,6 +256,28 @@ err := retry.Do(ctx, 30, 2*time.Second, func() error {
 ```
 
 The four domain services (account, transaction, payment and notification) use this to wait for Cassandra (bootstrap connection, migrations, keyspace session) or Redis (ping) at start-up — the API gateway does not — configured through `STARTUP_RETRY_ATTEMPTS` (default 30) and `STARTUP_RETRY_DELAY` (default `2s`; a non-positive value falls back to the default).
+
+## metrics
+
+```go
+import "github.com/fintech-bank-platform/pkg/metrics"
+
+m := metrics.New("account-service") // registers the Go and process collectors under service="account-service"
+
+router.Use(m.Middleware) // records http_requests_total{method,route,status} and http_request_duration_seconds{method,route}
+router.Handle("/metrics", m.Handler())
+
+paymentsTotal := m.CounterVec("payments_processed_total", "Number of payments processed", "status")
+paymentsTotal.WithLabelValues("success").Inc()
+
+queueDepth := m.GaugeVec("queue_depth", "Current consumer queue depth", "topic")
+queueDepth.WithLabelValues("account.commands").Set(12)
+
+publishLatency := m.HistogramVec("publish_latency_seconds", "Kafka publish latency", prometheus.DefBuckets, "topic")
+publishLatency.WithLabelValues("account.commands").Observe(0.042)
+```
+
+Every method is nil-safe, so a service can pass a `*metrics.Metrics` obtained from optional configuration straight through: a `nil` receiver makes the factories return a fresh, unregistered collector, `Middleware` returns `next` unchanged, and `Handler` returns a 404. Calling a factory twice with the same name and labels returns the already-registered collector instead of panicking.
 
 ## Tests
 
