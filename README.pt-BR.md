@@ -30,7 +30,7 @@ flowchart LR
     K --> P[Payment Service]
     K --> N[Notification Service]
     A & T & P --> CS[(Cassandra)]
-    A & T & P & N --> R[(Redis)]
+    N --> R[(Redis)]
     N --> MP[(Mailpit)]
     A & T & P & N -->|eventos| K
 ```
@@ -192,7 +192,7 @@ docker compose up -d                  # hot reload com Air, publicado em :8085
 curl http://localhost:8085/health     # {"success":true,"data":{"status":"healthy","redis":"up"}}
 ```
 
-Configuração: `SERVER_*`, `KAFKA_BROKERS` / `KAFKA_GROUP_ID` (padrão `notification-service`) / `KAFKA_*_TIMEOUT` / `KAFKA_MAX_ATTEMPTS`, `CONSUMER_RETRY_BACKOFF` / `CONSUMER_DRAIN_TIMEOUT`, `REDIS_ADDR` / `REDIS_PASSWORD` / `REDIS_DB`, `ACCOUNT_SERVICE_URL` / `ACCOUNT_DIRECTORY_TTL` (padrão `5m`) / `ACCOUNT_DIRECTORY_TIMEOUT` (padrão `3s`), `SMTP_ADDR` / `SMTP_FROM` (padrão `no-reply@fintech.local`), `NOTIFICATION_HISTORY_SIZE` (padrão `100`), `LOG_LEVEL` / `LOG_PRETTY`.
+Configuração: `SERVER_*`, `KAFKA_BROKERS` / `KAFKA_GROUP_ID` (padrão `notification-service`) / `KAFKA_*_TIMEOUT` / `KAFKA_MAX_ATTEMPTS`, `CONSUMER_RETRY_BACKOFF` / `CONSUMER_DRAIN_TIMEOUT`, `REDIS_ADDR` / `REDIS_PASSWORD` / `REDIS_DB`, `ACCOUNT_SERVICE_URL` / `ACCOUNT_DIRECTORY_TTL` (padrão `5m`) / `ACCOUNT_DIRECTORY_TIMEOUT` (padrão `3s`), `SMTP_ADDR` / `SMTP_FROM` (padrão `no-reply@fintech.local`) / `SMTP_TIMEOUT` (padrão `10s`), `NOTIFICATION_HISTORY_SIZE` (padrão `100`), `NOTIFICATION_MAX_EVENT_AGE` (padrão `1h`, `0` desativa), `LOG_LEVEL` / `LOG_PRETTY`.
 
 O serviço roda dois tipos de consumer: o roteamento transforma eventos de resultado dos domínios em comandos de entrega, e a entrega os envia e registra o histórico.
 
@@ -217,11 +217,13 @@ O roteamento renderiza um entre oito templates em português e transforma cada e
 
 Falhas transitórias de roteamento e de entrega são retentadas com `CONSUMER_RETRY_BACKOFF` e depois enviadas para a dead-letter como `notification.command_failed` em `notification.dlq`. Os contatos vêm do endpoint interno `GET /accounts/{id}/owner` do account service (`{account_id, user_id, name, email, phone?}`, `404 ACCOUNT_NOT_FOUND`) — não exposto pelo gateway — cacheados em memória por `ACCOUNT_DIRECTORY_TTL`.
 
-A entrega envia e-mail por SMTP — Mailpit em desenvolvimento, com interface web em http://localhost:8025 — e SMS e push por provedores sandbox que apenas registram a mensagem em log; os valores nos templates aparecem como `R$ 1.234,56`. Um destinatário de e-mail malformado vai para a dead-letter em vez de ser retentado. A entrega é at-least-once: uma queda entre o envio e o commit pode repetir uma notificação.
+A entrega envia e-mail por SMTP — Mailpit em desenvolvimento, com interface web em http://localhost:8025 — e SMS e push por provedores sandbox que apenas registram a mensagem em log; os valores nos templates aparecem como `R$ 1.234,56`. Um destinatário de e-mail malformado vai para a dead-letter em vez de ser retentado, e cada entrega SMTP — conexão e conversa inteira — é limitada por `SMTP_TIMEOUT`. Cada evento é processado no máximo uma vez mesmo com quedas, porque a marca de processado é gravada antes da entrega: uma queda no meio da entrega pode perder uma notificação, enquanto uma nova tentativa no mesmo processo após um erro ambíguo do provedor, ou uma marca de deduplicação perdida (expulsa pelo Redis), pode repeti-la.
 
-O Redis mantém uma marca `notification:processed:<id do evento>` por 7 dias para deduplicar entregas e uma lista `notification:history:<id do usuário>`, mais recentes primeiro e limitada a `NOTIFICATION_HISTORY_SIZE`; o compose raiz roda o Redis com `allkeys-lru` e 128 MB, então a deduplicação é best-effort quando a pressão de memória expulsa chaves antigas. API de histórico: `GET /users/{user_id}/notifications?limit=` (padrão 20, 1–100, `422` caso contrário) → `[{id, channel, recipient, subject?, body, source_event_id?, sent_at}]`.
+O Redis mantém uma marca `notification:processed:<id do evento>` por 7 dias para deduplicar entregas e uma lista `notification:history:<id do usuário>`, mais recentes primeiro, limitada a `NOTIFICATION_HISTORY_SIZE` e expirando 90 dias depois da notificação mais recente; o compose raiz roda o Redis com `allkeys-lru` e 128 MB, então a deduplicação é best-effort quando a pressão de memória expulsa chaves antigas. API de histórico: `GET /users/{user_id}/notifications?limit=` (padrão 20, 1–100, `422` caso contrário) → `[{id, channel, recipient, subject?, body, source_event_id?, sent_at}]`, com o destinatário mascarado (`a***@example.com`, `+55*******7766`; push mantém o id do usuário).
 
-**Limitações conhecidas.** Os três grupos de consumer de roteamento (`-accounts`, `-transactions`, `-payments`) começam a partir do offset mais recente quando não têm offset registrado — num primeiro deploy, ou depois de um reset do grupo, eventos retidos não são reprocessados e só eventos publicados depois que o serviço sobe geram notificações. O grupo de entrega em `notification.events` continua lendo desde o início, como qualquer outro consumer da plataforma, então nenhum comando de entrega já publicado é perdido num redeploy.
+Os consumers de roteamento leem a partir do offset retido mais antigo e ignoram eventos de origem mais velhos que `NOTIFICATION_MAX_EVENT_AGE` (padrão `1h`), para que um grupo de consumer novo ou uma indisponibilidade longa não inunde os clientes com notificações velhas; o grupo de entrega em `notification.events` também começa do offset mais antigo, então nenhum comando de entrega já publicado é perdido num redeploy. O TTL de 7 dias da marca de processado precisa continuar maior que a retenção de 24 h do log do Kafka, para que um evento reprocessado ainda seja reconhecido como já processado.
+
+**Limitações conhecidas.** Ainda não há autenticação: o endpoint de histórico devolve o corpo das mensagens para qualquer id de usuário (com os destinatários mascarados) e precisa ser restrito ao titular da conta quando houver autenticação. O endpoint interno `GET /accounts/{id}/owner` do account service não tem autenticação e não é repassado pelo gateway; sua porta é publicada apenas para desenvolvimento.
 
 #### Endpoints de comando
 
@@ -297,7 +299,7 @@ make test-integration                       # precisa de KAFKA_BROKERS e CASSAND
 cd services/notification-service
 make test                                   # unit + feature, cobertura de ./internal/app/...
 make test-coverage                          # gera coverage.html
-make test-integration                       # precisa de KAFKA_BROKERS, REDIS_ADDR e SMTP_ADDR apontando para o Mailpit
+make test-integration                       # precisa de KAFKA_BROKERS, REDIS_ADDR e SMTP_ADDR / MAILPIT_URL apontando para o Mailpit
 ```
 
 O CI (`.github/workflows/ci.yml`) roda a cada push e pull request em seis jobs — `pkg`, `api-gateway` (com um container de serviço Kafka), `account-service`, `transaction-service` e `payment-service` (com containers de serviço Kafka e Cassandra) e `notification-service` (com containers de serviço Kafka, Redis e Mailpit) — checagem de `gofmt` e as suítes de `pkg`, `api-gateway`, `account-service`, `transaction-service`, `payment-service` e `notification-service`, falhando o build se a cobertura cair abaixo de 100 % (de `internal/app` para o account service, o transaction service, o payment service e o notification service).
