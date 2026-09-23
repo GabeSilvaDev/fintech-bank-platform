@@ -36,7 +36,12 @@ func (m *Metrics) Middleware(next http.Handler) http.Handler {
 			route = "unmatched"
 		}
 
-		requestsTotal.WithLabelValues(r.Method, route, strconv.Itoa(ww.Status())).Inc()
+		status := ww.Status()
+		if status == 0 {
+			status = http.StatusOK
+		}
+
+		requestsTotal.WithLabelValues(r.Method, route, strconv.Itoa(status)).Inc()
 		requestDuration.WithLabelValues(r.Method, route).Observe(time.Since(start).Seconds())
 	})
 }
