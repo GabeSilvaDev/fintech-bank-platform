@@ -115,6 +115,9 @@ func (s *PaymentService) Settle(ctx context.Context, cmd events.SettlePaymentPay
 		return processor.Result{}, domain.Invalid("invalid_settlement_status", "status must be settled or rejected")
 	}
 	id, err := s.repo.FindByExternalID(ctx, externalID)
+	if errors.Is(err, domain.ErrNotFound) {
+		return processor.Result{}, fmt.Errorf("%w: external id %s is not bound yet", domain.ErrConflict, externalID)
+	}
 	if err != nil {
 		return processor.Result{}, err
 	}

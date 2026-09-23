@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/fintech-bank-platform/payment-service/internal/app/handlers"
 	"github.com/fintech-bank-platform/payment-service/internal/app/services"
@@ -48,6 +49,26 @@ func TestWebhookPublishesASettleCommand(t *testing.T) {
 	assert.Equal(t, "hook-1", published.Event.TraceID)
 	assert.Equal(t, events.SettlePaymentPayload{ExternalID: "ted_1", Status: "rejected", Reason: "invalid_destination"}, published.Event.Payload)
 	assert.Equal(t, published.Event.ID, body["data"].(map[string]interface{})["command_id"])
+}
+
+func TestWebhookPublishesTheTrimmedExternalIDAndCapsTheReason(t *testing.T) {
+	publisher := &tests.FakePublisher{}
+
+	rec, _ := webhookCall(publisher, `{"external_id":" ted_1 ","status":"rejected","reason":"`+strings.Repeat("r", 300)+`"}`, signed)
+
+	assert.Equal(t, http.StatusAccepted, rec.Code)
+	published := publisher.Published[0]
+	assert.Equal(t, "ted_1", published.Key)
+	payload := published.Event.Payload.(events.SettlePaymentPayload)
+	assert.Equal(t, "ted_1", payload.ExternalID)
+	assert.Equal(t, strings.Repeat("r", 255), payload.Reason)
+
+	publisher = &tests.FakePublisher{}
+	multibyte := strings.Repeat("r", 254) + "é" + strings.Repeat("r", 10)
+	webhookCall(publisher, `{"external_id":"ted_2","status":"rejected","reason":"`+multibyte+`"}`, signed)
+	reason := publisher.Published[0].Event.Payload.(events.SettlePaymentPayload).Reason
+	assert.Equal(t, strings.Repeat("r", 254), reason)
+	assert.True(t, utf8.ValidString(reason))
 }
 
 func TestWebhookRejectsBadRequests(t *testing.T) {

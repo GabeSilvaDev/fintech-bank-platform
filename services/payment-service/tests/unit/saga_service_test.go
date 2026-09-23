@@ -295,7 +295,14 @@ func TestSettleGuardsAndErrors(t *testing.T) {
 	_, err = h.service.Settle(context.Background(), events.SettlePaymentPayload{ExternalID: "x", Status: "pending"}, "t")
 	assert.Equal(t, "invalid_settlement_status", domain.InvalidCode(err))
 	_, err = h.service.Settle(context.Background(), events.SettlePaymentPayload{ExternalID: "unknown", Status: "settled"}, "t")
-	assert.ErrorIs(t, err, domain.ErrNotFound)
+	assert.ErrorIs(t, err, domain.ErrConflict)
+	assert.NotErrorIs(t, err, domain.ErrNotFound)
+	assert.EqualError(t, err, domain.ErrConflict.Error()+": external id unknown is not bound yet")
+
+	h.repo.FindErr = errors.New("db down")
+	_, err = h.service.Settle(context.Background(), events.SettlePaymentPayload{ExternalID: "unknown", Status: "settled"}, "t")
+	assert.EqualError(t, err, "db down")
+	h.repo.FindErr = nil
 
 	inflight := h.stored(models.MethodTED, models.StatusDebited)
 	h.repo.External["ted_2"] = inflight.ID

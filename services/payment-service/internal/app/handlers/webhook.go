@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/fintech-bank-platform/payment-service/internal/app/models"
 	"github.com/fintech-bank-platform/payment-service/internal/app/services"
@@ -17,7 +18,10 @@ import (
 	"github.com/fintech-bank-platform/pkg/response"
 )
 
-const maxWebhookBytes = 64 << 10
+const (
+	maxWebhookBytes = 64 << 10
+	maxReasonBytes  = 255
+)
 
 type WebhookHandler struct {
 	publisher contracts.Publisher
@@ -57,8 +61,9 @@ func (h *WebhookHandler) Gateway(w http.ResponseWriter, r *http.Request) {
 		response.FromError(w, apperrors.BadRequest("INVALID_JSON", "request body is not valid JSON").Wrap(err))
 		return
 	}
+	externalID := strings.TrimSpace(req.ExternalID)
 	details := map[string]string{}
-	if strings.TrimSpace(req.ExternalID) == "" {
+	if externalID == "" {
 		details["external_id"] = "required"
 	}
 	if _, ok := models.ParseSettlementStatus(req.Status); !ok {
@@ -70,13 +75,24 @@ func (h *WebhookHandler) Gateway(w http.ResponseWriter, r *http.Request) {
 	}
 
 	event := events.NewEvent(events.EventTypes.SettlePayment, "payment-service", events.SettlePaymentPayload{
-		ExternalID: req.ExternalID,
+		ExternalID: externalID,
 		Status:     req.Status,
-		Reason:     req.Reason,
+		Reason:     truncate(req.Reason, maxReasonBytes),
 	}).WithTraceID(middleware.GetRequestID(r.Context()))
-	if err := h.publisher.Publish(r.Context(), events.Topics.PaymentCommands, req.ExternalID, event); err != nil {
+	if err := h.publisher.Publish(r.Context(), events.Topics.PaymentCommands, externalID, event); err != nil {
 		response.FromError(w, apperrors.ServiceUnavailable("PUBLISH_FAILED", "settlement could not be queued").Wrap(err))
 		return
 	}
 	response.Accepted(w, map[string]string{"command_id": event.ID})
+}
+
+func truncate(value string, limit int) string {
+	if len(value) <= limit {
+		return value
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(value[cut]) {
+		cut--
+	}
+	return value[:cut]
 }
