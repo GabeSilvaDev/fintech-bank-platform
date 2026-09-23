@@ -84,7 +84,14 @@ export function fundAccount(accountId, amount) {
     idempotency_key: idempotencyKey,
   }), { headers: jsonHeaders });
   check(res, { 'funding deposit accepted (202)': (r) => r.status === 202 });
-  return waitForStatus(`/api/v1/accounts/${accountId}/transactions`, idempotencyKey, TRANSACTION_FINAL_STATUSES);
+  const settled = waitForStatus(`/api/v1/accounts/${accountId}/transactions`, idempotencyKey, TRANSACTION_FINAL_STATUSES);
+  if (!settled) {
+    throw new Error(`funding deposit for account ${accountId} did not settle within timeout (idempotency_key=${idempotencyKey})`);
+  }
+  if (settled.status !== 'completed') {
+    throw new Error(`funding deposit for account ${accountId} settled as ${settled.status}, expected completed (idempotency_key=${idempotencyKey})`);
+  }
+  return settled;
 }
 
 export function createFundedCustomer(amount) {

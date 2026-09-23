@@ -10,9 +10,11 @@ const ACCOUNT_COUNT = 10;
 const POLL_TIMEOUT_MS = 120000;
 
 const commandsAccepted = new Counter('commands_accepted');
-const commandsAcceptedPerSecond = new Trend('commands_accepted_per_second');
-const completedPerSecond = new Trend('completed_per_second');
+const completedDeposits = new Counter('completed_deposits');
+const settlementFailures = new Counter('settlement_failures');
 const unresolvedAfterTimeout = new Counter('unresolved_after_timeout');
+const submissionDurationSeconds = new Trend('submission_duration_seconds');
+const completedPerSecond = new Trend('completed_per_second');
 
 export const options = {
   scenarios: {
@@ -25,6 +27,9 @@ export const options = {
   },
   setupTimeout: '180s',
   summaryTrendStats,
+  thresholds: {
+    settlement_failures: ['count==0'],
+  },
 };
 
 export function setup() {
@@ -62,6 +67,7 @@ export default function (data) {
 function pollUntilAllSettled(plan, timeoutMs) {
   const remaining = new Map();
   plan.forEach((item) => remaining.set(item.idempotencyKey, true));
+  const resolvedStatus = new Map();
   const accountIds = Array.from(new Set(plan.map((item) => item.accountId)));
   const deadline = Date.now() + timeoutMs;
 
@@ -73,6 +79,7 @@ function pollUntilAllSettled(plan, timeoutMs) {
         const items = parsed.data || [];
         items.forEach((tx) => {
           if (remaining.has(tx.idempotency_key) && TRANSACTION_FINAL_STATUSES.indexOf(tx.status) !== -1) {
+            resolvedStatus.set(tx.idempotency_key, tx.status);
             remaining.delete(tx.idempotency_key);
           }
         });
@@ -82,20 +89,34 @@ function pollUntilAllSettled(plan, timeoutMs) {
       sleep(0.5);
     }
   }
-  return remaining.size;
+  return { resolvedStatus, unresolvedCount: remaining.size };
 }
 
 export function teardown(data) {
   const submissionEnd = Date.now();
-  const submissionSeconds = (submissionEnd - data.start) / 1000;
-  commandsAcceptedPerSecond.add(N / submissionSeconds);
+  submissionDurationSeconds.add((submissionEnd - data.start) / 1000);
 
-  const stillUnresolved = pollUntilAllSettled(data.plan, POLL_TIMEOUT_MS);
+  const { resolvedStatus, unresolvedCount } = pollUntilAllSettled(data.plan, POLL_TIMEOUT_MS);
   const completionEnd = Date.now();
   const completionSeconds = (completionEnd - data.start) / 1000;
-  completedPerSecond.add((N - stillUnresolved) / completionSeconds);
-  if (stillUnresolved > 0) {
-    unresolvedAfterTimeout.add(stillUnresolved);
+
+  let completedCount = 0;
+  let failedCount = 0;
+  resolvedStatus.forEach((status) => {
+    if (status === 'completed') {
+      completedCount += 1;
+    } else {
+      failedCount += 1;
+    }
+  });
+
+  completedDeposits.add(completedCount);
+  completedPerSecond.add(completedCount / completionSeconds);
+  if (failedCount > 0) {
+    settlementFailures.add(failedCount);
+  }
+  if (unresolvedCount > 0) {
+    unresolvedAfterTimeout.add(unresolvedCount);
   }
 }
 
@@ -103,10 +124,18 @@ export function handleSummary(data) {
   const metric = (name, field) => {
     const m = data.metrics[name];
     if (!m || !m.values || m.values[field] === undefined) {
-      return 'n/a';
+      return 0;
     }
     return m.values[field];
   };
+
+  const acceptedCount = metric('commands_accepted', 'count');
+  const submissionSeconds = metric('submission_duration_seconds', 'avg');
+  const acceptedPerSecond = submissionSeconds > 0 ? acceptedCount / submissionSeconds : 0;
+  const completedCount = metric('completed_deposits', 'count');
+  const failuresCount = metric('settlement_failures', 'count');
+  const unresolvedCount = metric('unresolved_after_timeout', 'count');
+  const completedRate = metric('completed_per_second', 'avg');
 
   const lines = [];
   lines.push('');
@@ -117,9 +146,11 @@ export function handleSummary(data) {
   lines.push(`http_req_duration p(99): ${metric('http_req_duration', 'p(99)')} ms`);
   lines.push(`http_req_failed rate: ${metric('http_req_failed', 'rate')}`);
   lines.push(`checks rate: ${metric('checks', 'rate')}`);
-  lines.push(`commands accepted/s: ${metric('commands_accepted_per_second', 'avg')}`);
-  lines.push(`end-to-end completions/s: ${metric('completed_per_second', 'avg')}`);
-  lines.push(`unresolved after timeout: ${metric('unresolved_after_timeout', 'count')}`);
+  lines.push(`commands accepted: ${acceptedCount}/${N} (${acceptedPerSecond}/s)`);
+  lines.push(`completed deposits: ${completedCount}/${N}`);
+  lines.push(`settlement failures (non-completed terminal status): ${failuresCount}`);
+  lines.push(`unresolved after timeout: ${unresolvedCount}`);
+  lines.push(`end-to-end completions/s: ${completedRate}`);
   lines.push('');
 
   return { stdout: lines.join('\n') };
