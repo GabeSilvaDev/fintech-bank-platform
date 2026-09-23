@@ -119,7 +119,7 @@
       image: redis:7.2-alpine
       container_name: fintech-redis
       ports:
-        - "${REDIS_PORT:-6379}:6379"
+        - "127.0.0.1:${REDIS_PORT:-6379}:6379"
       command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru
       volumes:
         - redis_data:/data
@@ -136,8 +136,8 @@
       image: axllent/mailpit:v1.21.8
       container_name: fintech-mailpit
       ports:
-        - "${MAILPIT_SMTP_PORT:-1025}:1025"
-        - "${MAILPIT_UI_PORT:-8025}:8025"
+        - "127.0.0.1:${MAILPIT_SMTP_PORT:-1025}:1025"
+        - "127.0.0.1:${MAILPIT_UI_PORT:-8025}:8025"
       networks:
         - fintech-network
       healthcheck:
