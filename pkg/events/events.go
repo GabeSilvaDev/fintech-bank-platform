@@ -136,13 +136,13 @@ var EventTypes = struct {
 	ProcessPayment string
 	RefundPayment  string
 	CancelPayment  string
+	SubmitPayment  string
+	SettlePayment  string
 
 	// Payment Events
 	PaymentCreated       string
 	PaymentProcessed     string
 	PaymentCompleted     string
-	SubmitPayment        string
-	SettlePayment        string
 	PaymentFailed        string
 	PaymentRefunded      string
 	PaymentCancelled     string
@@ -192,13 +192,13 @@ var EventTypes = struct {
 	ProcessPayment: "payment.process",
 	RefundPayment:  "payment.refund",
 	CancelPayment:  "payment.cancel",
+	SubmitPayment:  "payment.submit",
+	SettlePayment:  "payment.settle",
 
 	// Payment Events
 	PaymentCreated:       "payment.created",
 	PaymentProcessed:     "payment.processed",
 	PaymentCompleted:     "payment.completed",
-	SubmitPayment:        "payment.submit",
-	SettlePayment:        "payment.settle",
 	PaymentFailed:        "payment.failed",
 	PaymentRefunded:      "payment.refunded",
 	PaymentCancelled:     "payment.cancelled",
