@@ -17,15 +17,25 @@ import (
 	"github.com/fintech-bank-platform/pkg/domain"
 )
 
+const defaultSMTPTimeout = 10 * time.Second
+
 type SMTP struct {
-	addr    string
-	from    string
-	timeout time.Duration
-	now     func() time.Time
+	addr     string
+	from     string
+	envelope string
+	timeout  time.Duration
+	now      func() time.Time
 }
 
 func NewSMTP(addr, from string, timeout time.Duration) *SMTP {
-	return &SMTP{addr: addr, from: from, timeout: timeout, now: time.Now}
+	if timeout <= 0 {
+		timeout = defaultSMTPTimeout
+	}
+	envelope := from
+	if address, err := mail.ParseAddress(from); err == nil {
+		envelope = address.Address
+	}
+	return &SMTP{addr: addr, from: from, envelope: envelope, timeout: timeout, now: time.Now}
 }
 
 func (s *SMTP) WithClock(now func() time.Time) *SMTP {
@@ -43,20 +53,28 @@ func (s *SMTP) Send(ctx context.Context, message models.Message) error {
 }
 
 func (s *SMTP) deliver(ctx context.Context, to string, msg []byte) error {
+	err := s.converse(ctx, to, msg)
+	if err != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return err
+}
+
+func (s *SMTP) converse(ctx context.Context, to string, msg []byte) error {
 	host, _, err := net.SplitHostPort(s.addr)
 	if err != nil {
 		return err
 	}
-	conn, err := (&net.Dialer{Timeout: s.timeout}).DialContext(ctx, "tcp", s.addr)
+	deadline := time.Now().Add(s.timeout)
+	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
+		deadline = ctxDeadline
+	}
+	conn, err := (&net.Dialer{Deadline: deadline}).DialContext(ctx, "tcp", s.addr)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
 
-	deadline := time.Now().Add(s.timeout)
-	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
-		deadline = ctxDeadline
-	}
 	if err := conn.SetDeadline(deadline); err != nil {
 		return err
 	}
@@ -77,7 +95,7 @@ func (s *SMTP) deliver(ctx context.Context, to string, msg []byte) error {
 			return err
 		}
 	}
-	if err := client.Mail(s.from); err != nil {
+	if err := client.Mail(s.envelope); err != nil {
 		return err
 	}
 	if err := client.Rcpt(to); err != nil {
@@ -93,7 +111,8 @@ func (s *SMTP) deliver(ctx context.Context, to string, msg []byte) error {
 	if err := writer.Close(); err != nil {
 		return err
 	}
-	return client.Quit()
+	_ = client.Quit()
+	return nil
 }
 
 func MessageID(from string) string {

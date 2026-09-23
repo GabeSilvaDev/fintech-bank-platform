@@ -204,13 +204,30 @@ func TestSMTPSendReturnsServerRejections(t *testing.T) {
 		"rcpt":     {"RCPT": "550 no such user"},
 		"data":     {"DATA": "554 no data"},
 		"data end": {".": "554 rejected"},
-		"quit":     {"QUIT": "500 no"},
 	}
 	for name, replies := range cases {
 		addr, _ := startSMTPServer(t, replies)
 		sender := senders.NewSMTP(addr, "no-reply@fintech.local", time.Second)
 		assert.Error(t, sender.Send(context.Background(), models.Message{To: "ana@example.com", Body: "corpo"}), name)
 	}
+}
+
+func TestSMTPSendIgnoresQuitFailuresAfterTheMessageIsAccepted(t *testing.T) {
+	addr, capture := startSMTPServer(t, map[string]string{"QUIT": "500 no"})
+	sender := senders.NewSMTP(addr, "no-reply@fintech.local", time.Second)
+
+	assert.NoError(t, sender.Send(context.Background(), models.Message{To: "ana@example.com", Body: "corpo"}))
+	assert.Contains(t, capture.snapshot().data, "corpo")
+}
+
+func TestSMTPSendUsesTheBareSenderAddressAsEnvelope(t *testing.T) {
+	addr, capture := startSMTPServer(t, nil)
+	sender := senders.NewSMTP(addr, "Fintech Bank <avisos@bank.test>", 0)
+
+	assert.NoError(t, sender.Send(context.Background(), models.Message{To: "ana@example.com", Body: "corpo"}))
+	got := capture.snapshot()
+	assert.True(t, strings.HasPrefix(got.from, "FROM:<avisos@bank.test>"), got.from)
+	assert.Contains(t, got.data, "From: Fintech Bank <avisos@bank.test>\n")
 }
 
 func TestSMTPSendFailsOnUnreachableServers(t *testing.T) {
@@ -235,18 +252,18 @@ func TestSMTPSendHonoursTheContext(t *testing.T) {
 
 	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	assert.Error(t, sender.Send(cancelled, message))
+	assert.ErrorIs(t, sender.Send(cancelled, message), context.Canceled)
 
 	short, cancelShort := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancelShort()
 	started := time.Now()
-	assert.Error(t, sender.Send(short, message))
+	assert.ErrorIs(t, sender.Send(short, message), context.DeadlineExceeded)
 	assert.Less(t, time.Since(started), 2*time.Second)
 
 	aborted, abort := context.WithCancel(context.Background())
 	time.AfterFunc(200*time.Millisecond, abort)
 	started = time.Now()
-	assert.Error(t, sender.Send(aborted, message))
+	assert.ErrorIs(t, sender.Send(aborted, message), context.Canceled)
 	assert.Less(t, time.Since(started), 2*time.Second)
 }
 
