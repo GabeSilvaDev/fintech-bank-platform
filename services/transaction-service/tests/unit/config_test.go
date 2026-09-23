@@ -123,3 +123,32 @@ func TestConfigStartupInvalidValuesFallBackToDefaults(t *testing.T) {
 	assert.Equal(t, 30, cfg.Startup.Attempts)
 	assert.Equal(t, 2*time.Second, cfg.Startup.Delay)
 }
+
+func TestConfigObservabilityDefaults(t *testing.T) {
+	cfg, err := config.New()
+
+	assert.NoError(t, err)
+	assert.True(t, cfg.Observability.MetricsEnabled)
+	assert.Empty(t, cfg.Observability.OTLPEndpoint)
+	assert.Equal(t, 1.0, cfg.Observability.SampleRatio)
+}
+
+func TestConfigObservabilityFromEnv(t *testing.T) {
+	t.Setenv("METRICS_ENABLED", "false")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318")
+	t.Setenv("OTEL_SAMPLER_RATIO", "0.5")
+
+	cfg, _ := config.New()
+
+	assert.False(t, cfg.Observability.MetricsEnabled)
+	assert.Equal(t, "http://collector:4318", cfg.Observability.OTLPEndpoint)
+	assert.Equal(t, 0.5, cfg.Observability.SampleRatio)
+}
+
+func TestConfigObservabilityInvalidSampleRatioFallsBack(t *testing.T) {
+	t.Setenv("OTEL_SAMPLER_RATIO", "not-a-number")
+
+	cfg, _ := config.New()
+
+	assert.Equal(t, 1.0, cfg.Observability.SampleRatio)
+}

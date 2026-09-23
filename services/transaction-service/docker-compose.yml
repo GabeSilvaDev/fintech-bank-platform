@@ -16,6 +16,7 @@ services:
       - LOG_PRETTY=true
       - KAFKA_BROKERS=kafka:29092
       - CASSANDRA_HOSTS=cassandra:9042
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-}
     networks:
       - fintech-network
     restart: unless-stopped

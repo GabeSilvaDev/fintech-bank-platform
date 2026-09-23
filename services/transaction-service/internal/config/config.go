@@ -10,13 +10,14 @@ import (
 )
 
 type Config struct {
-	Server    contracts.ServerConfig
-	Kafka     contracts.KafkaConfig
-	Cassandra contracts.CassandraConfig
-	Consumer  contracts.ConsumerConfig
-	Log       contracts.LogConfig
-	Sweeper   contracts.SweeperConfig
-	Startup   contracts.StartupConfig
+	Server        contracts.ServerConfig
+	Kafka         contracts.KafkaConfig
+	Cassandra     contracts.CassandraConfig
+	Consumer      contracts.ConsumerConfig
+	Log           contracts.LogConfig
+	Sweeper       contracts.SweeperConfig
+	Startup       contracts.StartupConfig
+	Observability contracts.ObservabilityConfig
 }
 
 const (
@@ -76,6 +77,7 @@ func New() (*Config, error) {
 			Attempts: env.GetIntMin("STARTUP_RETRY_ATTEMPTS", 30, 1),
 			Delay:    positiveDuration(env.GetDuration("STARTUP_RETRY_DELAY", 2*time.Second), 2*time.Second),
 		},
+		Observability: loadObservabilityConfig(),
 	}, nil
 }
 
@@ -84,4 +86,12 @@ func positiveDuration(value, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return value
+}
+
+func loadObservabilityConfig() contracts.ObservabilityConfig {
+	return contracts.ObservabilityConfig{
+		MetricsEnabled: env.GetBool("METRICS_ENABLED", true),
+		OTLPEndpoint:   env.Get("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+		SampleRatio:    env.GetFloat("OTEL_SAMPLER_RATIO", 1.0),
+	}
 }
