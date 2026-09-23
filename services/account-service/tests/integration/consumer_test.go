@@ -77,7 +77,7 @@ func TestConsumerAppliesCommandsEndToEnd(t *testing.T) {
 	results := kafka.NewReader(kafka.ReaderConfig{Brokers: addrs, GroupID: "it-results-" + uuid.NewString(), Topic: events.Topics.AccountEvents, StartOffset: kafka.FirstOffset, MinBytes: 1, MaxBytes: 1 << 20})
 	defer results.Close()
 
-	service := services.NewAccountService(database.NewAccountRepository(session), database.NewCustomerRepository(session), services.SystemClock{}, services.RandomNumber)
+	service := services.NewAccountService(database.NewAccountRepository(session), database.NewCustomerRepository(session), database.NewBalanceOperationRepository(session), services.SystemClock{}, services.RandomNumber)
 	proc := processor.NewProcessor(handlers.NewDispatcher(service), database.NewProcessedEventStore(session), producer, processor.Config{
 		Source:          "account-service",
 		FailedEventType: events.EventTypes.AccountCommandFailed,

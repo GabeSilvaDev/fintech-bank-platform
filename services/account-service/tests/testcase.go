@@ -17,18 +17,20 @@ import (
 
 type TestCase struct {
 	suite.Suite
-	Router    *chi.Mux
-	Accounts  *FakeAccountRepo
-	Customers *FakeCustomerRepo
-	Service   *services.AccountService
-	PingErr   error
-	headers   map[string]string
+	Router     *chi.Mux
+	Accounts   *FakeAccountRepo
+	Customers  *FakeCustomerRepo
+	Operations *FakeOperationRepo
+	Service    *services.AccountService
+	PingErr    error
+	headers    map[string]string
 }
 
 func (tc *TestCase) SetupTest() {
 	tc.Accounts = NewFakeAccountRepo()
 	tc.Customers = NewFakeCustomerRepo()
-	tc.Service = services.NewAccountService(tc.Accounts, tc.Customers, FakeClock{T: time.Now().UTC()}, func() string { return "00000001" })
+	tc.Operations = NewFakeOperationRepo()
+	tc.Service = services.NewAccountService(tc.Accounts, tc.Customers, tc.Operations, FakeClock{T: time.Now().UTC()}, func() string { return "00000001" })
 	tc.PingErr = nil
 	tc.headers = map[string]string{}
 

@@ -18,18 +18,19 @@ import (
 var now = time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC)
 
 type harness struct {
-	accounts  *tests.FakeAccountRepo
-	customers *tests.FakeCustomerRepo
-	numbers   []string
-	service   *services.AccountService
+	accounts   *tests.FakeAccountRepo
+	customers  *tests.FakeCustomerRepo
+	operations *tests.FakeOperationRepo
+	numbers    []string
+	service    *services.AccountService
 }
 
 func newHarness(numbers ...string) *harness {
-	h := &harness{accounts: tests.NewFakeAccountRepo(), customers: tests.NewFakeCustomerRepo(), numbers: numbers}
+	h := &harness{accounts: tests.NewFakeAccountRepo(), customers: tests.NewFakeCustomerRepo(), operations: tests.NewFakeOperationRepo(), numbers: numbers}
 	if len(h.numbers) == 0 {
 		h.numbers = []string{"12345678"}
 	}
-	h.service = services.NewAccountService(h.accounts, h.customers, tests.FakeClock{T: now}, func() string {
+	h.service = services.NewAccountService(h.accounts, h.customers, h.operations, tests.FakeClock{T: now}, func() string {
 		number := h.numbers[0]
 		if len(h.numbers) > 1 {
 			h.numbers = h.numbers[1:]

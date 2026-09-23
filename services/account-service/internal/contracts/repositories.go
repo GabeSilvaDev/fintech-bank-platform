@@ -28,6 +28,13 @@ type ProcessedEventStore interface {
 	MarkProcessed(ctx context.Context, eventID uuid.UUID) (bool, error)
 }
 
+type BalanceOperationRepository interface {
+	Reserve(ctx context.Context, accountID uuid.UUID, key, kind string, at time.Time) (bool, error)
+	Get(ctx context.Context, accountID uuid.UUID, key string) (*models.BalanceOperation, error)
+	Complete(ctx context.Context, accountID uuid.UUID, key, result string, at time.Time) error
+	Release(ctx context.Context, accountID uuid.UUID, key string) error
+}
+
 type Migrator interface {
 	Up(ctx context.Context) ([]int, error)
 }

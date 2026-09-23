@@ -228,6 +228,81 @@ func (f *FakeCustomerRepo) UpdateProfile(_ context.Context, userID uuid.UUID, na
 	return nil
 }
 
+type FakeOperationRepo struct {
+	Operations    map[string]*models.BalanceOperation
+	ReserveErr    error
+	GetErr        error
+	CompleteErr   error
+	ReleaseErr    error
+	ReserveCalls  int
+	GetCalls      int
+	CompleteCalls int
+	ReleaseCalls  int
+}
+
+func NewFakeOperationRepo() *FakeOperationRepo {
+	return &FakeOperationRepo{Operations: map[string]*models.BalanceOperation{}}
+}
+
+func operationKey(accountID uuid.UUID, key string) string {
+	return accountID.String() + "/" + key
+}
+
+func (f *FakeOperationRepo) Reserve(_ context.Context, accountID uuid.UUID, key, kind string, at time.Time) (bool, error) {
+	f.ReserveCalls++
+	if f.ReserveErr != nil {
+		return false, f.ReserveErr
+	}
+	k := operationKey(accountID, key)
+	if _, exists := f.Operations[k]; exists {
+		return false, nil
+	}
+	f.Operations[k] = &models.BalanceOperation{AccountID: accountID, Key: key, Kind: kind, Status: models.OperationPending, CreatedAt: at, UpdatedAt: at}
+	return true, nil
+}
+
+func (f *FakeOperationRepo) Get(_ context.Context, accountID uuid.UUID, key string) (*models.BalanceOperation, error) {
+	f.GetCalls++
+	if f.GetErr != nil {
+		return nil, f.GetErr
+	}
+	operation, ok := f.Operations[operationKey(accountID, key)]
+	if !ok {
+		return nil, domain.ErrNotFound
+	}
+	copied := *operation
+	return &copied, nil
+}
+
+func (f *FakeOperationRepo) Complete(_ context.Context, accountID uuid.UUID, key, result string, at time.Time) error {
+	f.CompleteCalls++
+	if f.CompleteErr != nil {
+		return f.CompleteErr
+	}
+	k := operationKey(accountID, key)
+	operation, ok := f.Operations[k]
+	if !ok {
+		operation = &models.BalanceOperation{AccountID: accountID, Key: key}
+		f.Operations[k] = operation
+	}
+	operation.Status = models.OperationDone
+	operation.Result = result
+	operation.UpdatedAt = at
+	return nil
+}
+
+func (f *FakeOperationRepo) Release(_ context.Context, accountID uuid.UUID, key string) error {
+	f.ReleaseCalls++
+	if f.ReleaseErr != nil {
+		return f.ReleaseErr
+	}
+	k := operationKey(accountID, key)
+	if operation, ok := f.Operations[k]; ok && operation.Status == models.OperationPending {
+		delete(f.Operations, k)
+	}
+	return nil
+}
+
 type FakeStore struct {
 	Seen map[uuid.UUID]bool
 	Errs []error

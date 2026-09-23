@@ -34,14 +34,15 @@ func (SystemClock) Now() time.Time {
 }
 
 type AccountService struct {
-	accounts  contracts.AccountRepository
-	customers contracts.CustomerRepository
-	clock     contracts.Clock
-	number    NumberGenerator
+	accounts   contracts.AccountRepository
+	customers  contracts.CustomerRepository
+	operations contracts.BalanceOperationRepository
+	clock      contracts.Clock
+	number     NumberGenerator
 }
 
-func NewAccountService(accounts contracts.AccountRepository, customers contracts.CustomerRepository, clock contracts.Clock, number NumberGenerator) *AccountService {
-	return &AccountService{accounts: accounts, customers: customers, clock: clock, number: number}
+func NewAccountService(accounts contracts.AccountRepository, customers contracts.CustomerRepository, operations contracts.BalanceOperationRepository, clock contracts.Clock, number NumberGenerator) *AccountService {
+	return &AccountService{accounts: accounts, customers: customers, operations: operations, clock: clock, number: number}
 }
 
 func (s *AccountService) Create(ctx context.Context, cmd events.CreateAccountPayload) (events.AccountCreatedPayload, error) {
@@ -289,7 +290,20 @@ func (s *AccountService) Credit(ctx context.Context, cmd events.CreditAccountPay
 	if err != nil {
 		return CreditResult{}, err
 	}
+	key := strings.TrimSpace(cmd.IdempotencyKey)
+	if key == "" {
+		return CreditResult{}, domain.Invalid("invalid_idempotency_key", "idempotency_key is required")
+	}
+	var result CreditResult
+	err = s.once(ctx, accountID, key, "credit", &result, func() error {
+		var applyErr error
+		result, applyErr = s.applyCredit(ctx, cmd, accountID, cents)
+		return applyErr
+	})
+	return result, err
+}
 
+func (s *AccountService) applyCredit(ctx context.Context, cmd events.CreditAccountPayload, accountID uuid.UUID, cents int64) (CreditResult, error) {
 	account, err := s.accounts.Get(ctx, accountID)
 	if errors.Is(err, domain.ErrNotFound) {
 		return creditRejected(cmd, cents, accountID, 0, "account_not_found"), nil
@@ -333,7 +347,20 @@ func (s *AccountService) Debit(ctx context.Context, cmd events.DebitAccountPaylo
 	if err != nil {
 		return DebitResult{}, err
 	}
+	key := strings.TrimSpace(cmd.IdempotencyKey)
+	if key == "" {
+		return DebitResult{}, domain.Invalid("invalid_idempotency_key", "idempotency_key is required")
+	}
+	var result DebitResult
+	err = s.once(ctx, accountID, key, "debit", &result, func() error {
+		var applyErr error
+		result, applyErr = s.applyDebit(ctx, cmd, accountID, cents)
+		return applyErr
+	})
+	return result, err
+}
 
+func (s *AccountService) applyDebit(ctx context.Context, cmd events.DebitAccountPayload, accountID uuid.UUID, cents int64) (DebitResult, error) {
 	account, err := s.accounts.Get(ctx, accountID)
 	if errors.Is(err, domain.ErrNotFound) {
 		return debitRejected(cmd, cents, accountID, 0, "account_not_found"), nil

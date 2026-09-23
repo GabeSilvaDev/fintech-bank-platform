@@ -164,7 +164,7 @@ func TestBalanceAmountsAreReportedRounded(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 0.3, result.Debited.Amount)
 
-	result, err = h.service.Debit(context.Background(), debit(account.AccountID.String(), 1+amount))
+	result, err = h.service.Debit(context.Background(), events.DebitAccountPayload{AccountID: account.AccountID.String(), Amount: 1 + amount, Currency: "brl", Reference: "tx-2", IdempotencyKey: "k-3"})
 	assert.NoError(t, err)
 	assert.Equal(t, "insufficient_funds", result.Rejected.Reason)
 	assert.Equal(t, 1.3, result.Rejected.Amount)

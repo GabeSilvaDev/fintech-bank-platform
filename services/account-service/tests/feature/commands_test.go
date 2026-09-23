@@ -21,7 +21,8 @@ func TestCommandsEndToEndWithFakeInfrastructure(t *testing.T) {
 	accounts := tests.NewFakeAccountRepo()
 	customers := tests.NewFakeCustomerRepo()
 	publisher := &tests.FakePublisher{}
-	service := services.NewAccountService(accounts, customers, tests.FakeClock{T: time.Now().UTC()}, func() string { return "87654321" })
+	operations := tests.NewFakeOperationRepo()
+	service := services.NewAccountService(accounts, customers, operations, tests.FakeClock{T: time.Now().UTC()}, func() string { return "87654321" })
 	proc := processor.NewProcessor(handlers.NewDispatcher(service), tests.NewFakeStore(), publisher, processor.Config{
 		Source:          "account-service",
 		FailedEventType: events.EventTypes.AccountCommandFailed,
@@ -39,7 +40,7 @@ func TestCommandsEndToEndWithFakeInfrastructure(t *testing.T) {
 	accountID := uuid.MustParse(created.AccountID)
 	assert.Equal(t, models.AccountStatusActive, accounts.Accounts[accountID].Status)
 
-	debit := events.NewAccountCommand(events.EventTypes.DebitAccount, events.DebitAccountPayload{AccountID: created.AccountID, Amount: 10, Currency: "BRL"}).WithTraceID("t-2")
+	debit := events.NewAccountCommand(events.EventTypes.DebitAccount, events.DebitAccountPayload{AccountID: created.AccountID, Amount: 10, Currency: "BRL", IdempotencyKey: "d-1"}).WithTraceID("t-2")
 	raw, _ = debit.ToJSON()
 	assert.NoError(t, proc.Process(ctx, []byte(created.AccountID), raw))
 

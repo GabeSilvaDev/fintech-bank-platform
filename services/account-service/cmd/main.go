@@ -50,6 +50,7 @@ func main() {
 	service := services.NewAccountService(
 		database.NewAccountRepository(session),
 		database.NewCustomerRepository(session),
+		database.NewBalanceOperationRepository(session),
 		services.SystemClock{},
 		services.RandomNumber,
 	)
