@@ -492,3 +492,54 @@ func TestValidateReportsJSONFieldNames(t *testing.T) {
 	}
 	assert.Equal(t, []string{"user_id", "Secret", "Plain"}, fields)
 }
+
+func TestIsValidBoleto(t *testing.T) {
+	valid := []string{
+		"34191790010100000012334567812309811000000015000",
+		"34191790010100000012334567812309500000000000000",
+		"99990000040000000000000000000018111000000005000",
+		"23793381286000000000400000001230820000000123456",
+	}
+	for _, code := range valid {
+		assert.True(t, IsValidBoleto(code), code)
+	}
+
+	invalid := []string{
+		"",
+		"3419179001010000001233456781230981100000001500",
+		"341917900101000000123345678123098110000000150000",
+		"3419179001010000001233456781230981100000001500a",
+		"34191790020100000012334567812309811000000015000",
+		"34191790010100000012934567812309811000000015000",
+		"34191790010100000012334567812308811000000015000",
+		"34191790010100000012334567812309211000000015000",
+	}
+	for _, code := range invalid {
+		assert.False(t, IsValidBoleto(code), code)
+	}
+}
+
+func TestBoletoAmountCents(t *testing.T) {
+	amount, ok := BoletoAmountCents("34191790010100000012334567812309811000000015000")
+	assert.True(t, ok)
+	assert.Equal(t, int64(15000), amount)
+
+	amount, ok = BoletoAmountCents("34191790010100000012334567812309500000000000000")
+	assert.True(t, ok)
+	assert.Equal(t, int64(0), amount)
+
+	amount, ok = BoletoAmountCents("23793381286000000000400000001230820000000123456")
+	assert.True(t, ok)
+	assert.Equal(t, int64(123456), amount)
+
+	_, ok = BoletoAmountCents("34191790020100000012334567812309811000000015000")
+	assert.False(t, ok)
+}
+
+func TestBoletoTag(t *testing.T) {
+	type payment struct {
+		Code string `validate:"boleto"`
+	}
+	assert.NoError(t, Validate(payment{Code: "34191790010100000012334567812309811000000015000"}))
+	assert.Error(t, Validate(payment{Code: "34191790020100000012334567812309811000000015000"}))
+}

@@ -39,6 +39,7 @@ func registerCustomValidators() {
 	validate.RegisterValidation("account_number", validateAccountNumber)
 	validate.RegisterValidation("agency_number", validateAgencyNumber)
 	validate.RegisterValidation("pix_key", validatePixKey)
+	validate.RegisterValidation("boleto", validateBoleto)
 }
 
 // Validate validates a struct using the validator
@@ -347,4 +348,69 @@ func SanitizeCNPJ(cnpj string) string {
 // SanitizePhone removes formatting from phone number
 func SanitizePhone(phone string) string {
 	return regexp.MustCompile(`\D`).ReplaceAllString(phone, "")
+}
+
+func onlyDigits(s string) bool {
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func validateBoleto(fl validator.FieldLevel) bool {
+	return IsValidBoleto(fl.Field().String())
+}
+
+func IsValidBoleto(code string) bool {
+	if len(code) != 47 || !onlyDigits(code) {
+		return false
+	}
+	for _, field := range [][2]int{{0, 9}, {10, 20}, {21, 31}} {
+		if int(code[field[1]]-'0') != boletoMod10(code[field[0]:field[1]]) {
+			return false
+		}
+	}
+	barcode := code[0:4] + code[33:47] + code[4:9] + code[10:20] + code[21:31]
+	return int(code[32]-'0') == boletoMod11(barcode)
+}
+
+func BoletoAmountCents(code string) (int64, bool) {
+	if !IsValidBoleto(code) {
+		return 0, false
+	}
+	var cents int64
+	for _, digit := range code[37:47] {
+		cents = cents*10 + int64(digit-'0')
+	}
+	return cents, true
+}
+
+func boletoMod10(digits string) int {
+	sum := 0
+	weight := 2
+	for i := len(digits) - 1; i >= 0; i-- {
+		product := int(digits[i]-'0') * weight
+		sum += product/10 + product%10
+		weight = 3 - weight
+	}
+	return (10 - sum%10) % 10
+}
+
+func boletoMod11(digits string) int {
+	sum := 0
+	weight := 2
+	for i := len(digits) - 1; i >= 0; i-- {
+		sum += int(digits[i]-'0') * weight
+		weight++
+		if weight > 9 {
+			weight = 2
+		}
+	}
+	dv := 11 - sum%11
+	if dv == 0 || dv == 10 || dv == 11 {
+		return 1
+	}
+	return dv
 }
