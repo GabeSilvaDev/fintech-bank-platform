@@ -27,6 +27,27 @@ func breakerConfig(threshold uint32, timeout time.Duration) contracts.KafkaConfi
 	return contracts.KafkaConfig{BreakerThreshold: threshold, BreakerTimeout: timeout}
 }
 
+type recoveryPublisher struct {
+	calls   int
+	started chan struct{}
+	release chan struct{}
+}
+
+func newRecoveryPublisher() *recoveryPublisher {
+	return &recoveryPublisher{started: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (p *recoveryPublisher) Publish(_ context.Context, _, _ string, _ *events.Event) error {
+	p.calls++
+	if p.calls == 1 {
+		return errors.New("down")
+	}
+
+	close(p.started)
+	<-p.release
+	return nil
+}
+
 func TestBreakerPassesThroughOnSuccess(t *testing.T) {
 	pub := &tests.FakePublisher{}
 	b := messaging.NewBreaker(pub, breakerConfig(2, time.Minute), nil)
@@ -111,6 +132,43 @@ func TestBreakerGaugeReflectsOpenAndRecoveredStates(t *testing.T) {
 	err := b.Publish(ctx, events.Topics.AccountCommands, "k", ev)
 
 	assert.NoError(t, err)
+	assert.Equal(t, float64(0), breakerStateValue(t, m))
+}
+
+func TestBreakerGaugeReportsHalfOpenWhileRecoveryAttemptIsInFlight(t *testing.T) {
+	m := metrics.New("test-breaker-half-open")
+	pub := newRecoveryPublisher()
+	b := messaging.NewBreaker(pub, breakerConfig(1, 20*time.Millisecond), m)
+	ev := events.NewAccountCommand(events.EventTypes.CreateAccount, nil)
+	ctx := context.Background()
+
+	assert.Error(t, b.Publish(ctx, events.Topics.AccountCommands, "k", ev))
+	assert.Equal(t, float64(2), breakerStateValue(t, m))
+
+	time.Sleep(40 * time.Millisecond)
+
+	done := make(chan error, 1)
+	go func() {
+		done <- b.Publish(ctx, events.Topics.AccountCommands, "k", ev)
+	}()
+
+	select {
+	case <-pub.started:
+	case <-time.After(time.Second):
+		t.Fatal("recovery attempt never started")
+	}
+
+	assert.Equal(t, float64(1), breakerStateValue(t, m))
+
+	close(pub.release)
+
+	select {
+	case err := <-done:
+		assert.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("recovery attempt never completed")
+	}
+
 	assert.Equal(t, float64(0), breakerStateValue(t, m))
 }
 
