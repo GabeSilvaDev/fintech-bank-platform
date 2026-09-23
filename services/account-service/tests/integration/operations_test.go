@@ -44,6 +44,18 @@ func TestBalanceOperationRepository(t *testing.T) {
 	require.Equal(t, `{"balance_after":10}`, operation.Result)
 	require.WithinDuration(t, completedAt, operation.UpdatedAt, time.Millisecond)
 
+	require.NoError(t, repo.Complete(ctx, accountID, "k-1", `{"balance_after":20}`, completedAt.Add(time.Minute)))
+	operation, err = repo.Get(ctx, accountID, "k-1")
+	require.NoError(t, err)
+	require.Equal(t, models.OperationDone, operation.Status)
+	require.Equal(t, `{"balance_after":10}`, operation.Result)
+	require.WithinDuration(t, completedAt, operation.UpdatedAt, time.Millisecond)
+
+	missingKey := uuid.NewString()
+	require.NoError(t, repo.Complete(ctx, accountID, missingKey, `{"balance_after":30}`, completedAt))
+	_, err = repo.Get(ctx, accountID, missingKey)
+	require.ErrorIs(t, err, domain.ErrNotFound)
+
 	require.NoError(t, repo.Release(ctx, accountID, "k-1"))
 	operation, err = repo.Get(ctx, accountID, "k-1")
 	require.NoError(t, err)

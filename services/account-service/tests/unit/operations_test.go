@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/fintech-bank-platform/account-service/internal/app/models"
 	"github.com/fintech-bank-platform/account-service/internal/app/services"
@@ -169,6 +170,47 @@ func TestCompleteFailureStillReturnsTheResult(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.NotNil(t, result.Credited)
+
+	h.operations.CompleteErr = nil
+	_, err = h.service.Credit(context.Background(), credit(account.AccountID.String(), 10))
+
+	assert.True(t, errors.Is(err, domain.ErrAmbiguousWrite))
+	assert.Equal(t, 1, h.accounts.CASCalls)
+	assert.Equal(t, int64(1000), h.accounts.Accounts[account.AccountID].BalanceCents)
+}
+
+func TestReleaseRunsEvenWhenTheCommandContextIsCancelled(t *testing.T) {
+	h := newHarness()
+	account := h.activeAccount(0)
+	h.accounts.CASResults = []tests.CASResult{{}, {}, {}, {}, {}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := h.service.Credit(ctx, credit(account.AccountID.String(), 10))
+
+	assert.ErrorIs(t, err, domain.ErrConflict)
+	assert.Equal(t, 1, h.operations.ReleaseCalls)
+	assert.NoError(t, h.operations.ReleaseCtxErr)
+	assert.WithinDuration(t, time.Now().Add(5*time.Second), h.operations.ReleaseDeadline, time.Second)
+	_, ok := h.operations.Operations[account.AccountID.String()+"/k-1"]
+	assert.False(t, ok)
+}
+
+func TestKeyReleasedBetweenReserveAndGetIsARetryableConflict(t *testing.T) {
+	h := newHarness()
+	account := h.activeAccount(0)
+
+	reserved, err := h.operations.Reserve(context.Background(), account.AccountID, "k-1", "credit", now)
+	assert.NoError(t, err)
+	assert.True(t, reserved)
+	h.operations.GetErr = domain.ErrNotFound
+
+	_, err = h.service.Credit(context.Background(), credit(account.AccountID.String(), 10))
+
+	assert.ErrorIs(t, err, domain.ErrConflict)
+	assert.NotErrorIs(t, err, domain.ErrNotFound)
+	assert.ErrorContains(t, err, "k-1")
+	assert.Equal(t, 0, h.accounts.CASCalls)
 }
 
 func TestReserveErrorPropagates(t *testing.T) {

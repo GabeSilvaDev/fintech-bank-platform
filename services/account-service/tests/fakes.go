@@ -229,15 +229,17 @@ func (f *FakeCustomerRepo) UpdateProfile(_ context.Context, userID uuid.UUID, na
 }
 
 type FakeOperationRepo struct {
-	Operations    map[string]*models.BalanceOperation
-	ReserveErr    error
-	GetErr        error
-	CompleteErr   error
-	ReleaseErr    error
-	ReserveCalls  int
-	GetCalls      int
-	CompleteCalls int
-	ReleaseCalls  int
+	Operations      map[string]*models.BalanceOperation
+	ReserveErr      error
+	GetErr          error
+	CompleteErr     error
+	ReleaseErr      error
+	ReserveCalls    int
+	GetCalls        int
+	CompleteCalls   int
+	ReleaseCalls    int
+	ReleaseCtxErr   error
+	ReleaseDeadline time.Time
 }
 
 func NewFakeOperationRepo() *FakeOperationRepo {
@@ -279,11 +281,9 @@ func (f *FakeOperationRepo) Complete(_ context.Context, accountID uuid.UUID, key
 	if f.CompleteErr != nil {
 		return f.CompleteErr
 	}
-	k := operationKey(accountID, key)
-	operation, ok := f.Operations[k]
-	if !ok {
-		operation = &models.BalanceOperation{AccountID: accountID, Key: key}
-		f.Operations[k] = operation
+	operation, ok := f.Operations[operationKey(accountID, key)]
+	if !ok || operation.Status != models.OperationPending {
+		return nil
 	}
 	operation.Status = models.OperationDone
 	operation.Result = result
@@ -291,8 +291,10 @@ func (f *FakeOperationRepo) Complete(_ context.Context, accountID uuid.UUID, key
 	return nil
 }
 
-func (f *FakeOperationRepo) Release(_ context.Context, accountID uuid.UUID, key string) error {
+func (f *FakeOperationRepo) Release(ctx context.Context, accountID uuid.UUID, key string) error {
 	f.ReleaseCalls++
+	f.ReleaseCtxErr = ctx.Err()
+	f.ReleaseDeadline, _ = ctx.Deadline()
 	if f.ReleaseErr != nil {
 		return f.ReleaseErr
 	}

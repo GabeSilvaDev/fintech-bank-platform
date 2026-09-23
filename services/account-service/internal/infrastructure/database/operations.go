@@ -56,8 +56,9 @@ func (r *BalanceOperationRepository) Get(ctx context.Context, accountID uuid.UUI
 }
 
 func (r *BalanceOperationRepository) Complete(ctx context.Context, accountID uuid.UUID, key, result string, at time.Time) error {
-	return cassandra.MapWriteError(r.session.Query("UPDATE balance_operations SET status = 'done', result = ?, updated_at = ? WHERE account_id = ? AND idempotency_key = ?",
-		result, at, gocql.UUID(accountID), key).WithContext(ctx).Exec())
+	_, err := r.session.Query("UPDATE balance_operations SET status = 'done', result = ?, updated_at = ? WHERE account_id = ? AND idempotency_key = ? IF status = 'pending'",
+		result, at, gocql.UUID(accountID), key).WithContext(ctx).MapScanCAS(map[string]interface{}{})
+	return cassandra.MapWriteError(err)
 }
 
 func (r *BalanceOperationRepository) Release(ctx context.Context, accountID uuid.UUID, key string) error {
