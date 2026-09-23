@@ -423,3 +423,8 @@ func TestSprintFourPayloadsRoundTrip(t *testing.T) {
 	raw, _ = NewPaymentEvent(EventTypes.SettlePayment, SettlePaymentPayload{ExternalID: "x", Status: "settled"}).ToJSON()
 	assert.NotContains(t, string(raw), `"reason"`)
 }
+
+func TestSprintFiveNames(t *testing.T) {
+	assert.Equal(t, "notification.dlq", Topics.NotificationDLQ)
+	assert.Equal(t, "notification.command_failed", EventTypes.NotificationCommandFailed)
+}

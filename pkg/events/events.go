@@ -76,9 +76,10 @@ var Topics = struct {
 	NotificationEvents string
 
 	// Dead Letter Queues
-	AccountDLQ     string
-	TransactionDLQ string
-	PaymentDLQ     string
+	AccountDLQ      string
+	TransactionDLQ  string
+	PaymentDLQ      string
+	NotificationDLQ string
 }{
 	AccountCommands:     "account.commands",
 	TransactionCommands: "transaction.commands",
@@ -90,9 +91,10 @@ var Topics = struct {
 
 	NotificationEvents: "notification.events",
 
-	AccountDLQ:     "account.dlq",
-	TransactionDLQ: "transaction.dlq",
-	PaymentDLQ:     "payment.dlq",
+	AccountDLQ:      "account.dlq",
+	TransactionDLQ:  "transaction.dlq",
+	PaymentDLQ:      "payment.dlq",
+	NotificationDLQ: "notification.dlq",
 }
 
 // EventTypes defines all event type constants
@@ -149,9 +151,10 @@ var EventTypes = struct {
 	PaymentCommandFailed string
 
 	// Notification Events
-	SendEmail string
-	SendSMS   string
-	SendPush  string
+	SendEmail                 string
+	SendSMS                   string
+	SendPush                  string
+	NotificationCommandFailed string
 }{
 	// Account Commands
 	CreateAccount: "account.create",
@@ -205,9 +208,10 @@ var EventTypes = struct {
 	PaymentCommandFailed: "payment.command_failed",
 
 	// Notification Events
-	SendEmail: "notification.email",
-	SendSMS:   "notification.sms",
-	SendPush:  "notification.push",
+	SendEmail:                 "notification.email",
+	SendSMS:                   "notification.sms",
+	SendPush:                  "notification.push",
+	NotificationCommandFailed: "notification.command_failed",
 }
 
 // CreateAccountPayload represents the payload for creating an account
