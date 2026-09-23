@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/apache/cassandra-gocql-driver/v2"
 	"github.com/fintech-bank-platform/payment-service/internal/app/handlers"
@@ -16,8 +17,10 @@ import (
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/logger"
 	"github.com/fintech-bank-platform/pkg/messaging"
+	"github.com/fintech-bank-platform/pkg/metrics"
 	"github.com/fintech-bank-platform/pkg/processor"
 	"github.com/fintech-bank-platform/pkg/retry"
+	"github.com/fintech-bank-platform/pkg/tracing"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/segmentio/kafka-go"
@@ -31,6 +34,28 @@ func main() {
 	}
 
 	log := logger.New(logger.Config{Level: cfg.Log.Level, Pretty: cfg.Log.Pretty})
+
+	shutdownTracing, err := tracing.Init(context.Background(), tracing.Config{
+		Service:     "payment-service",
+		Endpoint:    cfg.Observability.OTLPEndpoint,
+		SampleRatio: cfg.Observability.SampleRatio,
+	})
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to initialize tracing")
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTracing(ctx); err != nil {
+			log.Error().Err(err).Msg("Failed to shutdown tracing")
+		}
+	}()
+
+	var m *metrics.Metrics
+	if cfg.Observability.MetricsEnabled {
+		m = metrics.New("payment-service")
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -47,7 +72,7 @@ func main() {
 		BatchTimeout:   cfg.Kafka.BatchTimeout,
 		PublishTimeout: cfg.Kafka.PublishTimeout,
 		MaxAttempts:    cfg.Kafka.MaxAttempts,
-	})
+	}).WithMetrics(m)
 
 	simulator := gateway.NewSimulator(gateway.Config{
 		WebhookURL: cfg.Payment.WebhookURL,
@@ -55,7 +80,7 @@ func main() {
 		Delay:      cfg.Payment.SettlementDelay,
 	}, log)
 	service := services.NewPaymentService(database.NewPaymentRepository(session), simulator, services.SystemClock{}, uuid.New)
-	sweeper := services.NewSweeper(service, producer, services.SystemClock{}, cfg.Sweeper, log)
+	sweeper := services.NewSweeper(service, producer, services.SystemClock{}, cfg.Sweeper, log).WithMetrics(m)
 
 	store := database.NewProcessedEventStore(session)
 	processorCfg := processor.Config{
@@ -63,6 +88,7 @@ func main() {
 		FailedEventType: events.EventTypes.PaymentCommandFailed,
 		DLQTopic:        events.Topics.PaymentDLQ,
 		Backoff:         cfg.Consumer.RetryBackoff,
+		Metrics:         m,
 	}
 	commands := processor.NewProcessor(handlers.NewCommandDispatcher(service, log), store, producer, processorCfg, log)
 	replies := processor.NewProcessor(handlers.NewReplyDispatcher(service, log), store, producer, processorCfg, log)
@@ -73,12 +99,13 @@ func main() {
 		Webhooks: handlers.NewWebhookHandler(producer, cfg.Payment.WebhookSecret, cfg.Payment.WebhookTolerance, services.SystemClock{}, log),
 		Ping:     database.Ping(session),
 		Logger:   log,
+		Metrics:  m,
 	})
 	server := http.NewServer(cfg.Server, router)
 
 	group, groupCtx := errgroup.WithContext(ctx)
-	runConsumer(groupCtx, group, log, cfg, events.Topics.PaymentCommands, cfg.Kafka.GroupID, commands)
-	runConsumer(groupCtx, group, log, cfg, events.Topics.AccountEvents, cfg.Kafka.GroupID+"-replies", replies)
+	runConsumer(groupCtx, group, log, cfg, m, events.Topics.PaymentCommands, cfg.Kafka.GroupID, commands)
+	runConsumer(groupCtx, group, log, cfg, m, events.Topics.AccountEvents, cfg.Kafka.GroupID+"-replies", replies)
 	if cfg.Sweeper.Enabled {
 		group.Go(func() error {
 			sweeper.Run(groupCtx)
@@ -105,13 +132,14 @@ func main() {
 	log.Info().Msg("Service stopped")
 }
 
-func runConsumer(ctx context.Context, group *errgroup.Group, log *logger.Logger, cfg *config.Config, topic, groupID string, proc *processor.Processor) {
+func runConsumer(ctx context.Context, group *errgroup.Group, log *logger.Logger, cfg *config.Config, m *metrics.Metrics, topic, groupID string, proc *processor.Processor) {
 	newConsumer := func() *messaging.Consumer {
 		return messaging.NewConsumer(messaging.ConsumerConfig{
 			Brokers:      cfg.Kafka.Brokers,
 			GroupID:      groupID,
 			Topic:        topic,
 			DrainTimeout: cfg.Consumer.DrainTimeout,
+			Metrics:      m,
 		})
 	}
 	handle := func(ctx context.Context, msg kafka.Message) error {

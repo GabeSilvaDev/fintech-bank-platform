@@ -14,6 +14,8 @@ import (
 	"github.com/fintech-bank-platform/payment-service/tests"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/logger"
+	"github.com/fintech-bank-platform/pkg/metrics"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -392,4 +394,116 @@ func TestSweeperStillLogsTheAlertWhenItsPublishFails(t *testing.T) {
 	assert.Contains(t, logs.String(), "reconciliation alert publish failed")
 	assert.Contains(t, logs.String(), "reconciliation exhausted")
 	assert.Contains(t, logs.String(), payment.ID.String())
+}
+
+func resentCount(t *testing.T, m *metrics.Metrics, status string) float64 {
+	t.Helper()
+	counter := m.CounterVec(services.ResentTotalName, services.ResentTotalHelp, "status")
+	return testutil.ToFloat64(counter.WithLabelValues(status))
+}
+
+func exhaustedCount(t *testing.T, m *metrics.Metrics) float64 {
+	t.Helper()
+	counter := m.CounterVec(services.ExhaustedTotalName, services.ExhaustedTotalHelp)
+	return testutil.ToFloat64(counter.WithLabelValues())
+}
+
+func TestSweeperIncrementsResentCounterByStatusOnSuccessfulResend(t *testing.T) {
+	h := newHarness()
+	stale := h.stored(models.MethodPix, models.StatusPending)
+	stale.UpdatedAt = now.Add(-10 * time.Minute)
+	h.repo.Put(stale)
+
+	m := metrics.New("test-payment-sweeper-resent")
+	publisher := &tests.FakePublisher{}
+	sweeper := services.NewSweeper(h.service, publisher, tests.FakeClock{T: now}, sweeperConfig(), logger.New(logger.Config{Output: io.Discard})).WithMetrics(m)
+
+	count, err := sweeper.RunOnce(context.Background())
+
+	assert.NoError(t, err)
+	assert.Equal(t, 1, count)
+	assert.Equal(t, float64(1), resentCount(t, m, string(models.StatusPending)))
+	assert.Equal(t, float64(0), exhaustedCount(t, m))
+}
+
+func TestSweeperIncrementsResentCounterForSubmittedResubmission(t *testing.T) {
+	h := newHarness()
+	stale := h.stored(models.MethodBoleto, models.StatusSubmitted)
+	stale.ExternalID = "boleto_2"
+	stale.UpdatedAt = now.Add(-10 * time.Minute)
+	h.repo.Put(stale)
+	h.gateway.Submissions = []models.Submission{{ExternalID: "boleto_2", Status: models.SubmissionPending}}
+
+	m := metrics.New("test-payment-sweeper-resent-submitted")
+	publisher := &tests.FakePublisher{}
+	sweeper := services.NewSweeper(h.service, publisher, tests.FakeClock{T: now}, sweeperConfig(), logger.New(logger.Config{Output: io.Discard})).WithMetrics(m)
+
+	count, err := sweeper.RunOnce(context.Background())
+
+	assert.NoError(t, err)
+	assert.Equal(t, 1, count)
+	assert.Equal(t, float64(1), resentCount(t, m, string(models.StatusSubmitted)))
+}
+
+func TestSweeperDoesNotIncrementResentCounterOnPublishFailure(t *testing.T) {
+	h := newHarness()
+	stale := h.stored(models.MethodPix, models.StatusPending)
+	stale.UpdatedAt = now.Add(-10 * time.Minute)
+	h.repo.Put(stale)
+
+	m := metrics.New("test-payment-sweeper-resent-failure")
+	publisher := &tests.FakePublisher{Err: errors.New("kafka down")}
+	sweeper := services.NewSweeper(h.service, publisher, tests.FakeClock{T: now}, sweeperConfig(), logger.New(logger.Config{Output: io.Discard})).WithMetrics(m)
+
+	count, err := sweeper.RunOnce(context.Background())
+
+	assert.NoError(t, err)
+	assert.Equal(t, 0, count)
+	assert.Equal(t, float64(0), resentCount(t, m, string(models.StatusPending)))
+}
+
+func TestSweeperIncrementsExhaustedCounterWhenAlertIsPublished(t *testing.T) {
+	h := newHarness()
+	h.expired(models.StatusSubmitted, now.Add(-2*time.Hour))
+
+	m := metrics.New("test-payment-sweeper-exhausted")
+	publisher := &tests.FakePublisher{}
+	sweeper := services.NewSweeper(h.service, publisher, tests.FakeClock{T: now}, sweeperConfig(), logger.New(logger.Config{Output: io.Discard})).WithMetrics(m)
+
+	count, err := sweeper.RunOnce(context.Background())
+
+	assert.NoError(t, err)
+	assert.Equal(t, 0, count)
+	assert.Equal(t, float64(1), exhaustedCount(t, m))
+}
+
+func TestSweeperIncrementsExhaustedCounterEvenWhenAlertPublishFails(t *testing.T) {
+	h := newHarness()
+	h.expired(models.StatusPending, now.Add(-2*time.Hour))
+
+	m := metrics.New("test-payment-sweeper-exhausted-publish-failure")
+	publisher := &tests.FakePublisher{Err: errors.New("kafka down")}
+	sweeper := services.NewSweeper(h.service, publisher, tests.FakeClock{T: now}, sweeperConfig(), logger.New(logger.Config{Output: io.Discard})).WithMetrics(m)
+
+	count, err := sweeper.RunOnce(context.Background())
+
+	assert.NoError(t, err)
+	assert.Equal(t, 0, count)
+	assert.Equal(t, float64(1), exhaustedCount(t, m))
+}
+
+func TestSweeperDoesNotIncrementExhaustedCounterWhenTouchIsLost(t *testing.T) {
+	h := newHarness()
+	h.expired(models.StatusPending, now.Add(-2*time.Hour))
+	h.repo.TouchResults = []tests.TransitionResult{{Applied: false}}
+
+	m := metrics.New("test-payment-sweeper-exhausted-touch-lost")
+	publisher := &tests.FakePublisher{}
+	sweeper := services.NewSweeper(h.service, publisher, tests.FakeClock{T: now}, sweeperConfig(), logger.New(logger.Config{Output: io.Discard})).WithMetrics(m)
+
+	count, err := sweeper.RunOnce(context.Background())
+
+	assert.NoError(t, err)
+	assert.Equal(t, 0, count)
+	assert.Equal(t, float64(0), exhaustedCount(t, m))
 }

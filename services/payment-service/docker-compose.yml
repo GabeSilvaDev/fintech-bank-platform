@@ -18,6 +18,7 @@ services:
       - CASSANDRA_HOSTS=cassandra:9042
       - PAYMENT_WEBHOOK_SECRET=dev-webhook-secret
       - PAYMENT_WEBHOOK_URL=http://localhost:8084/webhooks/gateway
+      - OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-}
     networks:
       - fintech-network
     restart: unless-stopped

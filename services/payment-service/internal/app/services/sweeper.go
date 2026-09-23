@@ -8,6 +8,15 @@ import (
 	"github.com/fintech-bank-platform/payment-service/internal/app/models"
 	"github.com/fintech-bank-platform/payment-service/internal/contracts"
 	"github.com/fintech-bank-platform/pkg/logger"
+	"github.com/fintech-bank-platform/pkg/metrics"
+	"github.com/prometheus/client_golang/prometheus"
+)
+
+const (
+	ResentTotalName    = "reconciliation_resent_total"
+	ResentTotalHelp    = "Total number of stale payments re-sent by the reconciliation sweeper"
+	ExhaustedTotalName = "reconciliation_exhausted_total"
+	ExhaustedTotalHelp = "Total number of payments that exceeded the reconciliation max age"
 )
 
 type Sweeper struct {
@@ -16,10 +25,18 @@ type Sweeper struct {
 	clock     contracts.Clock
 	cfg       contracts.SweeperConfig
 	log       *logger.Logger
+	resent    *prometheus.CounterVec
+	exhausted *prometheus.CounterVec
 }
 
 func NewSweeper(service *PaymentService, publisher contracts.Publisher, clock contracts.Clock, cfg contracts.SweeperConfig, log *logger.Logger) *Sweeper {
-	return &Sweeper{service: service, publisher: publisher, clock: clock, cfg: cfg, log: log}
+	return (&Sweeper{service: service, publisher: publisher, clock: clock, cfg: cfg, log: log}).WithMetrics(nil)
+}
+
+func (s *Sweeper) WithMetrics(m *metrics.Metrics) *Sweeper {
+	s.resent = m.CounterVec(ResentTotalName, ResentTotalHelp, "status")
+	s.exhausted = m.CounterVec(ExhaustedTotalName, ExhaustedTotalHelp)
+	return s
 }
 
 func (s *Sweeper) RunOnce(ctx context.Context) (int, error) {
@@ -65,6 +82,7 @@ func (s *Sweeper) RunOnce(ctx context.Context) (int, error) {
 		}
 
 		s.log.Info().Str("payment_id", payment.ID.String()).Str("status", string(payment.Status)).Msg("stale payment re-sent")
+		s.resent.WithLabelValues(string(payment.Status)).Inc()
 		resent++
 	}
 	return resent, nil
@@ -85,6 +103,7 @@ func (s *Sweeper) exhaust(ctx context.Context, payment *models.Payment, now time
 	if err := s.publisher.Publish(ctx, alert.Topic, alert.Key, alert.Event); err != nil {
 		s.log.Error().Err(err).Str("payment_id", payment.ID.String()).Str("status", string(payment.Status)).Msg("reconciliation alert publish failed")
 	}
+	s.exhausted.WithLabelValues().Inc()
 	s.log.Error().Str("payment_id", payment.ID.String()).Str("status", string(payment.Status)).Dur("age", now.Sub(payment.CreatedAt)).Msg("reconciliation exhausted")
 }
 

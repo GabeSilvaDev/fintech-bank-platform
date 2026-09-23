@@ -156,3 +156,36 @@ func TestConfigRequiresAStrongWebhookSecret(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, "sixteen-chars-xx", cfg.Payment.WebhookSecret)
 }
+
+func TestConfigObservabilityDefaults(t *testing.T) {
+	t.Setenv("PAYMENT_WEBHOOK_SECRET", "s3cret-s3cret-s3cret")
+
+	cfg, err := config.New()
+
+	assert.NoError(t, err)
+	assert.True(t, cfg.Observability.MetricsEnabled)
+	assert.Empty(t, cfg.Observability.OTLPEndpoint)
+	assert.Equal(t, 1.0, cfg.Observability.SampleRatio)
+}
+
+func TestConfigObservabilityFromEnv(t *testing.T) {
+	t.Setenv("PAYMENT_WEBHOOK_SECRET", "s3cret-s3cret-s3cret")
+	t.Setenv("METRICS_ENABLED", "false")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318")
+	t.Setenv("OTEL_SAMPLER_RATIO", "0.5")
+
+	cfg, _ := config.New()
+
+	assert.False(t, cfg.Observability.MetricsEnabled)
+	assert.Equal(t, "http://collector:4318", cfg.Observability.OTLPEndpoint)
+	assert.Equal(t, 0.5, cfg.Observability.SampleRatio)
+}
+
+func TestConfigObservabilityInvalidSampleRatioFallsBack(t *testing.T) {
+	t.Setenv("PAYMENT_WEBHOOK_SECRET", "s3cret-s3cret-s3cret")
+	t.Setenv("OTEL_SAMPLER_RATIO", "not-a-number")
+
+	cfg, _ := config.New()
+
+	assert.Equal(t, 1.0, cfg.Observability.SampleRatio)
+}
