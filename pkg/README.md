@@ -210,7 +210,7 @@ type Executor interface {
 migrator := cassandra.NewMigrator(executor, "fintech_transactions", os.DirFS("migrations"))
 applied, err := migrator.Up(ctx) // applies the first *.cql (the keyspace) then the rest in order, {{keyspace}} substituted, tracked in schema_migrations
 
-err = cassandra.MapWriteError(err) // wraps a write timeout, an unavailable error or a cancelled/expired context as domain.ErrAmbiguousWrite
+err = cassandra.MapWriteError(err) // wraps a write timeout, an unavailable error, an unknown lightweight transaction outcome or a cancelled/expired context as domain.ErrAmbiguousWrite
 ```
 
 ## processor
@@ -254,7 +254,7 @@ err := retry.Do(ctx, 30, 2*time.Second, func() error {
 // the last error once attempts run out, or ctx.Err() if the context is cancelled while waiting
 ```
 
-Every service uses this to wait for Cassandra (bootstrap connection, migrations, keyspace session) or Redis (ping) at start-up, configured through `STARTUP_RETRY_ATTEMPTS` (default 30) and `STARTUP_RETRY_DELAY` (default `2s`; a non-positive value falls back to the default).
+The four domain services (account, transaction, payment and notification) use this to wait for Cassandra (bootstrap connection, migrations, keyspace session) or Redis (ping) at start-up — the API gateway does not — configured through `STARTUP_RETRY_ATTEMPTS` (default 30) and `STARTUP_RETRY_DELAY` (default `2s`; a non-positive value falls back to the default).
 
 ## Tests
 
