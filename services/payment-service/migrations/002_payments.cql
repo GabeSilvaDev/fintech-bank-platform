@@ -1,0 +1,23 @@
+CREATE TABLE IF NOT EXISTS {{keyspace}}.payments (
+  payment_id uuid PRIMARY KEY,
+  account_id uuid,
+  method text,
+  status text,
+  amount_cents bigint,
+  currency text,
+  recipient text,
+  pix_key text,
+  boleto_code text,
+  ted_bank_code text,
+  ted_branch text,
+  ted_account text,
+  ted_document text,
+  description text,
+  idempotency_key text,
+  external_id text,
+  failure_reason text,
+  balance_after_cents bigint,
+  created_at timestamp,
+  updated_at timestamp,
+  completed_at timestamp
+);
