@@ -14,8 +14,18 @@ import (
 	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/logger"
+	"github.com/fintech-bank-platform/pkg/metrics"
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type scripted struct {
@@ -75,9 +85,11 @@ type fakePublisher struct {
 	err        error
 	errByTopic map[string]error
 	published  []published
+	contexts   []context.Context
 }
 
-func (f *fakePublisher) Publish(_ context.Context, topic, key string, event *events.Event) error {
+func (f *fakePublisher) Publish(ctx context.Context, topic, key string, event *events.Event) error {
+	f.contexts = append(f.contexts, ctx)
 	if f.err != nil {
 		return f.err
 	}
@@ -425,4 +437,289 @@ func TestDecodePayload(t *testing.T) {
 
 	cmd = events.NewEvent("account.create", "test", make(chan int)).WithTraceID("trace-1")
 	assert.ErrorIs(t, DecodePayload(cmd, &dst), ErrBadPayload)
+}
+
+const (
+	remoteTraceID = "4bf92f3577b34da6a3ce929d0e0e4736"
+	remoteSpanID  = "00f067aa0ba902b7"
+)
+
+func useRecorder(t *testing.T) *tracetest.SpanRecorder {
+	t.Helper()
+	previousProvider := otel.GetTracerProvider()
+	previousPropagator := otel.GetTextMapPropagator()
+
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	otel.SetTracerProvider(provider)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() {
+		_ = provider.Shutdown(context.Background())
+		otel.SetTracerProvider(previousProvider)
+		otel.SetTextMapPropagator(previousPropagator)
+	})
+
+	return recorder
+}
+
+func remoteContext(t *testing.T) context.Context {
+	t.Helper()
+	traceID, err := trace.TraceIDFromHex(remoteTraceID)
+	require.NoError(t, err)
+	spanID, err := trace.SpanIDFromHex(remoteSpanID)
+	require.NoError(t, err)
+	return trace.ContextWithRemoteSpanContext(context.Background(), trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    traceID,
+		SpanID:     spanID,
+		TraceFlags: trace.FlagsSampled,
+	}))
+}
+
+func newMeasuredProcessor(backoff ...time.Duration) (*processorHarness, *metrics.Metrics) {
+	h := newProcessor(backoff...)
+	m := metrics.New("test")
+	cfg := h.processor.cfg
+	cfg.Metrics = m
+	h.processor = NewProcessor(h.dispatcher, h.store, h.publisher, cfg, h.processor.log)
+	return h, m
+}
+
+func processedCount(m *metrics.Metrics, eventType, outcome string) float64 {
+	return testutil.ToFloat64(m.CounterVec(processedTotalName, processedTotalHelp, "type", "outcome").WithLabelValues(eventType, outcome))
+}
+
+func retriesCount(m *metrics.Metrics, eventType string) float64 {
+	return testutil.ToFloat64(m.CounterVec(retriesTotalName, retriesTotalHelp, "type").WithLabelValues(eventType))
+}
+
+func durationSamples(t *testing.T, m *metrics.Metrics, eventType string) uint64 {
+	t.Helper()
+	families, err := m.Registry().Gather()
+	require.NoError(t, err)
+	for _, family := range families {
+		if family.GetName() != processingDurationName {
+			continue
+		}
+		for _, metric := range family.GetMetric() {
+			for _, label := range metric.GetLabel() {
+				if label.GetName() == "type" && label.GetValue() == eventType {
+					return metric.GetHistogram().GetSampleCount()
+				}
+			}
+		}
+	}
+	return 0
+}
+
+func onlySpan(t *testing.T, recorder *tracetest.SpanRecorder) sdktrace.ReadOnlySpan {
+	t.Helper()
+	spans := recorder.Ended()
+	require.Len(t, spans, 1)
+	return spans[0]
+}
+
+func spanAttributes(span sdktrace.ReadOnlySpan) map[attribute.Key]string {
+	attrs := map[attribute.Key]string{}
+	for _, kv := range span.Attributes() {
+		attrs[kv.Key] = kv.Value.Emit()
+	}
+	return attrs
+}
+
+func assertFailedSpan(t *testing.T, span sdktrace.ReadOnlySpan, description string) {
+	t.Helper()
+	assert.Equal(t, codes.Error, span.Status().Code)
+	assert.Contains(t, span.Status().Description, description)
+	require.Len(t, span.Events(), 1)
+	assert.Equal(t, "exception", span.Events()[0].Name)
+}
+
+func TestProcessStartsConsumerSpanFromIncomingContext(t *testing.T) {
+	recorder := useRecorder(t)
+	h := newProcessor()
+	cmd := command(map[string]string{"a": "1"})
+
+	assert.NoError(t, h.processor.Process(remoteContext(t), []byte("k"), encoded(cmd)))
+
+	span := onlySpan(t, recorder)
+	assert.Equal(t, "process account.create", span.Name())
+	assert.Equal(t, trace.SpanKindConsumer, span.SpanKind())
+	assert.Equal(t, remoteTraceID, span.SpanContext().TraceID().String())
+	assert.Equal(t, remoteSpanID, span.Parent().SpanID().String())
+	assert.True(t, span.Parent().IsRemote())
+	assert.Equal(t, codes.Unset, span.Status().Code)
+	attrs := spanAttributes(span)
+	assert.Equal(t, "kafka", attrs["messaging.system"])
+	assert.Equal(t, cmd.ID, attrs["messaging.message.id"])
+	assert.Equal(t, "process", attrs["messaging.operation.type"])
+
+	require.Len(t, h.publisher.contexts, 1)
+	published := trace.SpanContextFromContext(h.publisher.contexts[0])
+	assert.Equal(t, remoteTraceID, published.TraceID().String())
+	assert.Equal(t, span.SpanContext().SpanID(), published.SpanID())
+	assert.Equal(t, "trace-1", h.publisher.byTopic("results")[0].Event.TraceID)
+}
+
+func TestProcessRecordsOKOutcome(t *testing.T) {
+	h, m := newMeasuredProcessor()
+	cmd := command(map[string]string{"a": "1"})
+
+	assert.NoError(t, h.processor.Process(context.Background(), []byte("k"), encoded(cmd)))
+
+	assert.Equal(t, float64(1), processedCount(m, "account.create", "ok"))
+	assert.Equal(t, uint64(1), durationSamples(t, m, "account.create"))
+	assert.Equal(t, float64(0), retriesCount(m, "account.create"))
+}
+
+func TestProcessRecordsDuplicateOutcome(t *testing.T) {
+	recorder := useRecorder(t)
+	h, m := newMeasuredProcessor()
+	cmd := command(map[string]string{"a": "1"})
+
+	assert.NoError(t, h.processor.Process(context.Background(), []byte("k"), encoded(cmd)))
+	assert.NoError(t, h.processor.Process(remoteContext(t), []byte("k"), encoded(cmd)))
+
+	assert.Equal(t, float64(1), processedCount(m, "account.create", "ok"))
+	assert.Equal(t, float64(1), processedCount(m, "account.create", "duplicate"))
+	assert.Equal(t, uint64(2), durationSamples(t, m, "account.create"))
+
+	spans := recorder.Ended()
+	require.Len(t, spans, 2)
+	entry := logEntry(t, h.logs, "duplicate event skipped")
+	assert.Equal(t, remoteTraceID, entry["otel_trace_id"])
+	assert.Equal(t, spans[1].SpanContext().SpanID().String(), entry["otel_span_id"])
+}
+
+func TestProcessRecordsDeadLetteredOutcome(t *testing.T) {
+	recorder := useRecorder(t)
+	h, m := newMeasuredProcessor()
+	h.dispatcher.Errs = []error{ErrUnknownCommand}
+	cmd := command(map[string]string{"a": "1"})
+
+	assert.NoError(t, h.processor.Process(context.Background(), []byte("k"), encoded(cmd)))
+
+	assert.Equal(t, float64(1), processedCount(m, "account.create", "dead_lettered"))
+	assert.Equal(t, float64(0), processedCount(m, "account.create", "ok"))
+	assert.Equal(t, float64(0), retriesCount(m, "account.create"))
+	assertFailedSpan(t, onlySpan(t, recorder), "unknown command")
+}
+
+func TestProcessRecordsInvalidEventsAsUnknown(t *testing.T) {
+	recorder := useRecorder(t)
+	h, m := newMeasuredProcessor()
+
+	assert.NoError(t, h.processor.Process(context.Background(), []byte("k"), []byte("{nope")))
+	assert.NoError(t, h.processor.Process(context.Background(), []byte("k"), []byte(`{}`)))
+	assert.NoError(t, h.processor.Process(context.Background(), []byte("k"), []byte(`{"id":"not-a-uuid","type":"account.create"}`)))
+
+	assert.Equal(t, float64(2), processedCount(m, "unknown", "dead_lettered"))
+	assert.Equal(t, float64(1), processedCount(m, "account.create", "dead_lettered"))
+	assert.Len(t, h.publisher.byTopic("dlq"), 3)
+
+	spans := recorder.Ended()
+	require.Len(t, spans, 3)
+	assert.Equal(t, "process unknown", spans[0].Name())
+	assert.NotContains(t, spanAttributes(spans[0]), attribute.Key("messaging.message.id"))
+	assertFailedSpan(t, spans[0], "invalid character")
+	assert.Equal(t, "process unknown", spans[1].Name())
+	assert.NotContains(t, spanAttributes(spans[1]), attribute.Key("messaging.message.id"))
+	assert.Equal(t, "process account.create", spans[2].Name())
+	assert.Equal(t, "not-a-uuid", spanAttributes(spans[2])["messaging.message.id"])
+	assertFailedSpan(t, spans[2], "event id is not a uuid")
+}
+
+func TestProcessRecordsRetriesBeforeSuccess(t *testing.T) {
+	h, m := newMeasuredProcessor()
+	h.dispatcher.Errs = []error{errors.New("timeout"), errors.New("timeout"), nil}
+	cmd := command(map[string]string{"a": "1"})
+
+	assert.NoError(t, h.processor.Process(context.Background(), []byte("k"), encoded(cmd)))
+
+	assert.Equal(t, float64(2), retriesCount(m, "account.create"))
+	assert.Equal(t, float64(1), processedCount(m, "account.create", "ok"))
+}
+
+func TestProcessRecordsRetriesBeforeDeadLetter(t *testing.T) {
+	h, m := newMeasuredProcessor()
+	h.dispatcher.Errs = []error{errors.New("timeout"), errors.New("timeout"), errors.New("timeout"), errors.New("timeout")}
+	cmd := command(map[string]string{"a": "1"})
+
+	assert.NoError(t, h.processor.Process(context.Background(), []byte("k"), encoded(cmd)))
+
+	assert.Equal(t, float64(3), retriesCount(m, "account.create"))
+	assert.Equal(t, float64(1), processedCount(m, "account.create", "dead_lettered"))
+}
+
+func TestProcessRecordsResultPublishFailureAsOKWithFailedSpan(t *testing.T) {
+	recorder := useRecorder(t)
+	h, m := newMeasuredProcessor()
+	h.publisher.errByTopic = map[string]error{"results": errors.New("broker down")}
+	cmd := command(map[string]string{"a": "1"})
+
+	assert.NoError(t, h.processor.Process(remoteContext(t), []byte("k"), encoded(cmd)))
+
+	assert.Equal(t, float64(1), processedCount(m, "account.create", "ok"))
+	assert.Equal(t, float64(0), processedCount(m, "account.create", "dead_lettered"))
+	span := onlySpan(t, recorder)
+	assertFailedSpan(t, span, "broker down")
+
+	entry := logEntry(t, h.logs, "result publish failed")
+	assert.Equal(t, remoteTraceID, entry["otel_trace_id"])
+	assert.Equal(t, span.SpanContext().SpanID().String(), entry["otel_span_id"])
+	for _, ctx := range h.publisher.contexts {
+		assert.Equal(t, remoteTraceID, trace.SpanContextFromContext(ctx).TraceID().String())
+	}
+}
+
+func TestProcessLogsPanicsWithTraceIDs(t *testing.T) {
+	recorder := useRecorder(t)
+	h := newProcessor()
+	h.dispatcher.Panic = true
+	cmd := command(map[string]string{"a": "1"})
+
+	assert.NoError(t, h.processor.Process(remoteContext(t), []byte("k"), encoded(cmd)))
+
+	span := onlySpan(t, recorder)
+	assertFailedSpan(t, span, "handler panicked")
+	entry := logEntry(t, h.logs, "handler panicked: boom")
+	assert.Equal(t, remoteTraceID, entry["otel_trace_id"])
+	assert.Equal(t, span.SpanContext().SpanID().String(), entry["otel_span_id"])
+}
+
+func TestProcessLogsWithoutTraceIDsWhenNoSpan(t *testing.T) {
+	h := newProcessor()
+	cmd := command(map[string]string{"a": "1"})
+
+	assert.NoError(t, h.processor.Process(context.Background(), []byte("k"), encoded(cmd)))
+	assert.NoError(t, h.processor.Process(context.Background(), []byte("k"), encoded(cmd)))
+
+	entry := logEntry(t, h.logs, "duplicate event skipped")
+	assert.NotContains(t, entry, "otel_trace_id")
+	assert.NotContains(t, entry, "otel_span_id")
+}
+
+func TestProcessRecordsNothingWhenContextCancelled(t *testing.T) {
+	recorder := useRecorder(t)
+	h, m := newMeasuredProcessor(time.Hour)
+	ctx, cancel := context.WithCancel(context.Background())
+	h.dispatcher.Errs = []error{errors.New("timeout")}
+	h.dispatcher.OnCall = cancel
+	cmd := command(map[string]string{"a": "1"})
+
+	assert.ErrorIs(t, h.processor.Process(ctx, []byte("k"), encoded(cmd)), context.Canceled)
+
+	assert.Equal(t, 0, testutil.CollectAndCount(m.Registry(), processedTotalName))
+	assert.Equal(t, 0, testutil.CollectAndCount(m.Registry(), processingDurationName))
+	assert.Equal(t, 0, testutil.CollectAndCount(m.Registry(), retriesTotalName))
+	assertFailedSpan(t, onlySpan(t, recorder), "context canceled")
+}
+
+func TestProcessRecordsNothingWhenStoreFails(t *testing.T) {
+	h, m := newMeasuredProcessor()
+	h.store.errs = []error{errors.New("db down"), errors.New("db down"), errors.New("db down"), errors.New("db down")}
+	cmd := command(map[string]string{"a": "1"})
+
+	assert.EqualError(t, h.processor.Process(context.Background(), []byte("k"), encoded(cmd)), "db down")
+
+	assert.Equal(t, 0, testutil.CollectAndCount(m.Registry(), processedTotalName))
 }

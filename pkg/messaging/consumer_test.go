@@ -6,8 +6,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fintech-bank-platform/pkg/metrics"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/segmentio/kafka-go"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type fakeReader struct {
@@ -281,4 +285,97 @@ func TestRestartDelayClampsToLastBackoff(t *testing.T) {
 	assert.Equal(t, time.Second, restartDelay(backoff, 1))
 	assert.Equal(t, time.Second, restartDelay(backoff, 7))
 	assert.Equal(t, time.Duration(0), restartDelay(nil, 3))
+}
+
+type fakeStatsReader struct {
+	*fakeReader
+	lag int64
+}
+
+func (s *fakeStatsReader) Stats() kafka.ReaderStats {
+	return kafka.ReaderStats{Lag: s.lag}
+}
+
+func lagValue(m *metrics.Metrics, topic, group string) float64 {
+	return testutil.ToFloat64(m.GaugeVec(consumerLagName, consumerLagHelp, "topic", "group").WithLabelValues(topic, group))
+}
+
+func TestConsumerPassesExtractedTraceContextToHandler(t *testing.T) {
+	useRecorder(t)
+	traceParent := "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+	reader := &fakeReader{messages: []kafka.Message{{Value: []byte("a"), Headers: []kafka.Header{{Key: "traceparent", Value: []byte(traceParent)}}}}}
+	consumer := NewConsumerWithReader(reader, 0)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var seen trace.SpanContext
+	err := consumer.Run(ctx, func(handlerCtx context.Context, _ kafka.Message) error {
+		seen = trace.SpanContextFromContext(handlerCtx)
+		cancel()
+		return nil
+	})
+
+	assert.NoError(t, err)
+	assert.True(t, seen.IsRemote())
+	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", seen.TraceID().String())
+	assert.Equal(t, "00f067aa0ba902b7", seen.SpanID().String())
+	assert.Len(t, reader.committed, 1)
+}
+
+func TestConsumerSetsLagFromReaderStats(t *testing.T) {
+	m := metrics.New("svc")
+	reader := &fakeStatsReader{fakeReader: &fakeReader{messages: []kafka.Message{{Value: []byte("a")}}}, lag: 7}
+	consumer := NewConsumerWithReader(reader, 0).WithMetrics(m, "t", "g")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var lagSeen float64
+	err := consumer.Run(ctx, func(context.Context, kafka.Message) error {
+		lagSeen = lagValue(m, "t", "g")
+		cancel()
+		return nil
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, float64(7), lagSeen)
+}
+
+func TestConsumerIgnoresLagWithoutMetrics(t *testing.T) {
+	reader := &fakeStatsReader{fakeReader: &fakeReader{messages: []kafka.Message{{Value: []byte("a")}}}, lag: 7}
+	consumer := NewConsumerWithReader(reader, 0)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := consumer.Run(ctx, func(context.Context, kafka.Message) error {
+		cancel()
+		return nil
+	})
+
+	assert.NoError(t, err)
+	assert.Len(t, reader.committed, 1)
+}
+
+func TestConsumerLeavesLagUnsetWhenReaderHasNoStats(t *testing.T) {
+	m := metrics.New("svc")
+	reader := &fakeReader{messages: []kafka.Message{{Value: []byte("a")}}}
+	consumer := NewConsumerWithReader(reader, 0).WithMetrics(m, "t", "g")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := consumer.Run(ctx, func(context.Context, kafka.Message) error {
+		cancel()
+		return nil
+	})
+
+	assert.NoError(t, err)
+	assert.Equal(t, float64(0), lagValue(m, "t", "g"))
+}
+
+func TestNewConsumerRegistersLagGaugeFromConfig(t *testing.T) {
+	m := metrics.New("svc")
+	consumer := NewConsumer(ConsumerConfig{Brokers: []string{"localhost:9092"}, GroupID: "g", Topic: "t", Metrics: m})
+
+	require.NotNil(t, consumer.lag)
+	assert.Equal(t, 1, testutil.CollectAndCount(m.Registry(), consumerLagName))
+	assert.NoError(t, consumer.Close())
 }

@@ -11,7 +11,28 @@ import (
 	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/logger"
+	"github.com/fintech-bank-platform/pkg/metrics"
+	"github.com/fintech-bank-platform/pkg/tracing"
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/rs/zerolog"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	semconv "go.opentelemetry.io/otel/semconv/v1.39.0"
+	"go.opentelemetry.io/otel/trace"
+)
+
+const (
+	processedTotalName     = "messages_processed_total"
+	processedTotalHelp     = "Total number of Kafka messages processed by outcome"
+	processingDurationName = "message_processing_duration_seconds"
+	processingDurationHelp = "Kafka message processing duration in seconds"
+	retriesTotalName       = "message_retries_total"
+	retriesTotalHelp       = "Total number of dispatch retries for Kafka messages"
+	unknownType            = "unknown"
+	outcomeOK              = "ok"
+	outcomeDuplicate       = "duplicate"
+	outcomeDeadLettered    = "dead_lettered"
 )
 
 var (
@@ -51,6 +72,7 @@ type Config struct {
 	FailedEventType string
 	DLQTopic        string
 	Backoff         []time.Duration
+	Metrics         *metrics.Metrics
 }
 
 type Processor struct {
@@ -59,20 +81,71 @@ type Processor struct {
 	publisher  Publisher
 	cfg        Config
 	log        *logger.Logger
+	processed  *prometheus.CounterVec
+	duration   *prometheus.HistogramVec
+	retries    *prometheus.CounterVec
+}
+
+type outcome struct {
+	name     string
+	attempts int
+	cause    error
 }
 
 func NewProcessor(dispatcher Dispatcher, store Store, publisher Publisher, cfg Config, log *logger.Logger) *Processor {
-	return &Processor{dispatcher: dispatcher, store: store, publisher: publisher, cfg: cfg, log: log}
+	return &Processor{
+		dispatcher: dispatcher,
+		store:      store,
+		publisher:  publisher,
+		cfg:        cfg,
+		log:        log,
+		processed:  cfg.Metrics.CounterVec(processedTotalName, processedTotalHelp, "type", "outcome"),
+		duration:   cfg.Metrics.HistogramVec(processingDurationName, processingDurationHelp, prometheus.DefBuckets, "type"),
+		retries:    cfg.Metrics.CounterVec(retriesTotalName, retriesTotalHelp, "type"),
+	}
 }
 
 func (p *Processor) Process(ctx context.Context, key, value []byte) error {
-	cmd, err := events.FromJSON(value)
+	start := time.Now()
+	cmd, decodeErr := events.FromJSON(value)
+	eventType := typeLabel(cmd)
+
+	attributes := []attribute.KeyValue{semconv.MessagingSystemKafka, semconv.MessagingOperationTypeProcess}
+	if cmd != nil && cmd.ID != "" {
+		attributes = append(attributes, semconv.MessagingMessageID(cmd.ID))
+	}
+	ctx, span := tracing.Tracer().Start(ctx, "process "+eventType,
+		trace.WithSpanKind(trace.SpanKindConsumer),
+		trace.WithAttributes(attributes...),
+	)
+	defer span.End()
+
+	result, err := p.process(ctx, key, cmd, decodeErr)
 	if err != nil {
-		return p.deadLetter(ctx, key, nil, "invalid_event", err.Error(), 0)
+		markFailed(span, err)
+		return err
+	}
+	if result.cause != nil {
+		markFailed(span, result.cause)
+	}
+
+	p.processed.WithLabelValues(eventType, result.name).Inc()
+	p.duration.WithLabelValues(eventType).Observe(time.Since(start).Seconds())
+	if result.attempts > 1 {
+		p.retries.WithLabelValues(eventType).Add(float64(result.attempts - 1))
+	}
+	return nil
+}
+
+func (p *Processor) process(ctx context.Context, key []byte, cmd *events.Event, decodeErr error) (outcome, error) {
+	if decodeErr != nil {
+		p.deadLetter(ctx, key, nil, "invalid_event", decodeErr.Error(), 0)
+		return outcome{name: outcomeDeadLettered, cause: decodeErr}, nil
 	}
 	eventID, err := uuid.Parse(cmd.ID)
 	if err != nil {
-		return p.deadLetter(ctx, key, cmd, "invalid_event", "event id is not a uuid", 0)
+		p.deadLetter(ctx, key, cmd, "invalid_event", "event id is not a uuid", 0)
+		return outcome{name: outcomeDeadLettered, cause: fmt.Errorf("event id is not a uuid: %w", err)}, nil
 	}
 
 	var first bool
@@ -81,11 +154,11 @@ func (p *Processor) Process(ctx context.Context, key, value []byte) error {
 		first, markErr = p.store.MarkProcessed(ctx, eventID)
 		return markErr
 	}); err != nil {
-		return err
+		return outcome{}, err
 	}
 	if !first {
-		p.log.Info().Str("event_id", cmd.ID).Str("type", cmd.Type).Msg("duplicate event skipped")
-		return nil
+		withTrace(ctx, p.log.Info()).Str("event_id", cmd.ID).Str("type", cmd.Type).Msg("duplicate event skipped")
+		return outcome{name: outcomeDuplicate}, nil
 	}
 
 	var res Result
@@ -95,19 +168,22 @@ func (p *Processor) Process(ctx context.Context, key, value []byte) error {
 		return dispatchErr
 	})
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return err
+		return outcome{}, err
 	}
 	if err != nil {
-		return p.deadLetter(ctx, key, cmd, errorCode(err), err.Error(), attempts)
+		p.deadLetter(ctx, key, cmd, errorCode(err), err.Error(), attempts)
+		return outcome{name: outcomeDeadLettered, attempts: attempts, cause: err}, nil
 	}
 
+	var publishErr error
 	for _, msg := range res.Messages {
 		if err := p.publisher.Publish(ctx, msg.Topic, msg.Key, msg.Event); err != nil {
-			p.logUndeliverable(err, msg.Event, "publish_failed", "result publish failed")
-			_ = p.deadLetter(ctx, key, msg.Event, "publish_failed", err.Error(), 0)
+			p.logUndeliverable(ctx, err, msg.Event, "publish_failed", "result publish failed")
+			p.deadLetter(ctx, key, msg.Event, "publish_failed", err.Error(), 0)
+			publishErr = err
 		}
 	}
-	return nil
+	return outcome{name: outcomeOK, attempts: attempts, cause: publishErr}, nil
 }
 
 func DecodePayload(cmd *events.Event, dst interface{}) error {
@@ -124,7 +200,7 @@ func DecodePayload(cmd *events.Event, dst interface{}) error {
 func (p *Processor) dispatch(ctx context.Context, cmd *events.Event) (res Result, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
-			p.log.Error().Str("event_id", cmd.ID).Str("stack", string(debug.Stack())).Msgf("handler panicked: %v", recovered)
+			withTrace(ctx, p.log.Error()).Str("event_id", cmd.ID).Str("stack", string(debug.Stack())).Msgf("handler panicked: %v", recovered)
 			err = fmt.Errorf("%w: %v", ErrPanic, recovered)
 		}
 	}()
@@ -143,7 +219,7 @@ func (p *Processor) retry(ctx context.Context, op func() error) (int, error) {
 	}
 }
 
-func (p *Processor) deadLetter(ctx context.Context, key []byte, original *events.Event, code, message string, retries int) error {
+func (p *Processor) deadLetter(ctx context.Context, key []byte, original *events.Event, code, message string, retries int) {
 	failed := events.NewEvent(p.cfg.FailedEventType, p.cfg.Source, events.ErrorPayload{
 		OriginalEvent: original,
 		ErrorCode:     code,
@@ -154,19 +230,37 @@ func (p *Processor) deadLetter(ctx context.Context, key []byte, original *events
 		failed.WithTraceID(original.TraceID)
 	}
 	if err := p.publisher.Publish(ctx, p.cfg.DLQTopic, string(key), failed); err != nil {
-		p.logUndeliverable(err, failed, code, "dead-letter publish failed")
+		p.logUndeliverable(ctx, err, failed, code, "dead-letter publish failed")
 	}
-	return nil
 }
 
-func (p *Processor) logUndeliverable(err error, event *events.Event, code, message string) {
-	entry := p.log.Error().Err(err).Str("event_id", event.ID).Str("trace_id", event.TraceID).Str("type", event.Type).Str("code", code)
+func (p *Processor) logUndeliverable(ctx context.Context, err error, event *events.Event, code, message string) {
+	entry := withTrace(ctx, p.log.Error()).Err(err).Str("event_id", event.ID).Str("trace_id", event.TraceID).Str("type", event.Type).Str("code", code)
 	if raw, encodeErr := event.ToJSON(); encodeErr == nil {
 		entry = entry.RawJSON("event", raw)
 	} else {
 		entry = entry.Interface("event", event)
 	}
 	entry.Msg(message)
+}
+
+func typeLabel(event *events.Event) string {
+	if event == nil || event.Type == "" {
+		return unknownType
+	}
+	return event.Type
+}
+
+func markFailed(span trace.Span, err error) {
+	span.RecordError(err)
+	span.SetStatus(codes.Error, err.Error())
+}
+
+func withTrace(ctx context.Context, entry *zerolog.Event) *zerolog.Event {
+	if traceID, spanID, ok := tracing.IDs(ctx); ok {
+		return entry.Str("otel_trace_id", traceID).Str("otel_span_id", spanID)
+	}
+	return entry
 }
 
 func sleep(ctx context.Context, d time.Duration) bool {

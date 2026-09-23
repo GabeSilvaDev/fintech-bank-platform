@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/fintech-bank-platform/pkg/logger"
+	"github.com/fintech-bank-platform/pkg/tracing"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 )
 
@@ -19,6 +20,10 @@ func Logger(log *logger.Logger) func(http.Handler) http.Handler {
 			entry := log.Info()
 			if ww.Status() >= http.StatusInternalServerError {
 				entry = log.Error()
+			}
+
+			if traceID, spanID, ok := tracing.IDs(r.Context()); ok {
+				entry = entry.Str("otel_trace_id", traceID).Str("otel_span_id", spanID)
 			}
 
 			entry.

@@ -153,6 +153,8 @@ router.Use(middleware.RequestID, middleware.Logger(log), middleware.Recovery)
 requestID := middleware.GetRequestID(r.Context())
 ```
 
+`Logger` adds `otel_trace_id` and `otel_span_id` to the request log line when the request context carries a span, so mount `tracing.Middleware` outside it.
+
 ## messaging
 
 ```go
@@ -164,7 +166,7 @@ producer := messaging.NewProducer(messaging.ProducerConfig{
     BatchTimeout:   10 * time.Millisecond,
     PublishTimeout: 20 * time.Second,
     MaxAttempts:    3,
-})
+}).WithMetrics(m) // optional; records messages_published_total{topic,outcome="ok"|"error"}
 err := producer.Publish(ctx, events.Topics.AccountCommands, key, event)
 
 newConsumer := func() *messaging.Consumer {
@@ -174,11 +176,14 @@ newConsumer := func() *messaging.Consumer {
         Topic:        "account.commands",
         DrainTimeout: 30 * time.Second, // how long the in-flight message may finish after ctx is cancelled
         StartOffset:  kafka.FirstOffset, // where a group without a committed offset starts; 0 means kafka.FirstOffset, kafka.LastOffset starts new groups at the end
+        Metrics:      m,                 // optional; sets kafka_consumer_lag{topic,group} from the reader stats after every fetch
     })
 }
 err = newConsumer().Run(ctx, handle) // handle(ctx, kafka.Message) error; committed per message on success
 messaging.RunWithRestart(ctx, newConsumer, handle, backoff, onError) // rebuilds the consumer after Run fails, waiting backoff[attempt] between tries
 ```
+
+Traces cross Kafka through the message headers: `Publish` starts a `publish <topic>` producer span and injects its `traceparent` next to the `event_type` and `trace_id` headers, and the consumer hands the handler a context extracted from those headers, so the handler's spans continue the producer's trace. A consumer built with `NewConsumerWithReader` gets the lag gauge through `consumer.WithMetrics(m, topic, group)`; the gauge only moves when the reader has a `Stats() kafka.ReaderStats` method, as `*kafka.Reader` does. A `nil` `*metrics.Metrics` keeps everything unregistered.
 
 ## domain
 
@@ -235,6 +240,7 @@ proc := processor.NewProcessor(myDispatcher{}, store, publisher, processor.Confi
     FailedEventType: events.EventTypes.AccountCommandFailed,
     DLQTopic:        events.Topics.AccountDLQ,
     Backoff:         []time.Duration{200 * time.Millisecond, time.Second, 5 * time.Second},
+    Metrics:         m, // optional
 }, log)
 
 err := proc.Process(ctx, msg.Key, msg.Value)
@@ -243,6 +249,8 @@ err := proc.Process(ctx, msg.Key, msg.Value)
 ```
 
 `Store.MarkProcessed(ctx, eventID) (bool, error)` and `Publisher.Publish(ctx, topic, key, event) error` are the other two seams. A dispatcher error is dead-lettered right away — no retry — when `domain.IsInvalid(err)` is true or it wraps `domain.ErrNotFound`, `domain.ErrAmbiguousWrite`, `processor.ErrUnknownCommand`, `processor.ErrBadPayload` or `processor.ErrPanic`; anything else is treated as transient and retried with `Config.Backoff`.
+
+`Process` runs inside a `process <event type>` consumer span that continues the trace found in `ctx` (the one the consumer extracted from the message headers), and the store, the dispatcher and every publish get that span's context, so result and dead-letter messages carry the same trace. With `Config.Metrics` set it records `messages_processed_total{type,outcome}` (`ok`, `duplicate` or `dead_lettered`; events that cannot be decoded use type `unknown`), `message_processing_duration_seconds{type}` and `message_retries_total{type}` (dispatch attempts beyond the first). A dispatched event whose result publish fails still counts as `ok` — the failed result shows up as `messages_published_total{outcome="error"}` and is dead-lettered — while a context error or an idempotency store failure records nothing because the message will be redelivered. Dead letters and failures mark the span as an error, and the processor's own log lines carry `otel_trace_id` and `otel_span_id`.
 
 ## retry
 
