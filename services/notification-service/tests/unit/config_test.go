@@ -35,6 +35,7 @@ func TestConfigDefaults(t *testing.T) {
 	assert.Equal(t, 3*time.Second, cfg.Directory.Timeout)
 	assert.Equal(t, "localhost:1025", cfg.SMTP.Addr)
 	assert.Equal(t, "no-reply@fintech.local", cfg.SMTP.From)
+	assert.Equal(t, 10*time.Second, cfg.SMTP.Timeout)
 	assert.Equal(t, 100, cfg.HistorySize)
 }
 
@@ -51,6 +52,7 @@ func TestConfigFromEnv(t *testing.T) {
 	t.Setenv("ACCOUNT_DIRECTORY_TIMEOUT", "1s")
 	t.Setenv("SMTP_ADDR", "m:25")
 	t.Setenv("SMTP_FROM", "a@b.c")
+	t.Setenv("SMTP_TIMEOUT", "2s")
 	t.Setenv("NOTIFICATION_HISTORY_SIZE", "0")
 
 	cfg, err := config.New()
@@ -68,5 +70,6 @@ func TestConfigFromEnv(t *testing.T) {
 	assert.Equal(t, time.Second, cfg.Directory.Timeout)
 	assert.Equal(t, "m:25", cfg.SMTP.Addr)
 	assert.Equal(t, "a@b.c", cfg.SMTP.From)
+	assert.Equal(t, 2*time.Second, cfg.SMTP.Timeout)
 	assert.Equal(t, 100, cfg.HistorySize)
 }

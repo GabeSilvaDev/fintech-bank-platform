@@ -46,7 +46,7 @@ func main() {
 	router := services.NewRouter(accountDirectory, renderer)
 
 	senderMap := map[models.Channel]contracts.Sender{
-		models.ChannelEmail: senders.NewSMTP(cfg.SMTP.Addr, cfg.SMTP.From),
+		models.ChannelEmail: senders.NewSMTP(cfg.SMTP.Addr, cfg.SMTP.From, cfg.SMTP.Timeout),
 		models.ChannelSMS:   senders.NewSandbox(models.ChannelSMS, log),
 		models.ChannelPush:  senders.NewSandbox(models.ChannelPush, log),
 	}

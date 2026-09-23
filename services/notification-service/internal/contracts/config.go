@@ -47,6 +47,7 @@ type DirectoryConfig struct {
 }
 
 type SMTPConfig struct {
-	Addr string
-	From string
+	Addr    string
+	From    string
+	Timeout time.Duration
 }

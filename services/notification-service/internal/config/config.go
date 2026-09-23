@@ -58,8 +58,9 @@ func New() (*Config, error) {
 			Timeout: env.GetDuration("ACCOUNT_DIRECTORY_TIMEOUT", 3*time.Second),
 		},
 		SMTP: contracts.SMTPConfig{
-			Addr: env.Get("SMTP_ADDR", "localhost:1025"),
-			From: env.Get("SMTP_FROM", "no-reply@fintech.local"),
+			Addr:    env.Get("SMTP_ADDR", "localhost:1025"),
+			From:    env.Get("SMTP_FROM", "no-reply@fintech.local"),
+			Timeout: env.GetDuration("SMTP_TIMEOUT", 10*time.Second),
 		},
 		HistorySize: env.GetIntMin("NOTIFICATION_HISTORY_SIZE", 100, 1),
 	}, nil

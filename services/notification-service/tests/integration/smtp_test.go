@@ -48,7 +48,7 @@ func TestSMTPDeliversToMailpit(t *testing.T) {
 	subject := "Transferência recebida " + uuid.NewString()
 	message := models.Message{To: "ana@example.com", Subject: subject, Body: "Você recebeu R$ 30,00.", Priority: "normal"}
 
-	sender := senders.NewSMTP(addr, "no-reply@fintech.local")
+	sender := senders.NewSMTP(addr, "no-reply@fintech.local", 10*time.Second)
 	require.NoError(t, sender.Send(context.Background(), message))
 
 	deadline := time.Now().Add(10 * time.Second)
