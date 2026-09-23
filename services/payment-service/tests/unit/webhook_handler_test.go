@@ -2,7 +2,9 @@ package unit
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -15,12 +17,13 @@ import (
 	"github.com/fintech-bank-platform/payment-service/internal/app/services"
 	"github.com/fintech-bank-platform/payment-service/tests"
 	"github.com/fintech-bank-platform/pkg/events"
+	"github.com/fintech-bank-platform/pkg/logger"
 	"github.com/fintech-bank-platform/pkg/middleware"
 	"github.com/stretchr/testify/assert"
 )
 
 func webhookCall(publisher *tests.FakePublisher, body string, sign func(ts string, body []byte) (string, string)) (*httptest.ResponseRecorder, map[string]interface{}) {
-	handler := middleware.RequestID(http.HandlerFunc(handlers.NewWebhookHandler(publisher, "s3cret", 5*time.Minute, tests.FakeClock{T: now}).Gateway))
+	handler := middleware.RequestID(http.HandlerFunc(handlers.NewWebhookHandler(publisher, "s3cret", 5*time.Minute, tests.FakeClock{T: now}, logger.New(logger.Config{Output: io.Discard})).Gateway))
 	req := httptest.NewRequest(http.MethodPost, "/webhooks/gateway", bytes.NewBufferString(body))
 	ts, signature := sign(strconv.FormatInt(now.Unix(), 10), []byte(body))
 	req.Header.Set("X-Timestamp", ts)
@@ -113,7 +116,41 @@ func TestWebhookReportsUnreadableBodies(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/webhooks/gateway", nil)
 	req.Body = failingBody{}
 	rec := httptest.NewRecorder()
-	handlers.NewWebhookHandler(&tests.FakePublisher{}, "s3cret", time.Minute, tests.FakeClock{T: now}).Gateway(rec, req)
+	handlers.NewWebhookHandler(&tests.FakePublisher{}, "s3cret", time.Minute, tests.FakeClock{T: now}, logger.New(logger.Config{Output: io.Discard})).Gateway(rec, req)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 	assert.Equal(t, "INVALID_BODY", tests.FromJson(rec.Body.String())["error"].(map[string]interface{})["code"])
+}
+
+func TestWebhookLogsRejectedSignatures(t *testing.T) {
+	logs := &bytes.Buffer{}
+	handler := handlers.NewWebhookHandler(&tests.FakePublisher{}, "s3cret", 5*time.Minute, tests.FakeClock{T: now}, logger.New(logger.Config{Output: logs}))
+	body := `{"external_id":"ted_secret_body","status":"settled"}`
+	req := httptest.NewRequest(http.MethodPost, "/webhooks/gateway", bytes.NewBufferString(body))
+	req.RemoteAddr = "10.0.0.7:5555"
+	req.Header.Set("X-Timestamp", "1700000000")
+	req.Header.Set("X-Signature", "deadbeefcafe")
+	rec := httptest.NewRecorder()
+
+	handler.Gateway(rec, req)
+
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	var entry map[string]interface{}
+	assert.NoError(t, json.Unmarshal(logs.Bytes(), &entry))
+	assert.Equal(t, "warn", entry["level"])
+	assert.Equal(t, "invalid webhook signature", entry["message"])
+	assert.Equal(t, "10.0.0.7:5555", entry["remote_addr"])
+	assert.Equal(t, "1700000000", entry["timestamp"])
+	assert.NotContains(t, logs.String(), "deadbeefcafe")
+	assert.NotContains(t, logs.String(), "ted_secret_body")
+
+	logs.Reset()
+	valid := []byte(`{"external_id":"ted_1","status":"settled"}`)
+	ts := strconv.FormatInt(now.Unix(), 10)
+	req = httptest.NewRequest(http.MethodPost, "/webhooks/gateway", bytes.NewReader(valid))
+	req.Header.Set("X-Timestamp", ts)
+	req.Header.Set("X-Signature", services.Sign("s3cret", ts, valid))
+	rec = httptest.NewRecorder()
+	handler.Gateway(rec, req)
+	assert.Equal(t, http.StatusAccepted, rec.Code)
+	assert.Empty(t, logs.String())
 }

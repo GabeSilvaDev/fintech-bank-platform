@@ -40,12 +40,13 @@ func (tc *TestCase) SetupTest() {
 	tc.PingErr = nil
 	tc.headers = map[string]string{}
 
+	log := logger.New(logger.Config{Output: io.Discard})
 	tc.Router = chi.NewRouter()
 	appHttp.SetupRouter(tc.Router, appHttp.Dependencies{
 		Reads:    handlers.NewReadHandler(tc.Service),
-		Webhooks: handlers.NewWebhookHandler(tc.Publisher, WebhookSecret, 5*time.Minute, tc.Clock),
+		Webhooks: handlers.NewWebhookHandler(tc.Publisher, WebhookSecret, 5*time.Minute, tc.Clock, log),
 		Ping:     func(context.Context) error { return tc.PingErr },
-		Logger:   logger.New(logger.Config{Output: io.Discard}),
+		Logger:   log,
 	})
 }
 

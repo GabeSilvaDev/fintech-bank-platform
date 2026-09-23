@@ -77,7 +77,7 @@ func main() {
 	router := chi.NewRouter()
 	http.SetupRouter(router, http.Dependencies{
 		Reads:    handlers.NewReadHandler(service),
-		Webhooks: handlers.NewWebhookHandler(producer, cfg.Payment.WebhookSecret, cfg.Payment.WebhookTolerance, services.SystemClock{}),
+		Webhooks: handlers.NewWebhookHandler(producer, cfg.Payment.WebhookSecret, cfg.Payment.WebhookTolerance, services.SystemClock{}, log),
 		Ping:     database.Ping(session),
 		Logger:   log,
 	})

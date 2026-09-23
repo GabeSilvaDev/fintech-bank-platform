@@ -149,7 +149,7 @@ func TestPaymentsEndToEnd(t *testing.T) {
 	router := chi.NewRouter()
 	appHttp.SetupRouter(router, appHttp.Dependencies{
 		Reads:    handlers.NewReadHandler(service),
-		Webhooks: handlers.NewWebhookHandler(producer, secret, time.Minute, services.SystemClock{}),
+		Webhooks: handlers.NewWebhookHandler(producer, secret, time.Minute, services.SystemClock{}, log),
 		Ping:     database.Ping(session),
 		Logger:   log,
 	})

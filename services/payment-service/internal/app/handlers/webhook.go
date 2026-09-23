@@ -14,6 +14,7 @@ import (
 	"github.com/fintech-bank-platform/payment-service/internal/contracts"
 	apperrors "github.com/fintech-bank-platform/pkg/errors"
 	"github.com/fintech-bank-platform/pkg/events"
+	"github.com/fintech-bank-platform/pkg/logger"
 	"github.com/fintech-bank-platform/pkg/middleware"
 	"github.com/fintech-bank-platform/pkg/response"
 )
@@ -28,10 +29,11 @@ type WebhookHandler struct {
 	secret    string
 	tolerance time.Duration
 	clock     contracts.Clock
+	log       *logger.Logger
 }
 
-func NewWebhookHandler(publisher contracts.Publisher, secret string, tolerance time.Duration, clock contracts.Clock) *WebhookHandler {
-	return &WebhookHandler{publisher: publisher, secret: secret, tolerance: tolerance, clock: clock}
+func NewWebhookHandler(publisher contracts.Publisher, secret string, tolerance time.Duration, clock contracts.Clock, log *logger.Logger) *WebhookHandler {
+	return &WebhookHandler{publisher: publisher, secret: secret, tolerance: tolerance, clock: clock, log: log}
 }
 
 type webhookRequest struct {
@@ -51,7 +53,9 @@ func (h *WebhookHandler) Gateway(w http.ResponseWriter, r *http.Request) {
 		response.FromError(w, apperrors.BadRequest("INVALID_BODY", "request body could not be read").Wrap(err))
 		return
 	}
-	if err := services.Verify(h.secret, r.Header.Get("X-Timestamp"), body, r.Header.Get("X-Signature"), h.clock.Now(), h.tolerance); err != nil {
+	timestamp := r.Header.Get("X-Timestamp")
+	if err := services.Verify(h.secret, timestamp, body, r.Header.Get("X-Signature"), h.clock.Now(), h.tolerance); err != nil {
+		h.log.Warn().Str("remote_addr", r.RemoteAddr).Str("timestamp", timestamp).Msg("invalid webhook signature")
 		response.FromError(w, apperrors.Unauthorized("INVALID_SIGNATURE", "webhook signature is invalid"))
 		return
 	}

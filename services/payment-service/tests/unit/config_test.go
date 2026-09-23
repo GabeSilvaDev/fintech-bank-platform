@@ -9,7 +9,7 @@ import (
 )
 
 func TestConfigDefaults(t *testing.T) {
-	t.Setenv("PAYMENT_WEBHOOK_SECRET", "s3cret")
+	t.Setenv("PAYMENT_WEBHOOK_SECRET", "s3cret-s3cret-s3cret")
 
 	cfg, err := config.New()
 
@@ -31,14 +31,14 @@ func TestConfigDefaults(t *testing.T) {
 	assert.Equal(t, "migrations", cfg.Cassandra.MigrationsPath)
 	assert.Equal(t, "info", cfg.Log.Level)
 	assert.False(t, cfg.Log.Pretty)
-	assert.Equal(t, "s3cret", cfg.Payment.WebhookSecret)
+	assert.Equal(t, "s3cret-s3cret-s3cret", cfg.Payment.WebhookSecret)
 	assert.Equal(t, "http://localhost:8084/webhooks/gateway", cfg.Payment.WebhookURL)
 	assert.Equal(t, 5*time.Minute, cfg.Payment.WebhookTolerance)
 	assert.Equal(t, 2*time.Second, cfg.Payment.SettlementDelay)
 }
 
 func TestConfigFromEnv(t *testing.T) {
-	t.Setenv("PAYMENT_WEBHOOK_SECRET", "s3cret")
+	t.Setenv("PAYMENT_WEBHOOK_SECRET", "s3cret-s3cret-s3cret")
 	t.Setenv("SERVER_HOST", "127.0.0.1")
 	t.Setenv("SERVER_PORT", "9000")
 	t.Setenv("KAFKA_BROKERS", "k1:9092, k2:9092")
@@ -79,4 +79,15 @@ func TestConfigRequiresAWebhookSecret(t *testing.T) {
 	t.Setenv("PAYMENT_WEBHOOK_SECRET", "")
 	_, err := config.New()
 	assert.EqualError(t, err, "PAYMENT_WEBHOOK_SECRET is required")
+}
+
+func TestConfigRequiresAStrongWebhookSecret(t *testing.T) {
+	t.Setenv("PAYMENT_WEBHOOK_SECRET", "fifteen-chars-x")
+	_, err := config.New()
+	assert.EqualError(t, err, "PAYMENT_WEBHOOK_SECRET must have at least 16 characters")
+
+	t.Setenv("PAYMENT_WEBHOOK_SECRET", "sixteen-chars-xx")
+	cfg, err := config.New()
+	assert.NoError(t, err)
+	assert.Equal(t, "sixteen-chars-xx", cfg.Payment.WebhookSecret)
 }

@@ -9,6 +9,8 @@ import (
 	"github.com/joho/godotenv"
 )
 
+const minWebhookSecretLength = 16
+
 type Config struct {
 	Server    contracts.ServerConfig
 	Kafka     contracts.KafkaConfig
@@ -29,6 +31,9 @@ func New() (*Config, error) {
 	}
 	if payment.WebhookSecret == "" {
 		return nil, errors.New("PAYMENT_WEBHOOK_SECRET is required")
+	}
+	if len(payment.WebhookSecret) < minWebhookSecretLength {
+		return nil, errors.New("PAYMENT_WEBHOOK_SECRET must have at least 16 characters")
 	}
 
 	return &Config{
