@@ -1,0 +1,49 @@
+groups:
+  - name: fintech
+    rules:
+      - alert: ServiceDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} is down"
+          description: "Prometheus could not scrape {{ $labels.instance }} for more than 1 minute."
+      - alert: HighErrorRate
+        expr: sum by (service) (rate(http_requests_total{status=~"5.."}[5m])) / sum by (service) (rate(http_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.service }} is answering more than 5% of requests with 5xx"
+          description: "5xx ratio over the last 5 minutes is {{ $value | humanizePercentage }}."
+      - alert: DeadLettersGrowing
+        expr: increase(messages_processed_total{outcome="dead_lettered"}[10m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.service }} dead-lettered {{ $labels.type }} messages"
+          description: "{{ $value | humanize }} messages were sent to the DLQ in the last 10 minutes."
+      - alert: ConsumerLagHigh
+        expr: kafka_consumer_lag > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.service }} is lagging on {{ $labels.topic }}"
+          description: "Consumer group {{ $labels.group }} is {{ $value | humanize }} messages behind."
+      - alert: ReconciliationExhausted
+        expr: increase(reconciliation_exhausted_total[15m]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.service }} gave up reconciling pending operations"
+          description: "{{ $value | humanize }} operations exhausted their re-send attempts in the last 15 minutes."
+      - alert: CircuitBreakerOpen
+        expr: circuit_breaker_state == 2
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.service }} circuit breaker is open"
+          description: "The circuit breaker has been open for more than 1 minute."

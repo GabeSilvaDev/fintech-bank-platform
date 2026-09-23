@@ -147,6 +147,71 @@
         retries: 5
       restart: unless-stopped
 
+    prometheus:
+      image: prom/prometheus:v3.14.0
+      container_name: fintech-prometheus
+      ports:
+        - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+      volumes:
+        - ./observability/prometheus:/etc/prometheus:ro
+      networks:
+        - fintech-network
+      healthcheck:
+        test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/ready"]
+        interval: 10s
+        timeout: 5s
+        retries: 5
+      restart: unless-stopped
+      profiles:
+        - observability
+
+    grafana:
+      image: grafana/grafana:13.2.2
+      container_name: fintech-grafana
+      ports:
+        - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+      environment:
+        GF_SECURITY_ADMIN_USER: admin
+        GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+        GF_AUTH_ANONYMOUS_ENABLED: "true"
+        GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+        GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/platform-overview.json
+        GF_ANALYTICS_REPORTING_ENABLED: "false"
+        GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      volumes:
+        - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+        - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      networks:
+        - fintech-network
+      depends_on:
+        prometheus:
+          condition: service_healthy
+        jaeger:
+          condition: service_started
+      healthcheck:
+        test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+        interval: 10s
+        timeout: 5s
+        retries: 5
+      restart: unless-stopped
+      profiles:
+        - observability
+
+    jaeger:
+      image: jaegertracing/jaeger:2.20.0
+      container_name: fintech-jaeger
+      hostname: jaeger
+      ports:
+        - "127.0.0.1:${JAEGER_UI_PORT:-16686}:16686"
+      expose:
+        - "4317"
+        - "4318"
+      networks:
+        - fintech-network
+      restart: unless-stopped
+      profiles:
+        - observability
+
   networks:
     fintech-network:
       driver: bridge
