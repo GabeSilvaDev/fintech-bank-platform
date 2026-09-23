@@ -37,6 +37,16 @@ func TestGetUint32(t *testing.T) {
 	assert.Equal(t, uint32(5), GetUint32("ENV_TEST_U32_ZERO", 5))
 }
 
+func TestGetFloat(t *testing.T) {
+	t.Setenv("ENV_TEST_FLOAT", "0.25")
+	t.Setenv("ENV_TEST_FLOAT_BAD", "x")
+	t.Setenv("ENV_TEST_FLOAT_EMPTY", "")
+	assert.Equal(t, 0.25, GetFloat("ENV_TEST_FLOAT", 1))
+	assert.Equal(t, 1.0, GetFloat("ENV_TEST_FLOAT_BAD", 1))
+	assert.Equal(t, 1.0, GetFloat("ENV_TEST_FLOAT_EMPTY", 1))
+	assert.Equal(t, 1.0, GetFloat("ENV_TEST_MISSING", 1))
+}
+
 func TestGetBool(t *testing.T) {
 	t.Setenv("ENV_TEST_BOOL", "true")
 	t.Setenv("ENV_TEST_BOOL_BAD", "maybe")

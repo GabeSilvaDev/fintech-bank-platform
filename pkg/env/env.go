@@ -39,6 +39,15 @@ func GetUint32(key string, defaultValue uint32) uint32 {
 	return uint32(value)
 }
 
+func GetFloat(key string, defaultValue float64) float64 {
+	if value, exists := os.LookupEnv(key); exists {
+		if parsed, err := strconv.ParseFloat(value, 64); err == nil {
+			return parsed
+		}
+	}
+	return defaultValue
+}
+
 func GetBool(key string, defaultValue bool) bool {
 	if value, exists := os.LookupEnv(key); exists {
 		if parsed, err := strconv.ParseBool(value); err == nil {

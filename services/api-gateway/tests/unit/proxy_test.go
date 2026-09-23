@@ -10,9 +10,34 @@ import (
 	"github.com/fintech-bank-platform/api-gateway/internal/app/handlers"
 	"github.com/fintech-bank-platform/api-gateway/tests"
 	"github.com/fintech-bank-platform/pkg/middleware"
+	"github.com/fintech-bank-platform/pkg/tracing"
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 )
+
+func useTraceRecorder(t *testing.T) *tracetest.SpanRecorder {
+	t.Helper()
+	previousProvider := otel.GetTracerProvider()
+	previousPropagator := otel.GetTextMapPropagator()
+
+	recorder := tracetest.NewSpanRecorder()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder))
+	otel.SetTracerProvider(provider)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() {
+		_ = provider.Shutdown(context.Background())
+		otel.SetTracerProvider(previousProvider)
+		otel.SetTextMapPropagator(previousPropagator)
+	})
+
+	return recorder
+}
 
 func proxyRouter(upstream, serviceName string) http.Handler {
 	target, _ := url.Parse(upstream)
@@ -185,4 +210,37 @@ func TestReadProxyAnswers502NamingTheNotificationServiceWhenItIsDown(t *testing.
 	errorBody := tests.FromJson(rec.Body.String())["error"].(map[string]interface{})
 	assert.Equal(t, "UPSTREAM_UNAVAILABLE", errorBody["code"])
 	assert.Equal(t, "notification service is unavailable", errorBody["message"])
+}
+
+func TestReadProxyForwardsTraceParentToUpstream(t *testing.T) {
+	recorder := useTraceRecorder(t)
+
+	var gotTraceParent string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotTraceParent = r.Header.Get("traceparent")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
+	}))
+	defer upstream.Close()
+
+	ctx, span := tracing.Tracer().Start(context.Background(), "incoming request")
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/abc", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	proxyRouter(upstream.URL, "account service").ServeHTTP(rec, req)
+	span.End()
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	require.NotEmpty(t, gotTraceParent)
+	assert.Contains(t, gotTraceParent, span.SpanContext().TraceID().String())
+
+	spans := recorder.Ended()
+	require.Len(t, spans, 2)
+	var clientSpan sdktrace.ReadOnlySpan
+	for _, s := range spans {
+		if s.SpanKind() == trace.SpanKindClient {
+			clientSpan = s
+		}
+	}
+	require.NotNil(t, clientSpan)
+	assert.Contains(t, gotTraceParent, clientSpan.SpanContext().SpanID().String())
 }

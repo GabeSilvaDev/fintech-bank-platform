@@ -9,23 +9,25 @@ import (
 )
 
 type Config struct {
-	Server    contracts.ServerConfig
-	CORS      contracts.CORSConfig
-	RateLimit contracts.RateLimitConfig
-	Kafka     contracts.KafkaConfig
-	Log       contracts.LogConfig
-	Upstreams contracts.UpstreamConfig
+	Server        contracts.ServerConfig
+	CORS          contracts.CORSConfig
+	RateLimit     contracts.RateLimitConfig
+	Kafka         contracts.KafkaConfig
+	Log           contracts.LogConfig
+	Upstreams     contracts.UpstreamConfig
+	Observability contracts.ObservabilityConfig
 }
 
 func New() (*Config, error) {
 	_ = godotenv.Load()
 
 	return &Config{
-		Server:    loadServerConfig(),
-		CORS:      loadCORSConfig(),
-		RateLimit: loadRateLimitConfig(),
-		Kafka:     loadKafkaConfig(),
-		Log:       loadLogConfig(),
+		Server:        loadServerConfig(),
+		CORS:          loadCORSConfig(),
+		RateLimit:     loadRateLimitConfig(),
+		Kafka:         loadKafkaConfig(),
+		Log:           loadLogConfig(),
+		Observability: loadObservabilityConfig(),
 		Upstreams: contracts.UpstreamConfig{
 			AccountService:      env.Get("ACCOUNT_SERVICE_URL", "http://localhost:8082"),
 			TransactionService:  env.Get("TRANSACTION_SERVICE_URL", "http://localhost:8083"),
@@ -80,5 +82,13 @@ func loadLogConfig() contracts.LogConfig {
 	return contracts.LogConfig{
 		Level:  env.Get("LOG_LEVEL", "info"),
 		Pretty: env.GetBool("LOG_PRETTY", false),
+	}
+}
+
+func loadObservabilityConfig() contracts.ObservabilityConfig {
+	return contracts.ObservabilityConfig{
+		MetricsEnabled: env.GetBool("METRICS_ENABLED", true),
+		OTLPEndpoint:   env.Get("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+		SampleRatio:    env.GetFloat("OTEL_SAMPLER_RATIO", 1.0),
 	}
 }

@@ -14,7 +14,9 @@ import (
 	appHttp "github.com/fintech-bank-platform/api-gateway/internal/infrastructure/http"
 	"github.com/fintech-bank-platform/api-gateway/tests"
 	"github.com/fintech-bank-platform/pkg/logger"
+	"github.com/fintech-bank-platform/pkg/metrics"
 	"github.com/go-chi/chi/v5"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -111,4 +113,68 @@ func TestSetupRouterMountsCommandRoutes(t *testing.T) {
 	router.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusBadGateway, rec.Code)
+}
+
+func TestSetupRouterServesMetricsWhenEnabled(t *testing.T) {
+	router := chi.NewRouter()
+	cfg := &config.Config{
+		CORS:      contracts.CORSConfig{AllowedOrigins: []string{"*"}, AllowedMethods: []string{"GET"}},
+		RateLimit: contracts.RateLimitConfig{Requests: 1000, Window: time.Minute},
+	}
+	deps := testDependencies()
+	deps.Metrics = metrics.New("test-router-metrics-enabled")
+
+	appHttp.SetupRouter(router, cfg, deps)
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Contains(t, rec.Body.String(), "go_goroutines")
+}
+
+func TestSetupRouterHidesMetricsWhenDisabled(t *testing.T) {
+	router := chi.NewRouter()
+	cfg := &config.Config{
+		CORS:      contracts.CORSConfig{AllowedOrigins: []string{"*"}, AllowedMethods: []string{"GET"}},
+		RateLimit: contracts.RateLimitConfig{Requests: 1000, Window: time.Minute},
+	}
+
+	appHttp.SetupRouter(router, cfg, testDependencies())
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNotFound, rec.Code)
+}
+
+func TestSetupRouterRecordsRoutePatternForProxiedReads(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
+	}))
+	defer upstream.Close()
+
+	router := chi.NewRouter()
+	cfg := &config.Config{
+		CORS:      contracts.CORSConfig{AllowedOrigins: []string{"*"}, AllowedMethods: []string{"GET"}},
+		RateLimit: contracts.RateLimitConfig{Requests: 1000, Window: time.Minute},
+	}
+	deps := testDependencies()
+	m := metrics.New("test-router-route-label")
+	deps.Metrics = m
+	accountService, _ := url.Parse(upstream.URL)
+	deps.AccountService = accountService
+
+	appHttp.SetupRouter(router, cfg, deps)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/abc", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	counter := m.CounterVec("http_requests_total", "Total number of HTTP requests", "method", "route", "status")
+	assert.Equal(t, float64(1), testutil.ToFloat64(counter.WithLabelValues("GET", "/api/v1/accounts/{id}", "200")))
 }

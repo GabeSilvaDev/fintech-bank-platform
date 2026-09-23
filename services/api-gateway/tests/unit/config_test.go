@@ -192,6 +192,34 @@ func TestConfigUpstreamDefaults(t *testing.T) {
 	assert.Equal(t, "http://localhost:8085", cfg.Upstreams.NotificationService)
 }
 
+func TestConfigObservabilityDefaults(t *testing.T) {
+	cfg, _ := config.New()
+
+	assert.True(t, cfg.Observability.MetricsEnabled)
+	assert.Empty(t, cfg.Observability.OTLPEndpoint)
+	assert.Equal(t, 1.0, cfg.Observability.SampleRatio)
+}
+
+func TestConfigObservabilityFromEnv(t *testing.T) {
+	t.Setenv("METRICS_ENABLED", "false")
+	t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318")
+	t.Setenv("OTEL_SAMPLER_RATIO", "0.5")
+
+	cfg, _ := config.New()
+
+	assert.False(t, cfg.Observability.MetricsEnabled)
+	assert.Equal(t, "http://collector:4318", cfg.Observability.OTLPEndpoint)
+	assert.Equal(t, 0.5, cfg.Observability.SampleRatio)
+}
+
+func TestConfigObservabilityInvalidSampleRatioFallsBack(t *testing.T) {
+	t.Setenv("OTEL_SAMPLER_RATIO", "not-a-number")
+
+	cfg, _ := config.New()
+
+	assert.Equal(t, 1.0, cfg.Observability.SampleRatio)
+}
+
 func TestConfigUpstreamFromEnv(t *testing.T) {
 	t.Setenv("ACCOUNT_SERVICE_URL", "http://accounts:9000")
 	t.Setenv("TRANSACTION_SERVICE_URL", "http://txns:9000")

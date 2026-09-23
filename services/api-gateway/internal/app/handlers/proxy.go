@@ -9,6 +9,7 @@ import (
 	apperrors "github.com/fintech-bank-platform/pkg/errors"
 	"github.com/fintech-bank-platform/pkg/middleware"
 	"github.com/fintech-bank-platform/pkg/response"
+	"github.com/fintech-bank-platform/pkg/tracing"
 )
 
 type ReadProxy struct {
@@ -17,6 +18,7 @@ type ReadProxy struct {
 
 func NewReadProxy(upstream *url.URL, serviceName string) *ReadProxy {
 	proxy := httputil.NewSingleHostReverseProxy(upstream)
+	proxy.Transport = tracing.Transport(nil)
 	director := proxy.Director
 	proxy.Director = func(req *http.Request) {
 		director(req)

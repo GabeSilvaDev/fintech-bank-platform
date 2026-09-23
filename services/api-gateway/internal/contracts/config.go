@@ -50,3 +50,9 @@ type UpstreamConfig struct {
 	PaymentService      string
 	NotificationService string
 }
+
+type ObservabilityConfig struct {
+	MetricsEnabled bool
+	OTLPEndpoint   string
+	SampleRatio    float64
+}

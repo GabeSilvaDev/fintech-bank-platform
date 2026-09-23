@@ -11,9 +11,17 @@ import (
 	"github.com/fintech-bank-platform/api-gateway/tests"
 	apperrors "github.com/fintech-bank-platform/pkg/errors"
 	"github.com/fintech-bank-platform/pkg/events"
+	"github.com/fintech-bank-platform/pkg/metrics"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/sony/gobreaker/v2"
 	"github.com/stretchr/testify/assert"
 )
+
+func breakerStateValue(t *testing.T, m *metrics.Metrics) float64 {
+	t.Helper()
+	gauge := m.GaugeVec(messaging.CircuitBreakerStateName, messaging.CircuitBreakerStateHelp)
+	return testutil.ToFloat64(gauge.WithLabelValues())
+}
 
 func breakerConfig(threshold uint32, timeout time.Duration) contracts.KafkaConfig {
 	return contracts.KafkaConfig{BreakerThreshold: threshold, BreakerTimeout: timeout}
@@ -21,7 +29,7 @@ func breakerConfig(threshold uint32, timeout time.Duration) contracts.KafkaConfi
 
 func TestBreakerPassesThroughOnSuccess(t *testing.T) {
 	pub := &tests.FakePublisher{}
-	b := messaging.NewBreaker(pub, breakerConfig(2, time.Minute))
+	b := messaging.NewBreaker(pub, breakerConfig(2, time.Minute), nil)
 	ev := events.NewAccountCommand(events.EventTypes.CreateAccount, nil)
 
 	err := b.Publish(context.Background(), events.Topics.AccountCommands, "k", ev)
@@ -34,7 +42,7 @@ func TestBreakerPassesThroughOnSuccess(t *testing.T) {
 func TestBreakerReturnsInnerErrorWhileClosed(t *testing.T) {
 	inner := apperrors.ServiceUnavailable("PUBLISH_FAILED", "boom")
 	pub := &tests.FakePublisher{Err: inner}
-	b := messaging.NewBreaker(pub, breakerConfig(2, time.Minute))
+	b := messaging.NewBreaker(pub, breakerConfig(2, time.Minute), nil)
 	ev := events.NewAccountCommand(events.EventTypes.CreateAccount, nil)
 
 	err := b.Publish(context.Background(), events.Topics.AccountCommands, "k", ev)
@@ -44,7 +52,7 @@ func TestBreakerReturnsInnerErrorWhileClosed(t *testing.T) {
 
 func TestBreakerOpensAfterConsecutiveFailures(t *testing.T) {
 	pub := &tests.FakePublisher{Err: errors.New("down")}
-	b := messaging.NewBreaker(pub, breakerConfig(2, time.Minute))
+	b := messaging.NewBreaker(pub, breakerConfig(2, time.Minute), nil)
 	ev := events.NewAccountCommand(events.EventTypes.CreateAccount, nil)
 	ctx := context.Background()
 
@@ -62,7 +70,7 @@ func TestBreakerOpensAfterConsecutiveFailures(t *testing.T) {
 
 func TestBreakerRecoversAfterTimeout(t *testing.T) {
 	pub := &tests.FakePublisher{Err: errors.New("down")}
-	b := messaging.NewBreaker(pub, breakerConfig(1, 20*time.Millisecond))
+	b := messaging.NewBreaker(pub, breakerConfig(1, 20*time.Millisecond), nil)
 	ev := events.NewAccountCommand(events.EventTypes.CreateAccount, nil)
 	ctx := context.Background()
 
@@ -77,9 +85,38 @@ func TestBreakerRecoversAfterTimeout(t *testing.T) {
 	assert.Len(t, pub.Published, 1)
 }
 
+func TestBreakerInitializesGaugeToClosed(t *testing.T) {
+	m := metrics.New("test-breaker-initial")
+	pub := &tests.FakePublisher{}
+
+	messaging.NewBreaker(pub, breakerConfig(2, time.Minute), m)
+
+	assert.Equal(t, float64(0), breakerStateValue(t, m))
+}
+
+func TestBreakerGaugeReflectsOpenAndRecoveredStates(t *testing.T) {
+	m := metrics.New("test-breaker-transitions")
+	pub := &tests.FakePublisher{Err: errors.New("down")}
+	b := messaging.NewBreaker(pub, breakerConfig(1, 20*time.Millisecond), m)
+	ev := events.NewAccountCommand(events.EventTypes.CreateAccount, nil)
+	ctx := context.Background()
+
+	assert.Equal(t, float64(0), breakerStateValue(t, m))
+
+	_ = b.Publish(ctx, events.Topics.AccountCommands, "k", ev)
+	assert.Equal(t, float64(2), breakerStateValue(t, m))
+
+	time.Sleep(40 * time.Millisecond)
+	pub.Err = nil
+	err := b.Publish(ctx, events.Topics.AccountCommands, "k", ev)
+
+	assert.NoError(t, err)
+	assert.Equal(t, float64(0), breakerStateValue(t, m))
+}
+
 func TestBreakerIgnoresCanceledContexts(t *testing.T) {
 	pub := &tests.FakePublisher{Err: context.Canceled}
-	b := messaging.NewBreaker(pub, breakerConfig(1, time.Minute))
+	b := messaging.NewBreaker(pub, breakerConfig(1, time.Minute), nil)
 	ev := events.NewAccountCommand(events.EventTypes.CreateAccount, nil)
 	ctx := context.Background()
 
