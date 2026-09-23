@@ -25,6 +25,7 @@ func TestConfigDefaults(t *testing.T) {
 	assert.Equal(t, 3, cfg.Kafka.MaxAttempts)
 	assert.Equal(t, []time.Duration{200 * time.Millisecond, time.Second, 5 * time.Second}, cfg.Consumer.RetryBackoff)
 	assert.Equal(t, 30*time.Second, cfg.Consumer.DrainTimeout)
+	assert.Equal(t, time.Hour, cfg.Consumer.MaxEventAge)
 	assert.Equal(t, "info", cfg.Log.Level)
 	assert.False(t, cfg.Log.Pretty)
 	assert.Equal(t, "localhost:6379", cfg.Redis.Addr)
@@ -54,6 +55,7 @@ func TestConfigFromEnv(t *testing.T) {
 	t.Setenv("SMTP_FROM", "a@b.c")
 	t.Setenv("SMTP_TIMEOUT", "2s")
 	t.Setenv("NOTIFICATION_HISTORY_SIZE", "0")
+	t.Setenv("NOTIFICATION_MAX_EVENT_AGE", "0")
 
 	cfg, err := config.New()
 
@@ -72,4 +74,5 @@ func TestConfigFromEnv(t *testing.T) {
 	assert.Equal(t, "a@b.c", cfg.SMTP.From)
 	assert.Equal(t, 2*time.Second, cfg.SMTP.Timeout)
 	assert.Equal(t, 100, cfg.HistorySize)
+	assert.Equal(t, time.Duration(0), cfg.Consumer.MaxEventAge)
 }

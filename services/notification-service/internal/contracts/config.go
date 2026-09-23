@@ -27,6 +27,7 @@ type KafkaConfig struct {
 type ConsumerConfig struct {
 	RetryBackoff []time.Duration
 	DrainTimeout time.Duration
+	MaxEventAge  time.Duration
 }
 
 type LogConfig struct {

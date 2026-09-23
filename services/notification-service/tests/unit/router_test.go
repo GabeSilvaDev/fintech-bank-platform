@@ -1,16 +1,19 @@
 package unit
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/fintech-bank-platform/notification-service/internal/app/models"
 	"github.com/fintech-bank-platform/notification-service/internal/app/services"
 	"github.com/fintech-bank-platform/notification-service/tests"
 	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/fintech-bank-platform/pkg/events"
+	"github.com/fintech-bank-platform/pkg/logger"
 	"github.com/fintech-bank-platform/pkg/processor"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -24,7 +27,56 @@ var (
 func newRouter(t *testing.T, directory *tests.FakeDirectory) *services.Router {
 	r, err := services.NewRenderer(services.Templates())
 	assert.NoError(t, err)
-	return services.NewRouter(directory, r)
+	return services.NewRouter(directory, r, tests.FakeClock{T: time.Now().UTC()}, time.Hour, logger.New(logger.Config{Output: &bytes.Buffer{}}))
+}
+
+func agedRouter(t *testing.T, now time.Time, maxAge time.Duration, logs *bytes.Buffer) *services.Router {
+	r, err := services.NewRenderer(services.Templates())
+	assert.NoError(t, err)
+	return services.NewRouter(tests.NewFakeDirectory(ana), r, tests.FakeClock{T: now}, maxAge, logger.New(logger.Config{Output: logs}))
+}
+
+func paymentCompletedAt(at time.Time) *events.Event {
+	event := events.NewPaymentEvent(events.EventTypes.PaymentCompleted, events.PaymentCompletedPayload{AccountID: ana.AccountID.String(), PaymentMethod: "pix", Amount: 10})
+	event.Timestamp = at
+	return event
+}
+
+func TestRouterRoutesFreshEvents(t *testing.T) {
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	logs := &bytes.Buffer{}
+	router := agedRouter(t, now, time.Hour, logs)
+
+	assert.Len(t, route(t, router, paymentCompletedAt(now.Add(-59*time.Minute))).Messages, 2)
+	assert.Len(t, route(t, router, paymentCompletedAt(now.Add(-time.Hour))).Messages, 2)
+	assert.Len(t, route(t, router, paymentCompletedAt(time.Time{})).Messages, 2)
+	assert.Empty(t, logs.String())
+}
+
+func TestRouterSkipsStaleEvents(t *testing.T) {
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	logs := &bytes.Buffer{}
+	directory := tests.NewFakeDirectory(ana)
+	r, err := services.NewRenderer(services.Templates())
+	assert.NoError(t, err)
+	router := services.NewRouter(directory, r, tests.FakeClock{T: now}, time.Hour, logger.New(logger.Config{Output: logs}))
+	stale := paymentCompletedAt(now.Add(-2 * time.Hour))
+
+	assert.Empty(t, route(t, router, stale).Messages)
+	assert.Equal(t, 0, directory.Calls)
+	assert.Contains(t, logs.String(), `"message":"stale event skipped"`)
+	assert.Contains(t, logs.String(), `"event_id":"`+stale.ID+`"`)
+	assert.Contains(t, logs.String(), `"event_type":"`+events.EventTypes.PaymentCompleted+`"`)
+	assert.Contains(t, logs.String(), `"age":`)
+}
+
+func TestRouterZeroMaxAgeDisablesTheStalenessGuard(t *testing.T) {
+	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
+	logs := &bytes.Buffer{}
+	router := agedRouter(t, now, 0, logs)
+
+	assert.Len(t, route(t, router, paymentCompletedAt(now.Add(-30*24*time.Hour))).Messages, 2)
+	assert.Empty(t, logs.String())
 }
 
 func route(t *testing.T, router *services.Router, event *events.Event) processor.Result {
@@ -150,7 +202,7 @@ func TestRouterSkipsAndErrors(t *testing.T) {
 func TestRouterReportsTemplateErrors(t *testing.T) {
 	broken, err := services.NewRenderer(fstest.MapFS{})
 	assert.NoError(t, err)
-	router := services.NewRouter(tests.NewFakeDirectory(ana), broken)
+	router := services.NewRouter(tests.NewFakeDirectory(ana), broken, services.SystemClock{}, time.Hour, logger.New(logger.Config{Output: &bytes.Buffer{}}))
 
 	_, err = router.Dispatch(context.Background(), events.NewPaymentEvent(events.EventTypes.PaymentCompleted, events.PaymentCompletedPayload{AccountID: ana.AccountID.String(), PaymentMethod: "pix"}))
 	assert.Equal(t, "template_error", domain.InvalidCode(err))

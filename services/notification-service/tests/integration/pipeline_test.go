@@ -155,7 +155,7 @@ func TestNotificationPipelineEndToEnd(t *testing.T) {
 	renderer, err := services.NewRenderer(services.Templates())
 	require.NoError(t, err)
 	dir := directory.NewClient(directorySrv.URL, 3*time.Second, time.Minute)
-	router := services.NewRouter(dir, renderer)
+	router := services.NewRouter(dir, renderer, services.SystemClock{}, time.Hour, logger.New(logger.Config{Output: &bytes.Buffer{}}))
 
 	emailSender := newRecordingSender()
 	smsSender := newRecordingSender()

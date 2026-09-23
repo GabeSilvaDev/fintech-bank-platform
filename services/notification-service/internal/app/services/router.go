@@ -3,11 +3,13 @@ package services
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/fintech-bank-platform/notification-service/internal/app/models"
 	"github.com/fintech-bank-platform/notification-service/internal/contracts"
 	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/fintech-bank-platform/pkg/events"
+	"github.com/fintech-bank-platform/pkg/logger"
 	"github.com/fintech-bank-platform/pkg/processor"
 	"github.com/google/uuid"
 )
@@ -15,10 +17,13 @@ import (
 type Router struct {
 	directory contracts.Directory
 	renderer  *Renderer
+	clock     contracts.Clock
+	maxAge    time.Duration
+	log       *logger.Logger
 }
 
-func NewRouter(directory contracts.Directory, renderer *Renderer) *Router {
-	return &Router{directory: directory, renderer: renderer}
+func NewRouter(directory contracts.Directory, renderer *Renderer, clock contracts.Clock, maxAge time.Duration, log *logger.Logger) *Router {
+	return &Router{directory: directory, renderer: renderer, clock: clock, maxAge: maxAge, log: log}
 }
 
 type notice struct {
@@ -30,6 +35,10 @@ type notice struct {
 }
 
 func (r *Router) Dispatch(ctx context.Context, event *events.Event) (processor.Result, error) {
+	if age := r.clock.Now().Sub(event.Timestamp); r.maxAge > 0 && !event.Timestamp.IsZero() && age > r.maxAge {
+		r.log.Info().Str("event_id", event.ID).Str("event_type", event.Type).Dur("age", age).Msg("stale event skipped")
+		return processor.Result{}, nil
+	}
 	notices, err := notices(event)
 	if err != nil {
 		return processor.Result{}, err

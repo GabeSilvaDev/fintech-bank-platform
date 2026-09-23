@@ -43,7 +43,7 @@ func main() {
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to load templates")
 	}
-	router := services.NewRouter(accountDirectory, renderer)
+	router := services.NewRouter(accountDirectory, renderer, services.SystemClock{}, cfg.Consumer.MaxEventAge, log)
 
 	senderMap := map[models.Channel]contracts.Sender{
 		models.ChannelEmail: senders.NewSMTP(cfg.SMTP.Addr, cfg.SMTP.From, cfg.SMTP.Timeout),
@@ -80,10 +80,10 @@ func main() {
 	server := appHttp.NewServer(cfg.Server, chiRouter)
 
 	group, groupCtx := errgroup.WithContext(ctx)
-	runConsumer(groupCtx, group, log, cfg, events.Topics.AccountEvents, cfg.Kafka.GroupID+"-accounts", kafka.LastOffset, routingProcessor)
-	runConsumer(groupCtx, group, log, cfg, events.Topics.TransactionEvents, cfg.Kafka.GroupID+"-transactions", kafka.LastOffset, routingProcessor)
-	runConsumer(groupCtx, group, log, cfg, events.Topics.PaymentEvents, cfg.Kafka.GroupID+"-payments", kafka.LastOffset, routingProcessor)
-	runConsumer(groupCtx, group, log, cfg, events.Topics.NotificationEvents, cfg.Kafka.GroupID, 0, deliveryProcessor)
+	runConsumer(groupCtx, group, log, cfg, events.Topics.AccountEvents, cfg.Kafka.GroupID+"-accounts", kafka.FirstOffset, routingProcessor)
+	runConsumer(groupCtx, group, log, cfg, events.Topics.TransactionEvents, cfg.Kafka.GroupID+"-transactions", kafka.FirstOffset, routingProcessor)
+	runConsumer(groupCtx, group, log, cfg, events.Topics.PaymentEvents, cfg.Kafka.GroupID+"-payments", kafka.FirstOffset, routingProcessor)
+	runConsumer(groupCtx, group, log, cfg, events.Topics.NotificationEvents, cfg.Kafka.GroupID, kafka.FirstOffset, deliveryProcessor)
 	group.Go(func() error {
 		log.Info().Str("address", cfg.Server.Address()).Msg("Server starting")
 		return server.Start()

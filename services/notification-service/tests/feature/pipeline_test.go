@@ -48,7 +48,7 @@ func newPipeline(t *testing.T, contacts ...models.Contact) *pipeline {
 		push:      &tests.FakeSender{},
 	}
 	log := logger.New(logger.Config{Output: &bytes.Buffer{}})
-	router := services.NewRouter(p.directory, renderer)
+	router := services.NewRouter(p.directory, renderer, tests.FakeClock{T: time.Now().UTC()}, time.Hour, log)
 	senders := map[models.Channel]contracts.Sender{models.ChannelEmail: p.email, models.ChannelSMS: p.sms, models.ChannelPush: p.push}
 	delivery := services.NewDelivery(senders, p.history, tests.FakeClock{T: time.Now().UTC()}, log)
 
