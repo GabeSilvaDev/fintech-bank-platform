@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -83,12 +82,13 @@ func sandboxPayment(method models.Method, mutate func(*models.Payment)) *models.
 
 func TestSimulatorSettlesPixImmediately(t *testing.T) {
 	sim, sched := simulator("http://unused", 1, io.Discard)
+	payment := sandboxPayment(models.MethodPix, nil)
 
-	submission, err := sim.Submit(context.Background(), sandboxPayment(models.MethodPix, nil))
+	submission, err := sim.Submit(context.Background(), payment)
 
 	assert.NoError(t, err)
 	assert.Equal(t, models.SubmissionSettled, submission.Status)
-	assert.True(t, strings.HasPrefix(submission.ExternalID, "pix_"))
+	assert.Equal(t, "pix_"+payment.ID.String(), submission.ExternalID)
 	assert.Empty(t, sched.jobs)
 }
 
@@ -103,14 +103,32 @@ func TestSimulatorRejectsSandboxPixKeys(t *testing.T) {
 }
 
 func TestSimulatorIsIdempotentPerPayment(t *testing.T) {
-	sim, sched := simulator("http://unused", 1, io.Discard)
+	prov := newProvider(t)
+	sim, sched := simulator(prov.server.URL, 1, io.Discard)
 	payment := sandboxPayment(models.MethodTED, nil)
 
 	first, _ := sim.Submit(context.Background(), payment)
 	second, _ := sim.Submit(context.Background(), payment)
 
 	assert.Equal(t, first, second)
-	assert.Len(t, sched.jobs, 1)
+	assert.Equal(t, "ted_"+payment.ID.String(), first.ExternalID)
+	assert.Len(t, sched.jobs, 2)
+	sched.jobs[1]()
+	assert.Len(t, prov.calls, 1)
+	var body map[string]string
+	assert.NoError(t, json.Unmarshal(prov.calls[0].body, &body))
+	assert.Equal(t, map[string]string{"external_id": first.ExternalID, "status": "settled", "reason": ""}, body)
+
+	restarted, _ := simulator("http://unused", 1, io.Discard)
+	again, _ := restarted.Submit(context.Background(), payment)
+	assert.Equal(t, first, again)
+
+	pix, pixSched := simulator("http://unused", 1, io.Discard)
+	settled := sandboxPayment(models.MethodPix, nil)
+	firstPix, _ := pix.Submit(context.Background(), settled)
+	secondPix, _ := pix.Submit(context.Background(), settled)
+	assert.Equal(t, firstPix, secondPix)
+	assert.Empty(t, pixSched.jobs)
 }
 
 func TestSimulatorDeliversSignedCallbacks(t *testing.T) {
@@ -132,7 +150,7 @@ func TestSimulatorDeliversSignedCallbacks(t *testing.T) {
 		submission, err := sim.Submit(context.Background(), c.payment)
 		assert.NoError(t, err)
 		assert.Equal(t, models.SubmissionPending, submission.Status)
-		assert.True(t, strings.HasPrefix(submission.ExternalID, c.prefix))
+		assert.Equal(t, c.prefix+c.payment.ID.String(), submission.ExternalID)
 		assert.Equal(t, []time.Duration{2 * time.Second}, sched.delays)
 
 		sched.jobs[0]()

@@ -58,11 +58,11 @@ func NewSimulator(cfg Config, log *logger.Logger) *Simulator {
 func (s *Simulator) Submit(_ context.Context, payment *models.Payment) (models.Submission, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if existing, ok := s.submissions[payment.ID]; ok {
-		return existing, nil
+	submission, ok := s.submissions[payment.ID]
+	if !ok {
+		submission = decide(payment)
+		s.submissions[payment.ID] = submission
 	}
-	submission := decide(payment)
-	s.submissions[payment.ID] = submission
 	if submission.Status == models.SubmissionPending {
 		status, reason := settlement(payment)
 		externalID := submission.ExternalID
@@ -77,11 +77,11 @@ func decide(payment *models.Payment) models.Submission {
 		if strings.HasSuffix(strings.ToLower(payment.PixKey), rejectedPixDomain) {
 			return models.Submission{Status: models.SubmissionRejected, Reason: "pix_key_not_found"}
 		}
-		return models.Submission{ExternalID: "pix_" + uuid.NewString(), Status: models.SubmissionSettled}
+		return models.Submission{ExternalID: "pix_" + payment.ID.String(), Status: models.SubmissionSettled}
 	case models.MethodTED:
-		return models.Submission{ExternalID: "ted_" + uuid.NewString(), Status: models.SubmissionPending}
+		return models.Submission{ExternalID: "ted_" + payment.ID.String(), Status: models.SubmissionPending}
 	}
-	return models.Submission{ExternalID: "boleto_" + uuid.NewString(), Status: models.SubmissionPending}
+	return models.Submission{ExternalID: "boleto_" + payment.ID.String(), Status: models.SubmissionPending}
 }
 
 func settlement(payment *models.Payment) (models.SubmissionStatus, string) {
