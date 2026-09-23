@@ -28,6 +28,11 @@ func main() {
 		log.Fatal().Err(err).Msg("Invalid TRANSACTION_SERVICE_URL")
 	}
 
+	paymentService, err := url.Parse(cfg.Upstreams.PaymentService)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Invalid PAYMENT_SERVICE_URL")
+	}
+
 	producer := messaging.NewProducer(messaging.ProducerConfig{
 		Brokers:        cfg.Kafka.Brokers,
 		WriteTimeout:   cfg.Kafka.WriteTimeout,
@@ -42,6 +47,7 @@ func main() {
 		Logger:             log,
 		AccountService:     upstream,
 		TransactionService: transactionService,
+		PaymentService:     paymentService,
 	})
 
 	err = server.Start()

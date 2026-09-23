@@ -39,6 +39,7 @@ func (tc *TestCase) SetupSuite() {
 		Logger:             logger.New(logger.Config{Output: io.Discard}),
 		AccountService:     mustURL("http://127.0.0.1:1"),
 		TransactionService: mustURL("http://127.0.0.1:1"),
+		PaymentService:     mustURL("http://127.0.0.1:1"),
 	})
 }
 

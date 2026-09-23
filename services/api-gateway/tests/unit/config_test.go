@@ -188,12 +188,15 @@ func TestConfigUpstreamDefaults(t *testing.T) {
 	cfg, _ := config.New()
 	assert.Equal(t, "http://localhost:8082", cfg.Upstreams.AccountService)
 	assert.Equal(t, "http://localhost:8083", cfg.Upstreams.TransactionService)
+	assert.Equal(t, "http://localhost:8084", cfg.Upstreams.PaymentService)
 }
 
 func TestConfigUpstreamFromEnv(t *testing.T) {
 	t.Setenv("ACCOUNT_SERVICE_URL", "http://accounts:9000")
 	t.Setenv("TRANSACTION_SERVICE_URL", "http://txns:9000")
+	t.Setenv("PAYMENT_SERVICE_URL", "http://pay:9000")
 	cfg, _ := config.New()
 	assert.Equal(t, "http://accounts:9000", cfg.Upstreams.AccountService)
 	assert.Equal(t, "http://txns:9000", cfg.Upstreams.TransactionService)
+	assert.Equal(t, "http://pay:9000", cfg.Upstreams.PaymentService)
 }

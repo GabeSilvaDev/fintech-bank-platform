@@ -22,6 +22,8 @@ func proxyRouter(upstream, serviceName string) http.Handler {
 	r.Get("/api/v1/users/{user_id}/accounts", proxy.ServeHTTP)
 	r.Get("/api/v1/transactions/{id}", proxy.ServeHTTP)
 	r.Get("/api/v1/accounts/{account_id}/transactions", proxy.ServeHTTP)
+	r.Get("/api/v1/payments/{id}", proxy.ServeHTTP)
+	r.Get("/api/v1/accounts/{account_id}/payments", proxy.ServeHTTP)
 	return r
 }
 
@@ -122,4 +124,35 @@ func TestReadProxyForwardsTransactionPaths(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 	}
 	assert.Equal(t, []string{"/transactions/abc", "/accounts/a1/transactions?limit=5"}, paths)
+}
+
+func TestReadProxyForwardsPaymentPaths(t *testing.T) {
+	var paths []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.RequestURI())
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+	}))
+	defer upstream.Close()
+
+	for _, path := range []string{"/api/v1/payments/abc", "/api/v1/accounts/a1/payments?limit=5"} {
+		rec := httptest.NewRecorder()
+		proxyRouter(upstream.URL, "payment service").ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		assert.Equal(t, http.StatusOK, rec.Code)
+	}
+	assert.Equal(t, []string{"/payments/abc", "/accounts/a1/payments?limit=5"}, paths)
+}
+
+func TestReadProxyAnswers502NamingThePaymentServiceWhenItIsDown(t *testing.T) {
+	upstream := httptest.NewServer(http.NotFoundHandler())
+	upstream.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/payments/abc", nil)
+	rec := httptest.NewRecorder()
+	proxyRouter(upstream.URL, "payment service").ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadGateway, rec.Code)
+	errorBody := tests.FromJson(rec.Body.String())["error"].(map[string]interface{})
+	assert.Equal(t, "UPSTREAM_UNAVAILABLE", errorBody["code"])
+	assert.Equal(t, "payment service is unavailable", errorBody["message"])
 }

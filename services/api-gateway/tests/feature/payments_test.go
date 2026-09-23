@@ -102,6 +102,11 @@ func (s *PaymentsTestSuite) TestTedDestinationIsRejectedOnOtherMethods() {
 	s.Empty(s.Publisher.Published)
 }
 
+func (s *PaymentsTestSuite) TestReadRoutesAreProxied() {
+	s.Get("/api/v1/payments/00000000-0000-0000-0000-000000000000").AssertStatus(502).AssertErrorCode("UPSTREAM_UNAVAILABLE")
+	s.Get("/api/v1/accounts/00000000-0000-0000-0000-000000000000/payments").AssertStatus(502).AssertErrorCode("UPSTREAM_UNAVAILABLE")
+}
+
 func (s *PaymentsTestSuite) TestBoletoCheckDigitsAreValidated() {
 	s.Post("/api/v1/payments", map[string]interface{}{
 		"account_id": tests.UUID(), "payment_method": "boleto", "amount": 150, "currency": "BRL",
