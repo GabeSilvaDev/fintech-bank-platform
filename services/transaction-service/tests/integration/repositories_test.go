@@ -100,6 +100,37 @@ func TestTransactionRepository(t *testing.T) {
 	require.WithinDuration(t, later, got.UpdatedAt, time.Millisecond)
 }
 
+func TestTransactionRepositoryTouch(t *testing.T) {
+	session, _ := throwawayKeyspace(t)
+	repo := database.NewTransactionRepository(session)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	tx := &models.Transaction{ID: uuid.New(), Type: models.TypeDeposit, Status: models.StatusPending, AccountID: uuid.New(), AmountCents: 1000, Currency: "BRL", IdempotencyKey: "touch-1", CreatedAt: now, UpdatedAt: now}
+	require.NoError(t, repo.Create(ctx, tx))
+
+	touchedAt := now.Add(time.Minute)
+	applied, err := repo.Touch(ctx, tx.ID, models.StatusPending, now, touchedAt)
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	got, err := repo.Get(ctx, tx.ID)
+	require.NoError(t, err)
+	require.WithinDuration(t, touchedAt, got.UpdatedAt, time.Millisecond)
+
+	applied, err = repo.Touch(ctx, tx.ID, models.StatusPending, now, now.Add(2*time.Minute))
+	require.NoError(t, err)
+	require.False(t, applied)
+
+	applied, err = repo.Touch(ctx, tx.ID, models.StatusDebited, touchedAt, now.Add(3*time.Minute))
+	require.NoError(t, err)
+	require.False(t, applied)
+
+	got, err = repo.Get(ctx, tx.ID)
+	require.NoError(t, err)
+	require.WithinDuration(t, touchedAt, got.UpdatedAt, time.Millisecond)
+}
+
 func TestProcessedEventStore(t *testing.T) {
 	session, _ := throwawayKeyspace(t)
 	store := database.NewProcessedEventStore(session)

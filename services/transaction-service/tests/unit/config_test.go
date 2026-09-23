@@ -73,3 +73,14 @@ func TestConfigFromEnv(t *testing.T) {
 	assert.Equal(t, 2*time.Minute, cfg.Sweeper.StaleAfter)
 	assert.Equal(t, 100, cfg.Sweeper.Batch)
 }
+
+func TestConfigSweeperNonPositiveDurationsFallBackToDefaults(t *testing.T) {
+	t.Setenv("SWEEPER_INTERVAL", "0s")
+	t.Setenv("SWEEPER_STALE_AFTER", "-1m")
+
+	cfg, err := config.New()
+
+	assert.NoError(t, err)
+	assert.Equal(t, time.Minute, cfg.Sweeper.Interval)
+	assert.Equal(t, 5*time.Minute, cfg.Sweeper.StaleAfter)
+}

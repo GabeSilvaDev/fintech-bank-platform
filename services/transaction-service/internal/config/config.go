@@ -55,9 +55,16 @@ func New() (*Config, error) {
 		},
 		Sweeper: contracts.SweeperConfig{
 			Enabled:    env.GetBool("SWEEPER_ENABLED", true),
-			Interval:   env.GetDuration("SWEEPER_INTERVAL", time.Minute),
-			StaleAfter: env.GetDuration("SWEEPER_STALE_AFTER", 5*time.Minute),
+			Interval:   positiveDuration(env.GetDuration("SWEEPER_INTERVAL", time.Minute), time.Minute),
+			StaleAfter: positiveDuration(env.GetDuration("SWEEPER_STALE_AFTER", 5*time.Minute), 5*time.Minute),
 			Batch:      env.GetIntMin("SWEEPER_BATCH", 100, 1),
 		},
 	}, nil
+}
+
+func positiveDuration(value, fallback time.Duration) time.Duration {
+	if value <= 0 {
+		return fallback
+	}
+	return value
 }

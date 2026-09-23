@@ -23,12 +23,21 @@ type TransitionResult struct {
 	Err     error
 }
 
+type TouchCall struct {
+	ID       uuid.UUID
+	Status   models.TransactionStatus
+	Observed time.Time
+	Now      time.Time
+}
+
 type FakeTransactionRepo struct {
 	Transactions      map[uuid.UUID]*models.Transaction
 	Keys              map[string]uuid.UUID
 	Created           []*models.Transaction
 	Transitions       []TransitionCall
 	TransitionResults []TransitionResult
+	Touches           []TouchCall
+	TouchResults      []TransitionResult
 	GetErrs           []error
 	Err               error
 	CreateErr         error
@@ -140,6 +149,24 @@ func (f *FakeTransactionRepo) Transition(_ context.Context, id uuid.UUID, from, 
 	if patch.CompletedAt != nil {
 		tx.CompletedAt = patch.CompletedAt
 	}
+	return true, nil
+}
+
+func (f *FakeTransactionRepo) Touch(_ context.Context, id uuid.UUID, status models.TransactionStatus, observed, now time.Time) (bool, error) {
+	f.Touches = append(f.Touches, TouchCall{ID: id, Status: status, Observed: observed, Now: now})
+	if len(f.TouchResults) > 0 {
+		result := f.TouchResults[0]
+		f.TouchResults = f.TouchResults[1:]
+		return result.Applied, result.Err
+	}
+	if f.Err != nil {
+		return false, f.Err
+	}
+	tx, ok := f.Transactions[id]
+	if !ok || tx.Status != status || !tx.UpdatedAt.Equal(observed) {
+		return false, nil
+	}
+	tx.UpdatedAt = now
 	return true, nil
 }
 

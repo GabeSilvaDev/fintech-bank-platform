@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/fintech-bank-platform/pkg/logger"
@@ -29,12 +30,20 @@ func (s *Sweeper) RunOnce(ctx context.Context) (int, error) {
 
 	resent := 0
 	for _, tx := range stale {
+		if err := ctx.Err(); err != nil {
+			return resent, err
+		}
+
 		res, err := s.service.Reconcile(ctx, tx)
+		if errors.Is(err, ErrTouchLost) {
+			continue
+		}
 		if err != nil {
 			s.log.Error().Err(err).Str("transaction_id", tx.ID.String()).Str("status", string(tx.Status)).Msg("reconciliation failed")
 			continue
 		}
 		if len(res.Messages) == 0 {
+			s.log.Warn().Str("transaction_id", tx.ID.String()).Str("status", string(tx.Status)).Msg("stale transaction has no step to re-send")
 			continue
 		}
 

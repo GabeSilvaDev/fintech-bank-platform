@@ -82,7 +82,7 @@ func TestSweeperRunOnceLogsReconcileFailures(t *testing.T) {
 	stale := h.pending(models.TypeDeposit, models.StatusPending)
 	stale.UpdatedAt = now.Add(-10 * time.Minute)
 	h.repo.Put(stale)
-	h.repo.TransitionResults = []tests.TransitionResult{{Err: errors.New("cas conflict")}}
+	h.repo.TouchResults = []tests.TransitionResult{{Err: errors.New("cas conflict")}}
 
 	publisher := &tests.FakePublisher{}
 	logs := &bytes.Buffer{}
@@ -97,7 +97,7 @@ func TestSweeperRunOnceLogsReconcileFailures(t *testing.T) {
 	assert.Contains(t, logs.String(), stale.ID.String())
 }
 
-func TestSweeperRunOnceSkipsRecordsWithNoMessages(t *testing.T) {
+func TestSweeperRunOnceLogsRecordsWithNoStepToResend(t *testing.T) {
 	h := newHarness()
 	stale := h.pending(models.TypeTransfer, models.StatusDebited)
 	stale.CounterpartyID = nil
@@ -113,7 +113,80 @@ func TestSweeperRunOnceSkipsRecordsWithNoMessages(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 0, count)
 	assert.Empty(t, publisher.Published)
+	assert.Contains(t, logs.String(), "stale transaction has no step to re-send")
+	assert.Contains(t, logs.String(), stale.ID.String())
+}
+
+func TestSweeperRunOnceSkipsRecordsTouchedByAnotherSweeperSilently(t *testing.T) {
+	h := newHarness()
+	stale := h.pending(models.TypeDeposit, models.StatusPending)
+	stale.UpdatedAt = now.Add(-10 * time.Minute)
+	h.repo.Put(stale)
+	h.repo.TouchResults = []tests.TransitionResult{{Applied: false}}
+
+	publisher := &tests.FakePublisher{}
+	logs := &bytes.Buffer{}
+	sweeper := services.NewSweeper(h.service, publisher, tests.FakeClock{T: now}, sweeperConfig(), logger.New(logger.Config{Output: logs}))
+
+	count, err := sweeper.RunOnce(context.Background())
+
+	assert.NoError(t, err)
+	assert.Equal(t, 0, count)
+	assert.Empty(t, publisher.Published)
 	assert.Empty(t, logs.String())
+}
+
+type cancelingPublisher struct {
+	inner  *tests.FakePublisher
+	cancel context.CancelFunc
+}
+
+func (p *cancelingPublisher) Publish(ctx context.Context, topic, key string, event *events.Event) error {
+	err := p.inner.Publish(ctx, topic, key, event)
+	p.cancel()
+	return err
+}
+
+func TestSweeperRunOnceStopsBetweenRecordsWhenContextCancelled(t *testing.T) {
+	h := newHarness()
+	first := h.pending(models.TypeDeposit, models.StatusPending)
+	first.UpdatedAt = now.Add(-10 * time.Minute)
+	h.repo.Put(first)
+	second := h.pending(models.TypeDeposit, models.StatusPending)
+	second.UpdatedAt = now.Add(-10 * time.Minute)
+	h.repo.Put(second)
+
+	inner := &tests.FakePublisher{}
+	ctx, cancel := context.WithCancel(context.Background())
+	publisher := &cancelingPublisher{inner: inner, cancel: cancel}
+	logs := &bytes.Buffer{}
+	sweeper := services.NewSweeper(h.service, publisher, tests.FakeClock{T: now}, sweeperConfig(), logger.New(logger.Config{Output: logs}))
+
+	count, err := sweeper.RunOnce(ctx)
+
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, 1, count)
+	assert.Len(t, inner.Published, 1)
+	assert.NotContains(t, logs.String(), "reconciliation failed")
+}
+
+func TestSweeperRunOnceStopsImmediatelyWhenContextAlreadyCancelled(t *testing.T) {
+	h := newHarness()
+	stale := h.pending(models.TypeDeposit, models.StatusPending)
+	stale.UpdatedAt = now.Add(-10 * time.Minute)
+	h.repo.Put(stale)
+
+	publisher := &tests.FakePublisher{}
+	sweeper := services.NewSweeper(h.service, publisher, tests.FakeClock{T: now}, sweeperConfig(), logger.New(logger.Config{Output: io.Discard}))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	count, err := sweeper.RunOnce(ctx)
+
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, 0, count)
+	assert.Empty(t, publisher.Published)
 }
 
 func TestSweeperRunLogsSweepErrors(t *testing.T) {

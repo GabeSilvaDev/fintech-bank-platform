@@ -15,6 +15,7 @@ type TransactionRepository interface {
 	ListByAccount(ctx context.Context, accountID uuid.UUID, limit int) ([]*models.Transaction, error)
 	Transition(ctx context.Context, id uuid.UUID, from, to models.TransactionStatus, patch models.Patch) (bool, error)
 	ListStale(ctx context.Context, before time.Time, limit int) ([]*models.Transaction, error)
+	Touch(ctx context.Context, id uuid.UUID, status models.TransactionStatus, observed, now time.Time) (bool, error)
 }
 
 type ProcessedEventStore interface {

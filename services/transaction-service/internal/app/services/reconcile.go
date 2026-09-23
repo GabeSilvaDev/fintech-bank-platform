@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/fintech-bank-platform/pkg/events"
@@ -9,15 +10,20 @@ import (
 	"github.com/fintech-bank-platform/transaction-service/internal/app/models"
 )
 
+var ErrTouchLost = errors.New("stale transaction was already touched")
+
 func (s *TransactionService) ListStale(ctx context.Context, before time.Time, limit int) ([]*models.Transaction, error) {
 	return s.repo.ListStale(ctx, before, limit)
 }
 
 func (s *TransactionService) Reconcile(ctx context.Context, tx *models.Transaction) (processor.Result, error) {
 	now := s.clock.Now()
-	applied, err := s.repo.Transition(ctx, tx.ID, tx.Status, tx.Status, models.Patch{UpdatedAt: now})
-	if err != nil || !applied {
+	applied, err := s.repo.Touch(ctx, tx.ID, tx.Status, tx.UpdatedAt, now)
+	if err != nil {
 		return processor.Result{}, err
+	}
+	if !applied {
+		return processor.Result{}, ErrTouchLost
 	}
 
 	trace := "reconcile-" + tx.ID.String()

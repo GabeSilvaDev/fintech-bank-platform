@@ -129,6 +129,12 @@ func (r *TransactionRepository) Transition(ctx context.Context, id uuid.UUID, fr
 	return applied, cassandra.MapWriteError(err)
 }
 
+func (r *TransactionRepository) Touch(ctx context.Context, id uuid.UUID, status models.TransactionStatus, observed, now time.Time) (bool, error) {
+	applied, err := r.session.Query("UPDATE transactions SET updated_at = ? WHERE transaction_id = ? IF status = ? AND updated_at = ?", now, gocql.UUID(id), string(status), observed).
+		WithContext(ctx).MapScanCAS(map[string]interface{}{})
+	return applied, cassandra.MapWriteError(err)
+}
+
 type transactionRow struct {
 	id, accountID                gocql.UUID
 	counterparty                 *gocql.UUID
