@@ -16,7 +16,8 @@ pkg/
 ├── cassandra/     migrator and write-error mapping
 ├── processor/     idempotent Kafka command processor
 ├── retry/         fixed-delay retry with context cancellation
-└── metrics/       prometheus registry, http middleware and /metrics handler
+├── metrics/       prometheus registry, http middleware and /metrics handler
+└── tracing/       opentelemetry setup, http middleware and transport, kafka header propagation
 ```
 
 ## logger
@@ -278,6 +279,33 @@ publishLatency.WithLabelValues("account.commands").Observe(0.042)
 ```
 
 Every method is nil-safe, so a service can pass a `*metrics.Metrics` obtained from optional configuration straight through: a `nil` receiver makes the factories return a fresh, unregistered collector, `Middleware` returns `next` unchanged, and `Handler` returns a 404. Calling a factory twice with the same name and labels returns the already-registered collector instead of panicking.
+
+## tracing
+
+```go
+import "github.com/fintech-bank-platform/pkg/tracing"
+
+shutdown, err := tracing.Init(ctx, tracing.Config{
+    Service:     "account-service",
+    Endpoint:    "http://jaeger:4318", // OTLP/HTTP; spans are posted to /v1/traces. Empty keeps an exporter-less provider
+    SampleRatio: 0.1,                  // root sampling ratio; <= 0 or > 1 means 1. A sampled parent is always followed
+})
+defer shutdown(context.Background()) // flushes the batch span processor
+
+router.Use(tracing.Middleware) // server span per request, continued from an incoming traceparent, renamed "GET /accounts/{id}" after routing
+
+client := &http.Client{Transport: tracing.Transport(nil)} // client span "GET host" and traceparent on every outgoing request
+
+ctx, span := tracing.Tracer().Start(ctx, "debit")
+defer span.End()
+
+headers := tracing.Inject(ctx, msg.Headers) // adds traceparent (and tracestate) to a copy of the kafka headers
+ctx = tracing.Extract(ctx, msg.Headers)     // continues the producer's trace on the consumer side
+
+traceID, spanID, ok := tracing.IDs(ctx) // hex ids of the current span, ok only when the span context is valid
+```
+
+`Init` always installs the W3C `traceparent`/`tracestate` and `baggage` propagators as the global text map propagator, so `Middleware`, `Transport`, `Inject` and `Extract` use the same format everywhere. Without an endpoint, spans still get real ids, so trace ids propagate through HTTP and Kafka and show up in logs, but nothing is exported. The resource carries `service.name`; server and client spans record `http.request.method`, `url.path` and `http.response.status_code` (plus `http.route` on the server and `server.address` on the client), and a status of 500 or more, or a transport error, marks the span as an error.
 
 ## Tests
 
