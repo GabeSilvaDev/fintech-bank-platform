@@ -44,6 +44,7 @@ type FakeTransactionRepo struct {
 	ReserveErr        error
 	OnTransition      func()
 	StaleErr          error
+	StaleMaxAges      []time.Duration
 }
 
 func NewFakeTransactionRepo() *FakeTransactionRepo {
@@ -170,7 +171,8 @@ func (f *FakeTransactionRepo) Touch(_ context.Context, id uuid.UUID, status mode
 	return true, nil
 }
 
-func (f *FakeTransactionRepo) ListStale(_ context.Context, before time.Time, limit int) ([]*models.Transaction, error) {
+func (f *FakeTransactionRepo) ListStale(_ context.Context, before time.Time, maxAge time.Duration, limit int) ([]*models.Transaction, error) {
+	f.StaleMaxAges = append(f.StaleMaxAges, maxAge)
 	if f.StaleErr != nil {
 		return nil, f.StaleErr
 	}

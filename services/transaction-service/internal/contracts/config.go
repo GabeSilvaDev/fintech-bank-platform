@@ -47,6 +47,7 @@ type SweeperConfig struct {
 	Enabled    bool
 	Interval   time.Duration
 	StaleAfter time.Duration
+	MaxAge     time.Duration
 	Batch      int
 }
 

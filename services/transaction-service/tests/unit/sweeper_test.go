@@ -15,10 +15,11 @@ import (
 	"github.com/fintech-bank-platform/transaction-service/internal/contracts"
 	"github.com/fintech-bank-platform/transaction-service/tests"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func sweeperConfig() contracts.SweeperConfig {
-	return contracts.SweeperConfig{Enabled: true, Interval: time.Minute, StaleAfter: 5 * time.Minute, Batch: 10}
+	return contracts.SweeperConfig{Enabled: true, Interval: time.Minute, StaleAfter: 5 * time.Minute, MaxAge: 24 * time.Hour, Batch: 10}
 }
 
 func TestSweeperRunOnceResendsOnlyStaleRecords(t *testing.T) {
@@ -195,7 +196,7 @@ func TestSweeperRunLogsSweepErrors(t *testing.T) {
 
 	publisher := &tests.FakePublisher{}
 	logs := &bytes.Buffer{}
-	cfg := contracts.SweeperConfig{Enabled: true, Interval: time.Millisecond, StaleAfter: 5 * time.Minute, Batch: 10}
+	cfg := contracts.SweeperConfig{Enabled: true, Interval: time.Millisecond, StaleAfter: 5 * time.Minute, MaxAge: 24 * time.Hour, Batch: 10}
 	sweeper := services.NewSweeper(h.service, publisher, tests.FakeClock{T: now}, cfg, logger.New(logger.Config{Output: logs}))
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -224,7 +225,7 @@ func TestSweeperRunPublishesAtLeastOnceAndStopsOnCancel(t *testing.T) {
 	h.repo.Put(stale)
 
 	publisher := &tests.FakePublisher{}
-	cfg := contracts.SweeperConfig{Enabled: true, Interval: time.Millisecond, StaleAfter: 5 * time.Minute, Batch: 10}
+	cfg := contracts.SweeperConfig{Enabled: true, Interval: time.Millisecond, StaleAfter: 5 * time.Minute, MaxAge: 24 * time.Hour, Batch: 10}
 	sweeper := services.NewSweeper(h.service, publisher, tests.FakeClock{T: now}, cfg, logger.New(logger.Config{Output: io.Discard}))
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -244,4 +245,129 @@ func TestSweeperRunPublishesAtLeastOnceAndStopsOnCancel(t *testing.T) {
 	}
 
 	assert.NotEmpty(t, publisher.Published)
+}
+
+func (h *harness) expired(updatedAt time.Time) *models.Transaction {
+	tx := h.pending(models.TypeDeposit, models.StatusPending)
+	tx.CreatedAt = now.Add(-25 * time.Hour)
+	tx.UpdatedAt = updatedAt
+	h.repo.Put(tx)
+	return tx
+}
+
+func TestSweeperPassesTheMaxAgeToListStale(t *testing.T) {
+	h := newHarness()
+	sweeper := services.NewSweeper(h.service, &tests.FakePublisher{}, tests.FakeClock{T: now}, sweeperConfig(), logger.New(logger.Config{Output: io.Discard}))
+
+	_, err := sweeper.RunOnce(context.Background())
+
+	assert.NoError(t, err)
+	assert.Equal(t, []time.Duration{24 * time.Hour}, h.repo.StaleMaxAges)
+}
+
+func TestSweeperAlertsOnceInsteadOfResendingPastTheMaxAge(t *testing.T) {
+	h := newHarness()
+	tx := h.expired(now.Add(-2 * time.Hour))
+
+	publisher := &tests.FakePublisher{}
+	logs := &bytes.Buffer{}
+	sweeper := services.NewSweeper(h.service, publisher, tests.FakeClock{T: now}, sweeperConfig(), logger.New(logger.Config{Output: logs}))
+
+	count, err := sweeper.RunOnce(context.Background())
+
+	assert.NoError(t, err)
+	assert.Equal(t, 0, count)
+	require.Len(t, publisher.Published, 1)
+	alert := publisher.Published[0]
+	assert.Equal(t, events.Topics.TransactionDLQ, alert.Topic)
+	assert.Equal(t, tx.AccountID.String(), alert.Key)
+	assert.Equal(t, events.EventTypes.TransactionCommandFailed, alert.Event.Type)
+	payload := alert.Event.Payload.(events.ErrorPayload)
+	assert.Equal(t, "reconciliation_exhausted", payload.ErrorCode)
+	assert.Empty(t, publisher.ByTopic(events.Topics.AccountCommands))
+	require.Len(t, h.repo.Touches, 1)
+	assert.Equal(t, now, h.repo.Touches[0].Now)
+	assert.Contains(t, logs.String(), "reconciliation exhausted")
+	assert.Contains(t, logs.String(), `"level":"error"`)
+	assert.Contains(t, logs.String(), tx.ID.String())
+	assert.Contains(t, logs.String(), `"status":"pending"`)
+	assert.Contains(t, logs.String(), `"age":`)
+
+	later := services.NewSweeper(h.service, publisher, tests.FakeClock{T: now.Add(10 * time.Minute)}, sweeperConfig(), logger.New(logger.Config{Output: io.Discard}))
+	count, err = later.RunOnce(context.Background())
+
+	assert.NoError(t, err)
+	assert.Equal(t, 0, count)
+	assert.Len(t, publisher.Published, 1)
+	assert.Len(t, h.repo.Touches, 1)
+}
+
+func TestSweeperSkipsRecordsAlreadyAlertedSilently(t *testing.T) {
+	h := newHarness()
+	h.expired(now.Add(-30 * time.Minute))
+
+	publisher := &tests.FakePublisher{}
+	logs := &bytes.Buffer{}
+	sweeper := services.NewSweeper(h.service, publisher, tests.FakeClock{T: now}, sweeperConfig(), logger.New(logger.Config{Output: logs}))
+
+	count, err := sweeper.RunOnce(context.Background())
+
+	assert.NoError(t, err)
+	assert.Equal(t, 0, count)
+	assert.Empty(t, publisher.Published)
+	assert.Empty(t, h.repo.Touches)
+	assert.Empty(t, logs.String())
+}
+
+func TestSweeperSkipsAlertsTouchedByAnotherSweeperSilently(t *testing.T) {
+	h := newHarness()
+	h.expired(now.Add(-2 * time.Hour))
+	h.repo.TouchResults = []tests.TransitionResult{{Applied: false}}
+
+	publisher := &tests.FakePublisher{}
+	logs := &bytes.Buffer{}
+	sweeper := services.NewSweeper(h.service, publisher, tests.FakeClock{T: now}, sweeperConfig(), logger.New(logger.Config{Output: logs}))
+
+	count, err := sweeper.RunOnce(context.Background())
+
+	assert.NoError(t, err)
+	assert.Equal(t, 0, count)
+	assert.Empty(t, publisher.Published)
+	assert.Empty(t, logs.String())
+}
+
+func TestSweeperLogsAlertTouchFailures(t *testing.T) {
+	h := newHarness()
+	tx := h.expired(now.Add(-2 * time.Hour))
+	h.repo.TouchResults = []tests.TransitionResult{{Err: errors.New("cas timeout")}}
+
+	publisher := &tests.FakePublisher{}
+	logs := &bytes.Buffer{}
+	sweeper := services.NewSweeper(h.service, publisher, tests.FakeClock{T: now}, sweeperConfig(), logger.New(logger.Config{Output: logs}))
+
+	count, err := sweeper.RunOnce(context.Background())
+
+	assert.NoError(t, err)
+	assert.Equal(t, 0, count)
+	assert.Empty(t, publisher.Published)
+	assert.Contains(t, logs.String(), "reconciliation failed")
+	assert.Contains(t, logs.String(), tx.ID.String())
+	assert.NotContains(t, logs.String(), "reconciliation exhausted")
+}
+
+func TestSweeperStillLogsTheAlertWhenItsPublishFails(t *testing.T) {
+	h := newHarness()
+	tx := h.expired(now.Add(-2 * time.Hour))
+
+	publisher := &tests.FakePublisher{Err: errors.New("kafka down")}
+	logs := &bytes.Buffer{}
+	sweeper := services.NewSweeper(h.service, publisher, tests.FakeClock{T: now}, sweeperConfig(), logger.New(logger.Config{Output: logs}))
+
+	count, err := sweeper.RunOnce(context.Background())
+
+	assert.NoError(t, err)
+	assert.Equal(t, 0, count)
+	assert.Contains(t, logs.String(), "reconciliation alert publish failed")
+	assert.Contains(t, logs.String(), "reconciliation exhausted")
+	assert.Contains(t, logs.String(), tx.ID.String())
 }

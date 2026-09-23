@@ -40,7 +40,7 @@ func TestListStaleReturnsOnlyStaleNonTerminalTransactions(t *testing.T) {
 	staleCompleted := newStaleCandidate(models.StatusCompleted, now.Add(-2*time.Minute))
 	require.NoError(t, repo.Create(ctx, staleCompleted))
 
-	stale, err := repo.ListStale(ctx, now.Add(-time.Minute), 10)
+	stale, err := repo.ListStale(ctx, now.Add(-time.Minute), 24*time.Hour, 10)
 
 	require.NoError(t, err)
 	require.Len(t, stale, 1)
@@ -59,8 +59,37 @@ func TestListStaleRespectsLimit(t *testing.T) {
 		require.NoError(t, repo.Create(ctx, tx))
 	}
 
-	stale, err := repo.ListStale(ctx, now.Add(-time.Minute), 2)
+	stale, err := repo.ListStale(ctx, now.Add(-time.Minute), 24*time.Hour, 2)
 
 	require.NoError(t, err)
 	require.Len(t, stale, 2)
+}
+
+func TestListStaleSkipsRecordsAlreadyTouchedPastTheMaxAge(t *testing.T) {
+	session, _ := throwawayKeyspace(t)
+	repo := database.NewTransactionRepository(session)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	expired := newStaleCandidate(models.StatusPending, now.Add(-2*time.Hour))
+	expired.CreatedAt = now.Add(-25 * time.Hour)
+	require.NoError(t, repo.Create(ctx, expired))
+	alerted := newStaleCandidate(models.StatusPending, now.Add(-30*time.Minute))
+	alerted.CreatedAt = now.Add(-25 * time.Hour)
+	require.NoError(t, repo.Create(ctx, alerted))
+
+	stale, err := repo.ListStale(ctx, now.Add(-time.Minute), 24*time.Hour, 10)
+
+	require.NoError(t, err)
+	require.Len(t, stale, 1)
+	require.Equal(t, expired.ID, stale[0].ID)
+
+	applied, err := repo.Touch(ctx, expired.ID, expired.Status, stale[0].UpdatedAt, now.Add(-10*time.Minute))
+	require.NoError(t, err)
+	require.True(t, applied)
+
+	stale, err = repo.ListStale(ctx, now.Add(-time.Minute), 24*time.Hour, 10)
+
+	require.NoError(t, err)
+	require.Empty(t, stale)
 }

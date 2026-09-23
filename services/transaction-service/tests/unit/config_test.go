@@ -32,6 +32,7 @@ func TestConfigDefaults(t *testing.T) {
 	assert.True(t, cfg.Sweeper.Enabled)
 	assert.Equal(t, time.Minute, cfg.Sweeper.Interval)
 	assert.Equal(t, 5*time.Minute, cfg.Sweeper.StaleAfter)
+	assert.Equal(t, 24*time.Hour, cfg.Sweeper.MaxAge)
 	assert.Equal(t, 100, cfg.Sweeper.Batch)
 	assert.Equal(t, 30, cfg.Startup.Attempts)
 	assert.Equal(t, 2*time.Second, cfg.Startup.Delay)
@@ -54,6 +55,7 @@ func TestConfigFromEnv(t *testing.T) {
 	t.Setenv("SWEEPER_ENABLED", "false")
 	t.Setenv("SWEEPER_INTERVAL", "30s")
 	t.Setenv("SWEEPER_STALE_AFTER", "2m")
+	t.Setenv("SWEEPER_MAX_AGE", "12h")
 	t.Setenv("SWEEPER_BATCH", "0")
 	t.Setenv("STARTUP_RETRY_ATTEMPTS", "5")
 	t.Setenv("STARTUP_RETRY_DELAY", "500ms")
@@ -75,6 +77,7 @@ func TestConfigFromEnv(t *testing.T) {
 	assert.False(t, cfg.Sweeper.Enabled)
 	assert.Equal(t, 30*time.Second, cfg.Sweeper.Interval)
 	assert.Equal(t, 2*time.Minute, cfg.Sweeper.StaleAfter)
+	assert.Equal(t, 12*time.Hour, cfg.Sweeper.MaxAge)
 	assert.Equal(t, 100, cfg.Sweeper.Batch)
 	assert.Equal(t, 5, cfg.Startup.Attempts)
 	assert.Equal(t, 500*time.Millisecond, cfg.Startup.Delay)
@@ -83,12 +86,31 @@ func TestConfigFromEnv(t *testing.T) {
 func TestConfigSweeperNonPositiveDurationsFallBackToDefaults(t *testing.T) {
 	t.Setenv("SWEEPER_INTERVAL", "0s")
 	t.Setenv("SWEEPER_STALE_AFTER", "-1m")
+	t.Setenv("SWEEPER_MAX_AGE", "0s")
 
 	cfg, err := config.New()
 
 	assert.NoError(t, err)
 	assert.Equal(t, time.Minute, cfg.Sweeper.Interval)
 	assert.Equal(t, 5*time.Minute, cfg.Sweeper.StaleAfter)
+	assert.Equal(t, 24*time.Hour, cfg.Sweeper.MaxAge)
+}
+
+func TestConfigSweeperMaxAgeMustBeShorterThanTheBalanceOperationRetention(t *testing.T) {
+	for _, value := range []string{"720h", "721h", "1000h"} {
+		t.Setenv("SWEEPER_MAX_AGE", value)
+
+		cfg, err := config.New()
+
+		assert.Nil(t, cfg, value)
+		assert.EqualError(t, err, "SWEEPER_MAX_AGE must be shorter than 720h, the balance operation retention", value)
+	}
+
+	t.Setenv("SWEEPER_MAX_AGE", "719h")
+	cfg, err := config.New()
+
+	assert.NoError(t, err)
+	assert.Equal(t, 719*time.Hour, cfg.Sweeper.MaxAge)
 }
 
 func TestConfigStartupInvalidValuesFallBackToDefaults(t *testing.T) {

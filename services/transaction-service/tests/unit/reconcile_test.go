@@ -208,3 +208,44 @@ func TestReconcileTouchErrorIsPropagated(t *testing.T) {
 	assert.EqualError(t, err, "db down")
 	assert.Empty(t, res.Messages)
 }
+
+func TestExhaustTouchesAndBuildsTheDeadLetterAlert(t *testing.T) {
+	h := newHarness()
+	tx := h.pending(models.TypeTransfer, models.StatusDebited)
+
+	alert, err := h.service.Exhaust(context.Background(), tx)
+
+	assert.NoError(t, err)
+	assertReconcileTouch(t, h, tx)
+	assert.Equal(t, events.Topics.TransactionDLQ, alert.Topic)
+	assert.Equal(t, tx.AccountID.String(), alert.Key)
+	assert.Equal(t, events.EventTypes.TransactionCommandFailed, alert.Event.Type)
+	assert.Equal(t, "transaction-service", alert.Event.Source)
+	assert.Equal(t, "reconcile-"+tx.ID.String(), alert.Event.TraceID)
+	payload := alert.Event.Payload.(events.ErrorPayload)
+	assert.Nil(t, payload.OriginalEvent)
+	assert.Equal(t, "reconciliation_exhausted", payload.ErrorCode)
+	assert.Contains(t, payload.ErrorMessage, tx.ID.String())
+	assert.Contains(t, payload.ErrorMessage, "debited")
+	assert.Zero(t, payload.Retries)
+}
+
+func TestExhaustReportsALostTouch(t *testing.T) {
+	h := newHarness()
+	tx := h.pending(models.TypeDeposit, models.StatusPending)
+	h.repo.TouchResults = []tests.TransitionResult{{Applied: false}}
+
+	_, err := h.service.Exhaust(context.Background(), tx)
+
+	assert.ErrorIs(t, err, services.ErrTouchLost)
+}
+
+func TestExhaustPropagatesTouchErrors(t *testing.T) {
+	h := newHarness()
+	tx := h.pending(models.TypeDeposit, models.StatusPending)
+	h.repo.TouchResults = []tests.TransitionResult{{Err: errors.New("cas timeout")}}
+
+	_, err := h.service.Exhaust(context.Background(), tx)
+
+	assert.EqualError(t, err, "cas timeout")
+}

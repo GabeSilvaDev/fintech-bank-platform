@@ -82,7 +82,7 @@ func (r *TransactionRepository) ListByAccount(ctx context.Context, accountID uui
 	return txns, nil
 }
 
-func (r *TransactionRepository) ListStale(ctx context.Context, before time.Time, limit int) ([]*models.Transaction, error) {
+func (r *TransactionRepository) ListStale(ctx context.Context, before time.Time, maxAge time.Duration, limit int) ([]*models.Transaction, error) {
 	iter := r.session.Query("SELECT " + transactionColumns + " FROM transactions").WithContext(ctx).PageSize(500).Iter()
 	stale := []*models.Transaction{}
 	for len(stale) < limit {
@@ -92,7 +92,7 @@ func (r *TransactionRepository) ListStale(ctx context.Context, before time.Time,
 		}
 		switch tx.Status {
 		case models.StatusPending, models.StatusDebited, models.StatusReversing:
-			if tx.UpdatedAt.Before(before) {
+			if tx.UpdatedAt.Before(before) && !tx.UpdatedAt.After(tx.CreatedAt.Add(maxAge)) {
 				stale = append(stale, tx)
 			}
 		}

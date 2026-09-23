@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"time"
 
 	"github.com/fintech-bank-platform/pkg/env"
@@ -18,8 +19,18 @@ type Config struct {
 	Startup   contracts.StartupConfig
 }
 
+const (
+	defaultSweeperMaxAge = 24 * time.Hour
+	balanceOperationTTL  = 720 * time.Hour
+)
+
 func New() (*Config, error) {
 	_ = godotenv.Load()
+
+	maxAge := positiveDuration(env.GetDuration("SWEEPER_MAX_AGE", defaultSweeperMaxAge), defaultSweeperMaxAge)
+	if maxAge >= balanceOperationTTL {
+		return nil, errors.New("SWEEPER_MAX_AGE must be shorter than 720h, the balance operation retention")
+	}
 
 	return &Config{
 		Server: contracts.ServerConfig{
@@ -58,6 +69,7 @@ func New() (*Config, error) {
 			Enabled:    env.GetBool("SWEEPER_ENABLED", true),
 			Interval:   positiveDuration(env.GetDuration("SWEEPER_INTERVAL", time.Minute), time.Minute),
 			StaleAfter: positiveDuration(env.GetDuration("SWEEPER_STALE_AFTER", 5*time.Minute), 5*time.Minute),
+			MaxAge:     maxAge,
 			Batch:      env.GetIntMin("SWEEPER_BATCH", 100, 1),
 		},
 		Startup: contracts.StartupConfig{

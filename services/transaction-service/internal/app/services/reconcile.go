@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/fintech-bank-platform/pkg/events"
@@ -12,18 +13,37 @@ import (
 
 var ErrTouchLost = errors.New("stale transaction was already touched")
 
-func (s *TransactionService) ListStale(ctx context.Context, before time.Time, limit int) ([]*models.Transaction, error) {
-	return s.repo.ListStale(ctx, before, limit)
+const reconciliationExhausted = "reconciliation_exhausted"
+
+func (s *TransactionService) ListStale(ctx context.Context, before time.Time, maxAge time.Duration, limit int) ([]*models.Transaction, error) {
+	return s.repo.ListStale(ctx, before, maxAge, limit)
+}
+
+func (s *TransactionService) touch(ctx context.Context, tx *models.Transaction) error {
+	applied, err := s.repo.Touch(ctx, tx.ID, tx.Status, tx.UpdatedAt, s.clock.Now())
+	if err != nil {
+		return err
+	}
+	if !applied {
+		return ErrTouchLost
+	}
+	return nil
+}
+
+func (s *TransactionService) Exhaust(ctx context.Context, tx *models.Transaction) (processor.Message, error) {
+	if err := s.touch(ctx, tx); err != nil {
+		return processor.Message{}, err
+	}
+	failed := events.NewEvent(events.EventTypes.TransactionCommandFailed, source, events.ErrorPayload{
+		ErrorCode:    reconciliationExhausted,
+		ErrorMessage: fmt.Sprintf("transaction %s is still %s past the reconciliation age", tx.ID, tx.Status),
+	}).WithTraceID("reconcile-" + tx.ID.String())
+	return processor.Message{Topic: events.Topics.TransactionDLQ, Key: tx.AccountID.String(), Event: failed}, nil
 }
 
 func (s *TransactionService) Reconcile(ctx context.Context, tx *models.Transaction) (processor.Result, error) {
-	now := s.clock.Now()
-	applied, err := s.repo.Touch(ctx, tx.ID, tx.Status, tx.UpdatedAt, now)
-	if err != nil {
+	if err := s.touch(ctx, tx); err != nil {
 		return processor.Result{}, err
-	}
-	if !applied {
-		return processor.Result{}, ErrTouchLost
 	}
 
 	trace := "reconcile-" + tx.ID.String()

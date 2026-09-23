@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/fintech-bank-platform/pkg/logger"
+	"github.com/fintech-bank-platform/transaction-service/internal/app/models"
 	"github.com/fintech-bank-platform/transaction-service/internal/contracts"
 )
 
@@ -22,8 +23,8 @@ func NewSweeper(service *TransactionService, publisher contracts.Publisher, cloc
 }
 
 func (s *Sweeper) RunOnce(ctx context.Context) (int, error) {
-	before := s.clock.Now().Add(-s.cfg.StaleAfter)
-	stale, err := s.service.ListStale(ctx, before, s.cfg.Batch)
+	now := s.clock.Now()
+	stale, err := s.service.ListStale(ctx, now.Add(-s.cfg.StaleAfter), s.cfg.MaxAge, s.cfg.Batch)
 	if err != nil {
 		return 0, err
 	}
@@ -32,6 +33,10 @@ func (s *Sweeper) RunOnce(ctx context.Context) (int, error) {
 	for _, tx := range stale {
 		if err := ctx.Err(); err != nil {
 			return resent, err
+		}
+		if now.Sub(tx.CreatedAt) > s.cfg.MaxAge {
+			s.exhaust(ctx, tx, now)
+			continue
 		}
 
 		res, err := s.service.Reconcile(ctx, tx)
@@ -63,6 +68,24 @@ func (s *Sweeper) RunOnce(ctx context.Context) (int, error) {
 		resent++
 	}
 	return resent, nil
+}
+
+func (s *Sweeper) exhaust(ctx context.Context, tx *models.Transaction, now time.Time) {
+	if tx.UpdatedAt.After(tx.CreatedAt.Add(s.cfg.MaxAge)) {
+		return
+	}
+	alert, err := s.service.Exhaust(ctx, tx)
+	if errors.Is(err, ErrTouchLost) {
+		return
+	}
+	if err != nil {
+		s.log.Error().Err(err).Str("transaction_id", tx.ID.String()).Str("status", string(tx.Status)).Msg("reconciliation failed")
+		return
+	}
+	if err := s.publisher.Publish(ctx, alert.Topic, alert.Key, alert.Event); err != nil {
+		s.log.Error().Err(err).Str("transaction_id", tx.ID.String()).Str("status", string(tx.Status)).Msg("reconciliation alert publish failed")
+	}
+	s.log.Error().Str("transaction_id", tx.ID.String()).Str("status", string(tx.Status)).Dur("age", now.Sub(tx.CreatedAt)).Msg("reconciliation exhausted")
 }
 
 func (s *Sweeper) Run(ctx context.Context) {
