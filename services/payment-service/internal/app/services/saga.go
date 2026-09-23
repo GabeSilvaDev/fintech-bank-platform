@@ -55,8 +55,9 @@ func (s *PaymentService) ApplyAccountEvent(ctx context.Context, reply Reply) (pr
 			models.Patch{FailureReason: &reply.Reason, UpdatedAt: now},
 			toEvents(payment, failedEvent(payment, reply.Reason, models.StatusFailed, now, trace)))
 	case reply.Kind == events.EventTypes.AccountCredited && step == models.StepRefund:
+		balance := domain.Cents(reply.BalanceAfter)
 		return s.apply(ctx, payment, models.StatusRefunding, models.StatusRefunded,
-			models.Patch{UpdatedAt: now},
+			models.Patch{BalanceAfterCents: &balance, UpdatedAt: now},
 			toEvents(payment, failedEvent(payment, payment.FailureReason, models.StatusRefunded, now, trace)))
 	case reply.Kind == events.EventTypes.CreditRejected && step == models.StepRefund:
 		return s.apply(ctx, payment, models.StatusRefunding, models.StatusRefundFailed,

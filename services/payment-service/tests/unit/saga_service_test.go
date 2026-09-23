@@ -83,6 +83,7 @@ func TestRefundRepliesSettleTheRefund(t *testing.T) {
 	res, err := h.service.ApplyAccountEvent(context.Background(), reply(events.EventTypes.AccountCredited, payment, models.StepRefund, 100, ""))
 	assert.NoError(t, err)
 	assert.Equal(t, models.StatusRefunded, h.repo.Payments[payment.ID].Status)
+	assert.Equal(t, int64(10000), *h.repo.Payments[payment.ID].BalanceAfterCents)
 	failed := res.Messages[0].Event.Payload.(events.PaymentFailedPayload)
 	assert.Equal(t, "refunded", failed.Status)
 	assert.Equal(t, "pix_key_not_found", failed.Reason)
