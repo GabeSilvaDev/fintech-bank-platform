@@ -52,6 +52,7 @@ func SetupRouter(router *chi.Mux, cfg *config.Config, deps Dependencies) {
 	notificationReads := nethttp.StripPrefix("/api/v1", handlers.NewReadProxy(deps.NotificationService, "notification service"))
 
 	router.Route("/api/v1", func(r chi.Router) {
+		r.Get("/openapi.yaml", handlers.OpenAPI)
 		r.Post("/accounts", account.Create)
 		r.Patch("/accounts/{id}", account.Update)
 		r.Delete("/accounts/{id}", account.Delete)

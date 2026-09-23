@@ -120,6 +120,10 @@ jobs:
           fi
           echo "Formatting OK"
 
+      - name: Lint OpenAPI document
+        working-directory: ${{ github.workspace }}
+        run: docker run --rm -v "$PWD:/spec" redocly/cli:2.54.2 lint /spec/services/api-gateway/api/openapi.yaml
+
       - name: Run tests
         run: |
           go test ./tests/... -v -coverprofile=coverage.out -coverpkg=./internal/...

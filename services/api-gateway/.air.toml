@@ -12,7 +12,7 @@ tmp_dir = "tmp"
   # Binary to run
   bin = "./tmp/main"
   # Watch these extensions
-  include_ext = ["go", "tpl", "tmpl", "html", "env"]
+  include_ext = ["go", "tpl", "tmpl", "html", "env", "yaml"]
   # Exclude these directories
   exclude_dir = ["assets", "tmp", "vendor", "testdata", "node_modules"]
   # Exclude these files

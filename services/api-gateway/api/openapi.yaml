@@ -1,0 +1,1294 @@
+openapi: 3.1.0
+info:
+  title: Fintech Bank Platform API Gateway
+  version: 1.0.0
+  summary: Public HTTP API of the fintech bank platform.
+  description: |
+    The API gateway is the single public entry point of the platform.
+
+    Writes are asynchronous commands: the gateway validates the request, publishes a command to Kafka and answers
+    `202 Accepted` with the `command_id` and the `trace_id` that follow the command through the services. The outcome
+    is observed through the read endpoints and the notifications sent to the user.
+
+    Reads are proxied to the service that owns the data (account, transaction, payment and notification services).
+
+    Every JSON response uses the same envelope: `success` plus either `data` or `error`. Every response carries an
+    `X-Request-ID` header; a valid `X-Request-ID` sent by the client is reused, otherwise the gateway generates one.
+    Command responses return the same value as `trace_id`.
+
+    All requests are rate limited per client IP.
+  license:
+    name: MIT
+    identifier: MIT
+servers:
+  - url: http://localhost:8081
+    description: Local development stack
+security: []
+tags:
+  - name: Accounts
+    description: Account lifecycle commands and account reads.
+  - name: Transactions
+    description: Deposits, withdrawals, transfers and their reads.
+  - name: Payments
+    description: PIX, TED and boleto payments and their reads.
+  - name: Notifications
+    description: History of the notifications sent to a user.
+  - name: System
+    description: Health check and API description.
+paths:
+  /health:
+    get:
+      tags: [System]
+      operationId: getHealth
+      summary: Check gateway health
+      description: Reports that the gateway process is up. It does not check the upstream services or Kafka.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: The gateway is healthy.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthEnvelope'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+  /api/v1/openapi.yaml:
+    get:
+      tags: [System]
+      operationId: getOpenAPI
+      summary: Download this OpenAPI document
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: The OpenAPI document of the gateway.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+          content:
+            application/yaml:
+              schema:
+                type: string
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+  /api/v1/accounts:
+    post:
+      tags: [Accounts]
+      operationId: createAccount
+      summary: Open an account
+      description: |
+        Publishes a `CreateAccount` command. The account service assigns the agency and the account number and opens the
+        account with a zero BRL balance.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAccountRequest'
+      responses:
+        '202':
+          $ref: '#/components/responses/CommandAccepted'
+        '400':
+          $ref: '#/components/responses/InvalidJSON'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/PublishFailed'
+  /api/v1/accounts/{id}:
+    parameters:
+      - $ref: '#/components/parameters/AccountIdPath'
+    get:
+      tags: [Accounts]
+      operationId: getAccount
+      summary: Get an account
+      description: Proxied to the account service.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: The account.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountEnvelope'
+        '404':
+          description: No account has this id (`ACCOUNT_NOT_FOUND`).
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                success: false
+                error:
+                  code: ACCOUNT_NOT_FOUND
+                  message: account not found
+        '422':
+          $ref: '#/components/responses/InvalidPathId'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/UpstreamUnavailable'
+    patch:
+      tags: [Accounts]
+      operationId: updateAccount
+      summary: Update an account
+      description: |
+        Publishes an `UpdateAccount` command. Only the fields present in the body are changed; at least one must be
+        present, otherwise the gateway answers `422` with the code `EMPTY_UPDATE`. The command is accepted even when the
+        account does not exist; the outcome is reported by the account service.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateAccountRequest'
+      responses:
+        '202':
+          $ref: '#/components/responses/CommandAccepted'
+        '400':
+          $ref: '#/components/responses/InvalidJSON'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '422':
+          description: |
+            The path id is not a UUID or the body failed validation (`VALIDATION_ERROR`), or the body has no field to
+            update (`EMPTY_UPDATE`).
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              examples:
+                validation:
+                  summary: Invalid field
+                  value:
+                    success: false
+                    error:
+                      code: VALIDATION_ERROR
+                      message: request validation failed
+                      details:
+                        email: email
+                emptyUpdate:
+                  summary: No field to update
+                  value:
+                    success: false
+                    error:
+                      code: EMPTY_UPDATE
+                      message: at least one field must be provided
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/PublishFailed'
+    delete:
+      tags: [Accounts]
+      operationId: deleteAccount
+      summary: Close an account
+      description: |
+        Publishes a `DeleteAccount` command. The account service closes the account; the command is accepted even when
+        the account does not exist.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '202':
+          $ref: '#/components/responses/CommandAccepted'
+        '422':
+          $ref: '#/components/responses/InvalidPathId'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/PublishFailed'
+  /api/v1/users/{user_id}/accounts:
+    parameters:
+      - $ref: '#/components/parameters/UserIdPath'
+    get:
+      tags: [Accounts]
+      operationId: listUserAccounts
+      summary: List the accounts of a user
+      description: Proxied to the account service. A user without accounts gets an empty list.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: The accounts of the user.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccountListEnvelope'
+        '422':
+          $ref: '#/components/responses/InvalidPathId'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/UpstreamUnavailable'
+  /api/v1/accounts/{account_id}/transactions:
+    parameters:
+      - $ref: '#/components/parameters/AccountIdListPath'
+    get:
+      tags: [Transactions]
+      operationId: listAccountTransactions
+      summary: List the transactions of an account
+      description: Proxied to the transaction service. Newest first.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/LedgerLimit'
+      responses:
+        '200':
+          description: The transactions of the account.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionListEnvelope'
+        '422':
+          $ref: '#/components/responses/InvalidListQuery'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/UpstreamUnavailable'
+  /api/v1/transactions:
+    post:
+      tags: [Transactions]
+      operationId: createTransaction
+      summary: Deposit or withdraw
+      description: |
+        Publishes a `CreateTransaction` command. The transaction service records the transaction as `pending` and asks
+        the account service to move the balance. Requests that reuse an `idempotency_key` are not executed twice.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTransactionRequest'
+      responses:
+        '202':
+          $ref: '#/components/responses/CommandAccepted'
+        '400':
+          $ref: '#/components/responses/InvalidJSON'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/PublishFailed'
+  /api/v1/transfers:
+    post:
+      tags: [Transactions]
+      operationId: createTransfer
+      summary: Transfer between accounts
+      description: |
+        Publishes a `ProcessTransfer` command. The source account is debited first and the destination is credited
+        afterwards; a failed credit reverses the debit. Requests that reuse an `idempotency_key` are not executed twice.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TransferRequest'
+      responses:
+        '202':
+          $ref: '#/components/responses/CommandAccepted'
+        '400':
+          $ref: '#/components/responses/InvalidJSON'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/PublishFailed'
+  /api/v1/transactions/{id}:
+    parameters:
+      - $ref: '#/components/parameters/TransactionIdPath'
+    get:
+      tags: [Transactions]
+      operationId: getTransaction
+      summary: Get a transaction
+      description: Proxied to the transaction service.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: The transaction.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TransactionEnvelope'
+        '404':
+          description: No transaction has this id (`TRANSACTION_NOT_FOUND`).
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                success: false
+                error:
+                  code: TRANSACTION_NOT_FOUND
+                  message: transaction not found
+        '422':
+          $ref: '#/components/responses/InvalidPathId'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/UpstreamUnavailable'
+  /api/v1/accounts/{account_id}/payments:
+    parameters:
+      - $ref: '#/components/parameters/AccountIdListPath'
+    get:
+      tags: [Payments]
+      operationId: listAccountPayments
+      summary: List the payments of an account
+      description: Proxied to the payment service. Newest first.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/LedgerLimit'
+      responses:
+        '200':
+          description: The payments of the account.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentListEnvelope'
+        '422':
+          $ref: '#/components/responses/InvalidListQuery'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/UpstreamUnavailable'
+  /api/v1/payments:
+    post:
+      tags: [Payments]
+      operationId: createPayment
+      summary: Make a payment
+      description: |
+        Publishes a `ProcessPayment` command. The payment service debits the account, submits the payment to the
+        payment gateway and refunds the debit when the gateway rejects it. Each method needs its own field: `pix_key`
+        for `pix`, `boleto_code` for `boleto` and `ted` for `ted`; a missing one is reported as `required` in
+        `details`, and `ted` sent with another method is reported as `excluded`. Requests that reuse an
+        `idempotency_key` are not executed twice.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentRequest'
+      responses:
+        '202':
+          $ref: '#/components/responses/CommandAccepted'
+        '400':
+          $ref: '#/components/responses/InvalidJSON'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/PublishFailed'
+  /api/v1/payments/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PaymentIdPath'
+    get:
+      tags: [Payments]
+      operationId: getPayment
+      summary: Get a payment
+      description: Proxied to the payment service.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      responses:
+        '200':
+          description: The payment.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentEnvelope'
+        '404':
+          description: No payment has this id (`PAYMENT_NOT_FOUND`).
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                success: false
+                error:
+                  code: PAYMENT_NOT_FOUND
+                  message: payment not found
+        '422':
+          $ref: '#/components/responses/InvalidPathId'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/UpstreamUnavailable'
+  /api/v1/users/{user_id}/notifications:
+    parameters:
+      - $ref: '#/components/parameters/UserIdPath'
+    get:
+      tags: [Notifications]
+      operationId: listUserNotifications
+      summary: List the notifications sent to a user
+      description: |
+        Proxied to the notification service. Newest first. The history keeps the most recent notifications of each user
+        for 90 days.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+        - $ref: '#/components/parameters/NotificationLimit'
+      responses:
+        '200':
+          description: The notifications sent to the user.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NotificationListEnvelope'
+        '422':
+          $ref: '#/components/responses/InvalidListQuery'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/UpstreamUnavailable'
+components:
+  parameters:
+    RequestId:
+      name: X-Request-ID
+      in: header
+      required: false
+      description: |
+        Correlation id. A value matching the pattern is reused as the request id and the command `trace_id`; any other
+        value is replaced by a generated UUID.
+      schema:
+        type: string
+        pattern: '^[A-Za-z0-9._-]{1,64}$'
+    AccountIdPath:
+      name: id
+      in: path
+      required: true
+      description: Account id.
+      schema:
+        type: string
+        format: uuid
+    AccountIdListPath:
+      name: account_id
+      in: path
+      required: true
+      description: Account id.
+      schema:
+        type: string
+        format: uuid
+    UserIdPath:
+      name: user_id
+      in: path
+      required: true
+      description: User id.
+      schema:
+        type: string
+        format: uuid
+    TransactionIdPath:
+      name: id
+      in: path
+      required: true
+      description: Transaction id.
+      schema:
+        type: string
+        format: uuid
+    PaymentIdPath:
+      name: id
+      in: path
+      required: true
+      description: Payment id.
+      schema:
+        type: string
+        format: uuid
+    LedgerLimit:
+      name: limit
+      in: query
+      required: false
+      description: Maximum number of items to return. Values outside the range answer `422` with `limit` = `range`.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    NotificationLimit:
+      name: limit
+      in: query
+      required: false
+      description: Maximum number of items to return. Values outside the range answer `422` with `limit` = `range`.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 20
+  headers:
+    XRequestID:
+      description: Request id of this call; the `X-Request-ID` sent by the client when valid, a generated UUID otherwise.
+      schema:
+        type: string
+    RetryAfter:
+      description: Seconds to wait before retrying (the length of the rate limit window).
+      schema:
+        type: integer
+    RateLimitLimit:
+      description: Requests allowed per window for the client IP.
+      schema:
+        type: integer
+    RateLimitRemaining:
+      description: Requests left in the current window.
+      schema:
+        type: integer
+    RateLimitReset:
+      description: Unix time, in seconds, when the current window ends.
+      schema:
+        type: integer
+  responses:
+    CommandAccepted:
+      description: The command was validated and published. Its outcome is observed through the read endpoints.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/CommandAcceptedEnvelope'
+          example:
+            success: true
+            data:
+              command_id: 0b6f3a52-4f0e-4c1e-9d8a-2f7f1f0a9c11
+              trace_id: 6a1d7b0e-8a55-4d1b-9a4e-3f2c9b7d5e10
+    InvalidJSON:
+      description: The body is not valid JSON, has a field with the wrong type or has an unknown field (`INVALID_JSON`).
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            success: false
+            error:
+              code: INVALID_JSON
+              message: request body is not valid JSON
+    PayloadTooLarge:
+      description: The body exceeds 1 MiB (`PAYLOAD_TOO_LARGE`).
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            success: false
+            error:
+              code: PAYLOAD_TOO_LARGE
+              message: request body exceeds 1 MiB
+    ValidationError:
+      description: |
+        The body failed validation (`VALIDATION_ERROR`). `details` maps each invalid field to the rule it broke, such as
+        `required`, `uuid`, `oneof`, `email`, `gt`, `min`, `max`, `len`, `nefield`, `cpf|cnpj`, `phone_br`, `currency`,
+        `pix_key`, `boleto`, `agency_number`, `account_number` or `excluded`.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            success: false
+            error:
+              code: VALIDATION_ERROR
+              message: request validation failed
+              details:
+                amount: gt
+                currency: currency
+    InvalidPathId:
+      description: A path id is not a UUID (`VALIDATION_ERROR`, `details` maps the parameter name to `uuid`).
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            success: false
+            error:
+              code: VALIDATION_ERROR
+              message: request validation failed
+              details:
+                id: uuid
+    InvalidListQuery:
+      description: |
+        A path id is not a UUID (`details` maps it to `uuid`) or `limit` is not an integer inside its range (`details`
+        has `limit` = `range`). The code is `VALIDATION_ERROR`.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            success: false
+            error:
+              code: VALIDATION_ERROR
+              message: request validation failed
+              details:
+                limit: range
+    TooManyRequests:
+      description: The client IP exceeded the rate limit (`RATE_LIMIT_EXCEEDED`).
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+        Retry-After:
+          $ref: '#/components/headers/RetryAfter'
+        X-RateLimit-Limit:
+          $ref: '#/components/headers/RateLimitLimit'
+        X-RateLimit-Remaining:
+          $ref: '#/components/headers/RateLimitRemaining'
+        X-RateLimit-Reset:
+          $ref: '#/components/headers/RateLimitReset'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            success: false
+            error:
+              code: RATE_LIMIT_EXCEEDED
+              message: Too many requests
+    UpstreamUnavailable:
+      description: The service that owns the data could not be reached (`UPSTREAM_UNAVAILABLE`).
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            success: false
+            error:
+              code: UPSTREAM_UNAVAILABLE
+              message: account service is unavailable
+    PublishFailed:
+      description: |
+        The command could not be published because Kafka is unreachable or the publisher circuit breaker is open
+        (`PUBLISH_FAILED`). Retrying with the same `idempotency_key` is safe.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            success: false
+            error:
+              code: PUBLISH_FAILED
+              message: message broker is unavailable
+  schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: Machine readable error code.
+          examples: [VALIDATION_ERROR]
+        message:
+          type: string
+          description: Human readable error message.
+          examples: [request validation failed]
+        details:
+          type: object
+          description: For `VALIDATION_ERROR`, maps each invalid field to the validation rule it broke.
+          additionalProperties:
+            type: string
+          examples:
+            - document: cpf|cnpj
+    ErrorEnvelope:
+      type: object
+      required: [success, error]
+      properties:
+        success:
+          type: boolean
+          const: false
+        error:
+          $ref: '#/components/schemas/Error'
+    CommandAccepted:
+      type: object
+      required: [command_id, trace_id]
+      properties:
+        command_id:
+          type: string
+          format: uuid
+          description: Id of the published command event.
+        trace_id:
+          type: string
+          description: Request id that correlates the command, the events it causes and the logs of every service.
+    CommandAcceptedEnvelope:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          $ref: '#/components/schemas/CommandAccepted'
+    Health:
+      type: object
+      required: [status, timestamp, uptime]
+      properties:
+        status:
+          type: string
+          const: healthy
+        timestamp:
+          type: string
+          format: date-time
+          description: Current UTC time.
+        uptime:
+          type: string
+          description: Time since the gateway started, as a Go duration.
+          examples: [1h2m3.5s]
+    HealthEnvelope:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          $ref: '#/components/schemas/Health'
+    Currency:
+      type: string
+      pattern: '^[A-Za-z]{3}$'
+      description: |
+        ISO 4217 code, case insensitive. The gateway accepts BRL, USD, EUR, GBP, JPY, CNY, ARS, CLP, COP, MXN, PEN and
+        UYU; the ledger only supports BRL, so a command in any other currency is accepted and then fails in the service.
+      examples: [BRL]
+    Document:
+      type: string
+      pattern: '^\D*(?:(?:\d\D*){11}|(?:\d\D*){14})$'
+      description: |
+        CPF (11 digits) or CNPJ (14 digits) with valid check digits. Punctuation is ignored, so `529.982.247-25` and
+        `52998224725` are both accepted.
+      examples: ['52998224725']
+    BrazilianPhone:
+      type: string
+      pattern: '^\D*(?:5\D*5\D*)?(?:\d\D*){10,11}$'
+      description: |
+        Brazilian phone number: 10 or 11 digits (area code and number), optionally prefixed by the country code 55.
+        Punctuation is ignored.
+      examples: ['+55 11 91234-5678']
+    CreateAccountRequest:
+      type: object
+      additionalProperties: false
+      required: [user_id, account_type, name, email, document]
+      properties:
+        user_id:
+          type: string
+          format: uuid
+          description: Owner of the account.
+        account_type:
+          type: string
+          enum: [checking, savings]
+        name:
+          type: string
+          minLength: 3
+          maxLength: 120
+          description: Holder name.
+        email:
+          type: string
+          format: email
+        document:
+          $ref: '#/components/schemas/Document'
+        phone:
+          $ref: '#/components/schemas/BrazilianPhone'
+    UpdateAccountRequest:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name:
+          type: string
+          minLength: 3
+          maxLength: 120
+        email:
+          type: string
+          format: email
+        phone:
+          $ref: '#/components/schemas/BrazilianPhone'
+        status:
+          type: string
+          enum: [active, blocked]
+          description: Blocks or unblocks the account. Closing is done with `DELETE`.
+    CreateTransactionRequest:
+      type: object
+      additionalProperties: false
+      required: [account_id, type, amount, currency, idempotency_key]
+      properties:
+        account_id:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [deposit, withdrawal]
+        amount:
+          type: number
+          exclusiveMinimum: 0
+          description: Amount in currency units, at most two decimal places.
+          examples: [150.75]
+        currency:
+          $ref: '#/components/schemas/Currency'
+        description:
+          type: string
+          maxLength: 255
+        idempotency_key:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Client chosen key; a second request with the same key does not create another transaction.
+    TransferRequest:
+      type: object
+      additionalProperties: false
+      required: [from_account_id, to_account_id, amount, currency, idempotency_key]
+      properties:
+        from_account_id:
+          type: string
+          format: uuid
+          description: Account debited.
+        to_account_id:
+          type: string
+          format: uuid
+          description: Account credited; must differ from `from_account_id` (rule `nefield`).
+        amount:
+          type: number
+          exclusiveMinimum: 0
+          description: Amount in currency units, at most two decimal places.
+          examples: [42.5]
+        currency:
+          $ref: '#/components/schemas/Currency'
+        description:
+          type: string
+          maxLength: 255
+        idempotency_key:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Client chosen key; a second request with the same key does not create another transfer.
+    TEDDetails:
+      type: object
+      additionalProperties: false
+      required: [bank_code, branch, account, document]
+      properties:
+        bank_code:
+          type: string
+          minLength: 3
+          maxLength: 3
+          pattern: '^[-+]?[0-9]+(?:\.[0-9]+)?$'
+          description: Three character numeric bank code (COMPE).
+          examples: ['341']
+        branch:
+          type: string
+          pattern: '^[\s-]*(?:[0-9][\s-]*){4,5}$'
+          description: Branch (agency) number with 4 or 5 digits; spaces and hyphens are ignored.
+          examples: ['1234']
+        account:
+          type: string
+          pattern: '^[\s-]*(?:[0-9][\s-]*){5,12}$'
+          description: Account number with 5 to 12 digits; spaces and hyphens are ignored.
+          examples: [12345-6]
+        document:
+          $ref: '#/components/schemas/Document'
+    PaymentRequest:
+      type: object
+      additionalProperties: false
+      required: [account_id, payment_method, amount, currency, recipient, idempotency_key]
+      properties:
+        account_id:
+          type: string
+          format: uuid
+          description: Account debited.
+        payment_method:
+          type: string
+          enum: [pix, ted, boleto]
+        amount:
+          type: number
+          exclusiveMinimum: 0
+          description: Amount in currency units, at most two decimal places.
+          examples: [89.9]
+        currency:
+          $ref: '#/components/schemas/Currency'
+        recipient:
+          type: string
+          minLength: 1
+          maxLength: 120
+          description: Name of the payee.
+        pix_key:
+          type: string
+          description: |
+            PIX key, required for `pix`: a CPF, a CNPJ, an email address, a Brazilian phone number or a random key (UUID).
+          examples: [maria@example.com]
+        boleto_code:
+          type: string
+          pattern: '^[0-9]{47}$'
+          description: Boleto digitable line (47 digits) with valid check digits, required for `boleto`.
+        ted:
+          $ref: '#/components/schemas/TEDDetails'
+        description:
+          type: string
+          maxLength: 255
+        idempotency_key:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Client chosen key; a second request with the same key does not create another payment.
+      allOf:
+        - if:
+            required: [payment_method]
+            properties:
+              payment_method:
+                const: pix
+          then:
+            required: [pix_key]
+            properties:
+              pix_key:
+                minLength: 1
+        - if:
+            required: [payment_method]
+            properties:
+              payment_method:
+                const: boleto
+          then:
+            required: [boleto_code]
+            properties:
+              boleto_code:
+                minLength: 1
+        - if:
+            required: [payment_method]
+            properties:
+              payment_method:
+                const: ted
+          then:
+            required: [ted]
+            properties:
+              ted:
+                type: object
+          else:
+            not:
+              required: [ted]
+              properties:
+                ted:
+                  type: object
+    Account:
+      type: object
+      required: [account_id, user_id, agency, number, type, status, currency, balance, created_at, updated_at]
+      properties:
+        account_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        agency:
+          type: string
+          examples: ['0001']
+        number:
+          type: string
+          pattern: '^[0-9]{8}$'
+          examples: ['04817263']
+        type:
+          type: string
+          enum: [checking, savings]
+        status:
+          type: string
+          enum: [active, blocked, closed]
+        currency:
+          type: string
+          examples: [BRL]
+        balance:
+          type: number
+          description: Current balance in currency units.
+          examples: [1250.4]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        closed_at:
+          type: string
+          format: date-time
+          description: Present once the account is closed.
+    AccountEnvelope:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          $ref: '#/components/schemas/Account'
+    AccountListEnvelope:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Account'
+    Transaction:
+      type: object
+      required: [transaction_id, type, status, account_id, amount, currency, idempotency_key, created_at, updated_at]
+      properties:
+        transaction_id:
+          type: string
+          format: uuid
+        type:
+          type: string
+          enum: [deposit, withdrawal, transfer]
+        status:
+          type: string
+          enum: [pending, debited, completed, failed, reversing, reversed, reversal_failed]
+          description: |
+            `pending` until the account service moves the balance. Deposits and withdrawals then become `completed` or
+            `failed`. Transfers become `debited` after the source debit and `completed` after the destination credit;
+            when the credit is rejected the debit is reversed (`reversing`, then `reversed` or `reversal_failed`).
+        account_id:
+          type: string
+          format: uuid
+          description: Account of the deposit or withdrawal, or the source account of a transfer.
+        counterparty_id:
+          type: string
+          format: uuid
+          description: Destination account of a transfer.
+        amount:
+          type: number
+          examples: [150.75]
+        currency:
+          type: string
+          examples: [BRL]
+        description:
+          type: string
+        idempotency_key:
+          type: string
+        failure_reason:
+          type: string
+          description: Why the transaction failed, when it did.
+        from_balance_after:
+          type: number
+          description: Balance of the debited account after the debit (withdrawals and transfers).
+        to_balance_after:
+          type: number
+          description: Balance of the credited account after the credit (`account_id` for deposits, `counterparty_id` for transfers).
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+          description: Present once the transaction completes.
+    TransactionEnvelope:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          $ref: '#/components/schemas/Transaction'
+    TransactionListEnvelope:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Transaction'
+    PaymentTED:
+      type: object
+      required: [bank_code, branch, account, document]
+      properties:
+        bank_code:
+          type: string
+        branch:
+          type: string
+        account:
+          type: string
+        document:
+          type: string
+    Payment:
+      type: object
+      required: [payment_id, account_id, payment_method, status, amount, currency, recipient, idempotency_key, created_at, updated_at]
+      properties:
+        payment_id:
+          type: string
+          format: uuid
+        account_id:
+          type: string
+          format: uuid
+        payment_method:
+          type: string
+          enum: [pix, ted, boleto]
+        status:
+          type: string
+          enum: [pending, debited, submitted, completed, failed, refunding, refunded, refund_failed]
+          description: |
+            `pending` until the account is debited (`debited`), then `completed` when the payment gateway confirms it,
+            either right away or after `submitted`. A rejected debit makes the payment `failed`; a payment rejected by
+            the gateway is refunded (`refunding`, then `refunded` or `refund_failed`).
+        amount:
+          type: number
+          examples: [89.9]
+        currency:
+          type: string
+          examples: [BRL]
+        recipient:
+          type: string
+        pix_key:
+          type: string
+        boleto_code:
+          type: string
+        ted:
+          $ref: '#/components/schemas/PaymentTED'
+        description:
+          type: string
+        idempotency_key:
+          type: string
+        external_id:
+          type: string
+          description: Id assigned by the payment gateway.
+        failure_reason:
+          type: string
+          description: Why the payment failed, when it did.
+        balance_after:
+          type: number
+          description: Balance of the account after the debit, or after the refund.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+          description: Present once the payment completes.
+    PaymentEnvelope:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          $ref: '#/components/schemas/Payment'
+    PaymentListEnvelope:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Payment'
+    Notification:
+      type: object
+      required: [id, channel, recipient, body, sent_at]
+      properties:
+        id:
+          type: string
+          description: Id of the notification event.
+        channel:
+          type: string
+          enum: [email, sms, push]
+        recipient:
+          type: string
+          description: |
+            Masked recipient. Email addresses keep the first character of the local part and the domain
+            (`m***@example.com`); phone numbers keep the first three and the last four characters.
+          examples: [m***@example.com]
+        subject:
+          type: string
+        body:
+          type: string
+        source_event_id:
+          type: string
+          description: Id of the domain event that caused the notification.
+        sent_at:
+          type: string
+          format: date-time
+    NotificationListEnvelope:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Notification'
