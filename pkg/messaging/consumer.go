@@ -21,6 +21,7 @@ type ConsumerConfig struct {
 	GroupID      string
 	Topic        string
 	DrainTimeout time.Duration
+	StartOffset  int64
 }
 
 type Handler func(ctx context.Context, msg kafka.Message) error
@@ -31,11 +32,15 @@ type Consumer struct {
 }
 
 func NewConsumer(cfg ConsumerConfig) *Consumer {
+	startOffset := cfg.StartOffset
+	if startOffset == 0 {
+		startOffset = kafka.FirstOffset
+	}
 	return NewConsumerWithReader(kafka.NewReader(kafka.ReaderConfig{
 		Brokers:     cfg.Brokers,
 		GroupID:     cfg.GroupID,
 		Topic:       cfg.Topic,
-		StartOffset: kafka.FirstOffset,
+		StartOffset: startOffset,
 		MinBytes:    1,
 		MaxBytes:    1 << 20,
 	}), cfg.DrainTimeout)

@@ -126,6 +126,24 @@ func TestNewConsumerBuildsKafkaReader(t *testing.T) {
 	assert.NoError(t, consumer.Close())
 }
 
+func TestNewConsumerDefaultsToFirstOffset(t *testing.T) {
+	consumer := NewConsumer(ConsumerConfig{Brokers: []string{"localhost:9092"}, GroupID: "g", Topic: "t"})
+	reader, ok := consumer.reader.(*kafka.Reader)
+
+	assert.True(t, ok)
+	assert.Equal(t, kafka.FirstOffset, reader.Config().StartOffset)
+	assert.NoError(t, consumer.Close())
+}
+
+func TestNewConsumerAppliesConfiguredStartOffset(t *testing.T) {
+	consumer := NewConsumer(ConsumerConfig{Brokers: []string{"localhost:9092"}, GroupID: "g", Topic: "t", StartOffset: kafka.LastOffset})
+	reader, ok := consumer.reader.(*kafka.Reader)
+
+	assert.True(t, ok)
+	assert.Equal(t, kafka.LastOffset, reader.Config().StartOffset)
+	assert.NoError(t, consumer.Close())
+}
+
 func TestNewConsumerAppliesConfiguredDrainTimeout(t *testing.T) {
 	consumer := NewConsumer(ConsumerConfig{Brokers: []string{"localhost:9092"}, GroupID: "g", Topic: "t", DrainTimeout: 5 * time.Second})
 
