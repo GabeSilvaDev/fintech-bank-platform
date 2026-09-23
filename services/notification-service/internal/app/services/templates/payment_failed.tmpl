@@ -1,0 +1,2 @@
+{{define "subject"}}Pagamento não realizado{{end}}
+{{define "body"}}Seu pagamento via {{.method}} de {{.amount}} não foi concluído: {{.reason}}.{{if .outcome}} {{.outcome}}{{end}}{{end}}
