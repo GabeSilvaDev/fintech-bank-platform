@@ -314,3 +314,33 @@ func TestSettleGuardsAndErrors(t *testing.T) {
 	_, err = h.service.Settle(context.Background(), events.SettlePaymentPayload{ExternalID: "ted_2", Status: "settled"}, "t")
 	assert.EqualError(t, err, "db down")
 }
+
+func TestSubmitRejectedEmitsNoRefundWhenTheTransitionIsNotApplied(t *testing.T) {
+	h := newHarness()
+	payment := h.stored(models.MethodPix, models.StatusDebited)
+	h.gateway.Submissions = []models.Submission{{Status: models.SubmissionRejected, Reason: "pix_key_not_found"}}
+	h.repo.TransitionResults = []tests.TransitionResult{{Applied: false}}
+
+	res, err := h.service.Submit(context.Background(), events.SubmitPaymentPayload{PaymentID: payment.ID.String()}, "t")
+
+	assert.NoError(t, err)
+	assert.Empty(t, res.Messages)
+	assert.Len(t, h.repo.Transitions, 1)
+	assert.Equal(t, models.StatusDebited, h.repo.Transitions[0].From)
+	assert.Equal(t, models.StatusRefunding, h.repo.Transitions[0].To)
+}
+
+func TestSettleRejectedIgnoresCompletedPayments(t *testing.T) {
+	h := newHarness()
+	payment := h.stored(models.MethodTED, models.StatusCompleted)
+	payment.ExternalID = "ted_done"
+	h.repo.Put(payment)
+	h.repo.External["ted_done"] = payment.ID
+
+	res, err := h.service.Settle(context.Background(), events.SettlePaymentPayload{ExternalID: "ted_done", Status: "rejected", Reason: "invalid_destination"}, "t")
+
+	assert.NoError(t, err)
+	assert.Empty(t, res.Messages)
+	assert.Empty(t, h.repo.Transitions)
+	assert.Equal(t, models.StatusCompleted, h.repo.Payments[payment.ID].Status)
+}
