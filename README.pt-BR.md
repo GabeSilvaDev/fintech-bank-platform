@@ -17,7 +17,7 @@
 
 </div>
 
-> **Em desenvolvimento.** Infraestrutura, pacotes compartilhados e os cinco serviços — o API Gateway, o Account Service, o Transaction Service, o Payment Service e o Notification Service — estão prontos: os comandos fluem do HTTP para o Kafka e para o Cassandra, depósitos, saques e transferências se resolvem como sagas sobre o account service, pagamentos por PIX, TED e boleto se resolvem da mesma forma através de um provedor sandbox com webhooks assinados, e os eventos de resultado viram e-mail, SMS e push através do notification service, com as leituras voltando pelo gateway. Testes end-to-end, testes de carga e observabilidade vêm a seguir. Veja o [roadmap](#roadmap) para o que está feito e o que está planejado.
+> **Em desenvolvimento.** Infraestrutura, pacotes compartilhados e os cinco serviços — o API Gateway, o Account Service, o Transaction Service, o Payment Service e o Notification Service — estão prontos: os comandos fluem do HTTP para o Kafka e para o Cassandra, depósitos, saques e transferências se resolvem como sagas sobre o account service, pagamentos por PIX, TED e boleto se resolvem da mesma forma através de um provedor sandbox com webhooks assinados, e os eventos de resultado viram e-mail, SMS e push através do notification service, com as leituras voltando pelo gateway. Cada serviço tenta reconectar ao Cassandra ou ao Redis no boot, os créditos e débitos de conta são idempotentes por chave, um sweeper de reconciliação recupera transações e pagamentos presos, e a plataforma é testada de ponta a ponta e sob carga com k6, além dos testes unitários, de feature e de integração. Observabilidade vem a seguir. Veja o [roadmap](#roadmap) para o que está feito e o que está planejado.
 
 ## Arquitetura
 
@@ -44,12 +44,12 @@ O gateway recebe requisições HTTP e publica-as como comandos no Kafka; cada se
 | Componente | Caminho | Estado |
 |---|---|---|
 | Infraestrutura | `docker-compose.yml` | Kafka 3.7.1 (KRaft), Cassandra 4.1, Redis 7.2, Mailpit, Kafka UI e Cassandra Web opcionais |
-| Pacotes compartilhados | `pkg/` | `logger`, `errors`, `response`, `validation`, `events`, `env`, `middleware`, `messaging`, `domain`, `cassandra`, `processor` — 100 % de cobertura, exigida no CI |
+| Pacotes compartilhados | `pkg/` | `logger`, `errors`, `response`, `validation`, `events`, `env`, `middleware`, `messaging`, `domain`, `cassandra`, `processor`, `retry` — 100 % de cobertura, exigida no CI |
 | API Gateway | `services/api-gateway/` | Router Chi com middlewares de request-id, real-IP, logging, recovery, CORS e rate limit; `GET /health`; endpoints de comando publicando no Kafka através de um producer protegido por circuit breaker; config tipada a partir do ambiente; testes unitários + de feature com 100 % de cobertura, teste de integração com Kafka no CI; rotas de leitura repassadas por proxy ao account service |
-| Account Service | `services/account-service/` | Consome `account.commands`, persiste clientes e contas no Cassandra (`fintech_accounts`, migrations aplicadas no boot), controla os saldos com créditos/débitos em compare-and-set, publica resultados — incluindo `account.credit_rejected` — em `account.events` e falhas em `account.dlq`; API de leitura na `:8082`; testes unitários + de feature com 100 % de `internal/app`, testes de integração com Cassandra e Kafka no CI |
-| Transaction Service | `services/transaction-service/` | Consome `transaction.commands` e as respostas do account service em `account.events`, registra depósitos, saques e transferências no Cassandra (`fintech_transactions`, migrations aplicadas no boot), orquestra cada um como uma saga sobre `account.commands` (débito → crédito → crédito compensatório em caso de falha) com chaves de idempotência por etapa, publica `transaction.created/completed/failed` e `transaction.transfer_completed/transfer_failed` em `transaction.events`, envia para dead-letter em `transaction.dlq`; API de leitura na `:8083`; testes unitários + de feature com 100 % de `internal/app`, testes de integração com Cassandra e Kafka no CI |
-| Payment Service | `services/payment-service/` | Consome `payment.commands` e as respostas do account service em `account.events`, guarda pagamentos por PIX, TED e boleto no Cassandra (`fintech_payments`, migrations aplicadas no boot), reserva os fundos com `account.debit`, submete a um provedor sandbox — PIX se resolve na hora, TED e boleto se resolvem por um webhook assinado — estorna rejeições com `account.credit`, publica `payment.created/processed/completed/failed` em `payment.events`, envia para dead-letter em `payment.dlq`; API de leitura e webhook na `:8084`; testes unitários + de feature com 100 % de `internal/app`, testes de integração com Cassandra e Kafka no CI |
-| Notification Service | `services/notification-service/` | Consome `account.events`, `transaction.events` e `payment.events` e transforma os resultados em e-mail, SMS e push em português, buscando os contatos no endpoint interno de titular do account service; os comandos de entrega em `notification.events` são enviados por SMTP (Mailpit em desenvolvimento) ou por provedores sandbox de SMS/push, registrados num histórico apoiado em Redis, e enviados para dead-letter em `notification.dlq`; API de leitura na `:8085`; testes unitários + de feature com 100 % de `internal/app`, testes de integração com Kafka, Redis e Mailpit no CI |
+| Account Service | `services/account-service/` | Consome `account.commands`, tenta reconectar ao Cassandra, aplicar as migrations e abrir a sessão do keyspace no boot (`STARTUP_RETRY_*`), persiste clientes e contas no Cassandra (`fintech_accounts`), controla os saldos com créditos/débitos em compare-and-set que exigem `idempotency_key` e são aplicados no máximo uma vez (`balance_operations`, TTL de 30 dias), publica resultados — incluindo `account.credit_rejected` — em `account.events` e falhas em `account.dlq`; API de leitura na `:8082`; testes unitários + de feature com 100 % de `internal/app`, testes de integração com Cassandra e Kafka no CI |
+| Transaction Service | `services/transaction-service/` | Consome `transaction.commands` e as respostas do account service em `account.events`, tenta reconectar ao Cassandra no boot (`STARTUP_RETRY_*`), registra depósitos, saques e transferências no Cassandra (`fintech_transactions`), orquestra cada um como uma saga sobre `account.commands` (débito → crédito → crédito compensatório em caso de falha) com chaves de idempotência por etapa, roda um sweeper de reconciliação que reenvia a próxima etapa de transações não terminais e paradas (`SWEEPER_*`), publica `transaction.created/completed/failed` e `transaction.transfer_completed/transfer_failed` em `transaction.events`, envia para dead-letter em `transaction.dlq`; API de leitura na `:8083`; testes unitários + de feature com 100 % de `internal/app`, testes de integração com Cassandra e Kafka no CI |
+| Payment Service | `services/payment-service/` | Consome `payment.commands` e as respostas do account service em `account.events`, tenta reconectar ao Cassandra no boot (`STARTUP_RETRY_*`), guarda pagamentos por PIX, TED e boleto no Cassandra (`fintech_payments`), reserva os fundos com `account.debit`, submete a um provedor sandbox — PIX se resolve na hora, TED e boleto se resolvem por um webhook assinado — estorna rejeições com `account.credit`, roda um sweeper de reconciliação que reenvia a próxima etapa de pagamentos não terminais e parados (`SWEEPER_*`), publica `payment.created/processed/completed/failed` em `payment.events`, envia para dead-letter em `payment.dlq`; API de leitura e webhook na `:8084`; testes unitários + de feature com 100 % de `internal/app`, testes de integração com Cassandra e Kafka no CI |
+| Notification Service | `services/notification-service/` | Consome `account.events`, `transaction.events` e `payment.events` e transforma os resultados em e-mail, SMS e push em português, tentando reconectar ao Redis no boot (`STARTUP_RETRY_*`), buscando os contatos no endpoint interno de titular do account service; os comandos de entrega em `notification.events` são enviados por SMTP (Mailpit em desenvolvimento) ou por provedores sandbox de SMS/push, registrados num histórico apoiado em Redis, e enviados para dead-letter em `notification.dlq`; API de leitura na `:8085`; testes unitários + de feature com 100 % de `internal/app`, testes de integração com Kafka, Redis e Mailpit no CI |
 
 ### Pacotes compartilhados
 
@@ -66,6 +66,7 @@ O gateway recebe requisições HTTP e publica-as como comandos no Kafka; cada se
 | `domain` | Erros de domínio compartilhados (`ErrNotFound`, `ErrConflict`, `ErrAmbiguousWrite`, `Invalid`/`IsInvalid`/`InvalidCode`) e helpers de dinheiro (`ToCents`, `FromCents`, `Cents`) |
 | `cassandra` | `Migrator` que roda primeiro o arquivo do keyspace e depois cada `.cql` em ordem sobre uma interface `Executor`, registrando as versões em `schema_migrations`; `MapWriteError` mapeia falhas ambíguas do Cassandra para `domain.ErrAmbiguousWrite` |
 | `processor` | Processador idempotente de comandos Kafka: deduplica pelo id do evento, retenta erros transitórios com backoff, envia o resto para dead-letter e publica os eventos de resposta de um dispatcher |
+| `retry` | `Do(ctx, attempts, delay, fn)` retenta `fn` com um delay fixo entre as tentativas até ter sucesso, esgotar as tentativas ou o contexto ser cancelado; usado por todos os serviços para esperar o Cassandra ou o Redis no boot |
 
 Exemplos de uso em [`pkg/README.md`](pkg/README.md).
 
@@ -114,7 +115,7 @@ docker compose up -d                  # hot reload com Air, publicado em :8082
 curl http://localhost:8082/health     # {"success":true,"data":{"status":"healthy","cassandra":"up"}}
 ```
 
-As migrations em `migrations/*.cql` rodam no boot contra o `CASSANDRA_KEYSPACE` (padrão `fintech_accounts`). Configuração: `SERVER_*`, `KAFKA_BROKERS` / `KAFKA_GROUP_ID` / `KAFKA_*_TIMEOUT` / `KAFKA_MAX_ATTEMPTS`, `CONSUMER_RETRY_BACKOFF` / `CONSUMER_DRAIN_TIMEOUT`, `CASSANDRA_HOSTS` / `CASSANDRA_KEYSPACE` / `CASSANDRA_CONSISTENCY` / `CASSANDRA_*_TIMEOUT` / `CASSANDRA_MIGRATIONS_PATH`, `LOG_LEVEL` / `LOG_PRETTY`.
+Conectar ao Cassandra, aplicar as migrations em `migrations/*.cql` (contra o `CASSANDRA_KEYSPACE`, padrão `fintech_accounts`) e abrir a sessão do keyspace são retentados no boot até `STARTUP_RETRY_ATTEMPTS` vezes (padrão 30), esperando `STARTUP_RETRY_DELAY` entre as tentativas (padrão `2s`; um valor não positivo cai para o padrão). Configuração: `SERVER_*`, `KAFKA_BROKERS` / `KAFKA_GROUP_ID` / `KAFKA_*_TIMEOUT` / `KAFKA_MAX_ATTEMPTS`, `CONSUMER_RETRY_BACKOFF` / `CONSUMER_DRAIN_TIMEOUT`, `CASSANDRA_HOSTS` / `CASSANDRA_KEYSPACE` / `CASSANDRA_CONSISTENCY` / `CASSANDRA_*_TIMEOUT` / `CASSANDRA_MIGRATIONS_PATH`, `STARTUP_RETRY_ATTEMPTS` / `STARTUP_RETRY_DELAY`, `LOG_LEVEL` / `LOG_PRETTY`.
 
 Comandos que ele trata (tópico `account.commands`) e os eventos com que ele responde (tópico `account.events`):
 
@@ -123,8 +124,10 @@ Comandos que ele trata (tópico `account.commands`) e os eventos com que ele res
 | `account.create` | `account.created` | dados inválidos, colisão de número após 5 tentativas |
 | `account.update` | `account.updated` | conta desconhecida, conta fechada, update vazio |
 | `account.delete` | `account.deleted` | conta desconhecida, saldo diferente de zero |
-| `account.credit` | `account.credited` ou `account.credit_rejected` (`account_not_active`, `account_not_found`) | valor ou moeda inválidos |
-| `account.debit` | `account.debited` ou `account.debit_rejected` (`insufficient_funds`, `account_not_active`, `account_not_found`) | valor ou moeda inválidos |
+| `account.credit` | `account.credited` ou `account.credit_rejected` (`account_not_active`, `account_not_found`) — reproduzido tal como está para uma `idempotency_key` repetida | valor, moeda ou chave de idempotência inválidos (`invalid_idempotency_key`, `idempotency_key_reused`), ou `ambiguous_write` enquanto o resultado dessa chave ainda está pendente |
+| `account.debit` | `account.debited` ou `account.debit_rejected` (`insufficient_funds`, `account_not_active`, `account_not_found`) — reproduzido tal como está para uma `idempotency_key` repetida | valor, moeda ou chave de idempotência inválidos (`invalid_idempotency_key`, `idempotency_key_reused`), ou `ambiguous_write` enquanto o resultado dessa chave ainda está pendente |
+
+Todo `account.credit` e `account.debit` precisa vir com uma `idempotency_key` e é aplicado no máximo uma vez por `(account_id, idempotency_key)`, rastreado em `balance_operations` (TTL de 30 dias, `services/account-service/migrations/007_balance_operations.cql`). Uma chave repetida pula a mudança de saldo e reproduz o resultado gravado como resposta — inclusive uma rejeição `insufficient_funds` já gravada; uma chave ainda reservada por uma tentativa que quebrou antes de registrar um resultado vai para a dead-letter como `ambiguous_write` em toda nova tentativa, já que não dá para saber se a mudança de saldo aconteceu, e precisa de resolução manual; uma chave já usada para o outro tipo de operação (um crédito retentado como débito, ou vice-versa) é rejeitada como `idempotency_key_reused`.
 
 Cada comando é aplicado no máximo uma vez (`processed_events`, TTL de 7 dias); falhas transitórias são retentadas com `CONSUMER_RETRY_BACKOFF` e depois enviadas para a dead-letter como `account.command_failed`, com `retries` contando as tentativas de despacho. Um write timeout ou unavailable do Cassandra, um timeout do lado do cliente, ou uma escrita cujo contexto foi cancelado ou expirou vai direto para a dead-letter como `ambiguous_write`, porque a escrita pode ou não ter sido aplicada e retentar poderia aplicá-la duas vezes. Como o id do evento é marcado antes do despacho, um comando da dead-letter reenviado tal como está é ignorado como duplicado: replays precisam de um novo id de evento. No shutdown o consumer termina a mensagem em andamento (até `CONSUMER_DRAIN_TIMEOUT`) antes de fazer o commit, e um consumer que para por erro é reiniciado com `CONSUMER_RETRY_BACKOFF` enquanto a API de leitura continua atendendo.
 
@@ -137,7 +140,7 @@ docker compose up -d                  # hot reload com Air, publicado em :8083
 curl http://localhost:8083/health     # {"success":true,"data":{"status":"healthy","cassandra":"up"}}
 ```
 
-As migrations em `migrations/*.cql` rodam no boot contra o `CASSANDRA_KEYSPACE` (padrão `fintech_transactions`). A configuração reaproveita os nomes de variável do account service, com `SERVER_PORT` padrão `8083`, `KAFKA_GROUP_ID` padrão `transaction-service` e `CASSANDRA_KEYSPACE` padrão `fintech_transactions`.
+As migrations em `migrations/*.cql` rodam no boot contra o `CASSANDRA_KEYSPACE` (padrão `fintech_transactions`); conectar ao Cassandra, aplicar as migrations e abrir a sessão do keyspace são retentados do mesmo jeito que no account service (`STARTUP_RETRY_ATTEMPTS` / `STARTUP_RETRY_DELAY`). A configuração reaproveita os nomes de variável do account service, com `SERVER_PORT` padrão `8083`, `KAFKA_GROUP_ID` padrão `transaction-service` e `CASSANDRA_KEYSPACE` padrão `fintech_transactions`, mais as variáveis do sweeper de reconciliação: `SWEEPER_ENABLED` (padrão `true`), `SWEEPER_INTERVAL` (padrão `1m`), `SWEEPER_STALE_AFTER` (padrão `5m`) e `SWEEPER_BATCH` (padrão `100`).
 
 Consome `transaction.commands` e as respostas do account service em `account.events`:
 
@@ -148,7 +151,9 @@ Consome `transaction.commands` e as respostas do account service em `account.eve
 
 Uma transação é registrada como `pending` com sua chave de idempotência reservada primeiro — uma chave repetida é um no-op — e então conduzida como uma saga sobre `account.commands`: um depósito ou saque pede um único crédito ou débito e se resolve como `completed` ou `failed` (`insufficient_funds`, `account_not_active`, `account_not_found`); uma transferência debita a origem (`pending` → `debited`), credita a contraparte (`debited` → `completed`), e compensa com um crédito de volta para a origem se esse crédito for rejeitado (`reversing` → `reversed`, ou `reversal_failed` mais uma entrada em `transaction.dlq` se a própria compensação for rejeitada). Cada etapa carrega sua própria chave de idempotência (`<id da transação>:debit`, `:credit` ou `:reversal`) e cada mudança de status é uma lightweight transaction do Cassandra condicionada ao status esperado, então uma resposta duplicada ou atrasada é ignorada. Os resultados são publicados em `transaction.events` (`transaction.created`, `transaction.completed`/`transaction.failed`, `transaction.transfer_completed`/`transaction.transfer_failed`); falhas transitórias são retentadas com `CONSUMER_RETRY_BACKOFF` e depois enviadas para a dead-letter em `transaction.dlq` como `transaction.command_failed`.
 
-**Limitações conhecidas.** Uma transação fica em `pending`, `debited` ou `reversing` se a resposta do account service nunca chegar — por exemplo após uma queda entre a marcação da resposta como processada e a mudança de status, ou quando o lado das contas envia o comando para a dead-letter como `ambiguous_write`. Transações não terminais podem ser encontradas por `GET /accounts/{account_id}/transactions`. Como no account service, um evento da dead-letter reenviado tal como está é ignorado como duplicado, então um replay precisa de um novo id de evento. No primeiro deploy o grupo `-replies` lê `account.events` desde o início; isso é inofensivo e acontece uma única vez, já que uma resposta que não corresponde a uma etapa conhecida é ignorada. Um sweeper de reconciliação para transações presas está planejado para o Sprint 6 (veja o [roadmap](#roadmap)).
+Se a resposta do account service para uma etapa nunca chegar, a transação fica presa; um sweeper de reconciliação (`SWEEPER_ENABLED`, ligado por padrão) a recupera. A cada `SWEEPER_INTERVAL` ele varre a tabela inteira, página por página, procurando transações não terminais com `updated_at` mais velho que `SWEEPER_STALE_AFTER`, até `SWEEPER_BATCH` por varredura; cada uma é "tocada" com uma lightweight transaction condicionada ao status e ao `updated_at` que ele leu, então só uma instância do serviço age sobre ela, e uma transação já tocada por outra instância simplesmente espera mais uma janela de staleness. Depois de tocada, sua próxima etapa é reenviada: um depósito `pending` pede outro crédito, um saque ou transferência `pending` pede outro débito, uma transferência `debited` credita a contraparte, e uma transferência `reversing` reenvia o crédito de reversão — reaproveitando as chaves de idempotência originais de cada etapa, que o account service agora deduplica.
+
+**Limitações conhecidas.** Transações não terminais (`pending`, `debited` ou `reversing`) podem ser encontradas por `GET /accounts/{account_id}/transactions`; o sweeper descrito acima resolve a maioria sozinho assim que elas ficam obsoletas. A exceção é uma etapa que o account service enviou para a dead-letter como `ambiguous_write`: a chave de idempotência reservada fica pendente para sempre, então toda varredura bate no mesmo resultado `ambiguous_write` e a transação precisa de resolução manual. Como no account service, um evento da dead-letter reenviado tal como está é ignorado como duplicado, então um replay precisa de um novo id de evento. No primeiro deploy o grupo `-replies` lê `account.events` desde o início; isso é inofensivo e acontece uma única vez, já que uma resposta que não corresponde a uma etapa conhecida é ignorada.
 
 ### Payment Service
 
@@ -159,7 +164,7 @@ docker compose up -d                  # hot reload com Air, publicado em :8084
 curl http://localhost:8084/health     # {"success":true,"data":{"status":"healthy","cassandra":"up"}}
 ```
 
-As migrations em `migrations/*.cql` rodam no boot contra o `CASSANDRA_KEYSPACE` (padrão `fintech_payments`). A configuração reaproveita os nomes de variável do transaction service, com `SERVER_PORT` padrão `8084`, `KAFKA_GROUP_ID` padrão `payment-service` e `CASSANDRA_KEYSPACE` padrão `fintech_payments`, mais `PAYMENT_WEBHOOK_SECRET` (obrigatória, com pelo menos 16 caracteres), `PAYMENT_WEBHOOK_URL` (padrão `http://localhost:8084/webhooks/gateway`), `PAYMENT_WEBHOOK_TOLERANCE` (padrão `5m`) e `PAYMENT_SETTLEMENT_DELAY` (padrão `2s`). O valor `dev-webhook-secret` em `docker-compose.yml` e `.env.example` serve apenas para desenvolvimento local; em qualquer outro ambiente, substitua-o por um segredo aleatório com pelo menos 16 caracteres.
+As migrations em `migrations/*.cql` rodam no boot contra o `CASSANDRA_KEYSPACE` (padrão `fintech_payments`); conectar ao Cassandra, aplicar as migrations e abrir a sessão do keyspace são retentados do mesmo jeito que no account service (`STARTUP_RETRY_ATTEMPTS` / `STARTUP_RETRY_DELAY`). A configuração reaproveita os nomes de variável do transaction service, com `SERVER_PORT` padrão `8084`, `KAFKA_GROUP_ID` padrão `payment-service`, `CASSANDRA_KEYSPACE` padrão `fintech_payments` e as mesmas variáveis `SWEEPER_*` de reconciliação, mais `PAYMENT_WEBHOOK_SECRET` (obrigatória, com pelo menos 16 caracteres), `PAYMENT_WEBHOOK_URL` (padrão `http://localhost:8084/webhooks/gateway`), `PAYMENT_WEBHOOK_TOLERANCE` (padrão `5m`) e `PAYMENT_SETTLEMENT_DELAY` (padrão `2s`). O valor `dev-webhook-secret` em `docker-compose.yml` e `.env.example` serve apenas para desenvolvimento local; em qualquer outro ambiente, substitua-o por um segredo aleatório com pelo menos 16 caracteres.
 
 Consome `payment.commands` e as respostas do account service em `account.events`:
 
@@ -181,7 +186,9 @@ O provedor sandbox informa a liquidação através de um webhook assinado: `POST
 | Código de boleto começando com `999` | rejeitado, `boleto_not_found` |
 | Qualquer outro valor | se resolve; TED e boleto se resolvem depois de `PAYMENT_SETTLEMENT_DELAY` |
 
-**Limitações conhecidas.** Um pagamento fica em `pending` se o resultado do débito nunca chegar, em `debited` se o provedor continuar falhando depois das tentativas e o comando for para a dead-letter, em `submitted` se a liquidação nunca chegar (por exemplo, quando o sandbox perde um callback agendado porque o serviço reiniciou antes de `PAYMENT_SETTLEMENT_DELAY` passar) até que uma reconciliação o reenvie, e em `refunding` se o resultado do crédito de estorno nunca chegar. Pagamentos não terminais podem ser encontrados por `GET /accounts/{account_id}/payments`. Uma liquidação que chega antes de o id externo ser vinculado, ou enquanto a submissão ainda está sendo registrada, é retentada e enviada para a dead-letter como `conflict` se nunca for aplicada. Como nos outros serviços, um evento da dead-letter reenviado tal como está é ignorado como duplicado, então um replay precisa de um novo id de evento. No primeiro deploy o serviço lê `payment.commands` e `account.events` desde o início. Um sweeper de reconciliação está planejado para o Sprint 6 (veja o [roadmap](#roadmap)); antes que ele possa reenviar créditos e débitos com segurança, o account service precisa garantir as chaves de idempotência nessas operações.
+Se o resultado de uma etapa nunca chegar, um pagamento fica preso em `pending`, `debited`, `submitted` ou `refunding` — por exemplo quando o sandbox perde um callback agendado porque o serviço reiniciou antes de `PAYMENT_SETTLEMENT_DELAY` passar. Um sweeper de reconciliação (`SWEEPER_ENABLED`, ligado por padrão) o recupera da mesma forma que no transaction service: a cada `SWEEPER_INTERVAL` ele varre a tabela inteira procurando pagamentos não terminais parados há mais de `SWEEPER_STALE_AFTER`, até `SWEEPER_BATCH` por varredura, "tocando" cada um com uma lightweight transaction condicionada ao status e ao `updated_at` que ele leu, então só uma instância age sobre ele. Um `pending` tocado é redebitado; um `debited` recebe outro `payment.submit`; um `submitted` é checado de novo contra o provedor sandbox — liquidado o completa, rejeitado inicia um estorno, e um que ainda está pendente simplesmente tem seu callback reentregue pelo sandbox; um `refunding` tem seu crédito de estorno reenviado. Os comandos reenviados reaproveitam as chaves de idempotência originais do pagamento, que o account service agora deduplica.
+
+**Limitações conhecidas.** Pagamentos não terminais podem ser encontrados por `GET /accounts/{account_id}/payments`; o sweeper acima resolve a maioria sozinho assim que eles ficam obsoletos. A exceção é uma etapa que o account service enviou para a dead-letter como `ambiguous_write`: a chave de idempotência reservada fica pendente para sempre, então toda varredura bate no mesmo resultado `ambiguous_write` e o pagamento precisa de resolução manual. Uma liquidação que chega antes de o id externo ser vinculado, ou enquanto a submissão ainda está sendo registrada, é retentada e enviada para a dead-letter como `conflict` se nunca for aplicada. Como nos outros serviços, um evento da dead-letter reenviado tal como está é ignorado como duplicado, então um replay precisa de um novo id de evento. No primeiro deploy o serviço lê `payment.commands` e `account.events` desde o início.
 
 ### Notification Service
 
@@ -192,7 +199,7 @@ docker compose up -d                  # hot reload com Air, publicado em :8085
 curl http://localhost:8085/health     # {"success":true,"data":{"status":"healthy","redis":"up"}}
 ```
 
-Configuração: `SERVER_*`, `KAFKA_BROKERS` / `KAFKA_GROUP_ID` (padrão `notification-service`) / `KAFKA_*_TIMEOUT` / `KAFKA_MAX_ATTEMPTS`, `CONSUMER_RETRY_BACKOFF` / `CONSUMER_DRAIN_TIMEOUT`, `REDIS_ADDR` / `REDIS_PASSWORD` / `REDIS_DB`, `ACCOUNT_SERVICE_URL` / `ACCOUNT_DIRECTORY_TTL` (padrão `5m`) / `ACCOUNT_DIRECTORY_TIMEOUT` (padrão `3s`), `SMTP_ADDR` / `SMTP_FROM` (padrão `no-reply@fintech.local`) / `SMTP_TIMEOUT` (padrão `10s`), `NOTIFICATION_HISTORY_SIZE` (padrão `100`), `NOTIFICATION_MAX_EVENT_AGE` (padrão `1h`, `0` desativa), `LOG_LEVEL` / `LOG_PRETTY`.
+O ping do Redis é retentado no boot até `STARTUP_RETRY_ATTEMPTS` vezes (padrão 30), esperando `STARTUP_RETRY_DELAY` entre as tentativas (padrão `2s`), antes de o serviço desistir e encerrar. Configuração: `SERVER_*`, `KAFKA_BROKERS` / `KAFKA_GROUP_ID` (padrão `notification-service`) / `KAFKA_*_TIMEOUT` / `KAFKA_MAX_ATTEMPTS`, `CONSUMER_RETRY_BACKOFF` / `CONSUMER_DRAIN_TIMEOUT`, `REDIS_ADDR` / `REDIS_PASSWORD` / `REDIS_DB`, `ACCOUNT_SERVICE_URL` / `ACCOUNT_DIRECTORY_TTL` (padrão `5m`) / `ACCOUNT_DIRECTORY_TIMEOUT` (padrão `3s`), `SMTP_ADDR` / `SMTP_FROM` (padrão `no-reply@fintech.local`) / `SMTP_TIMEOUT` (padrão `10s`), `NOTIFICATION_HISTORY_SIZE` (padrão `100`), `NOTIFICATION_MAX_EVENT_AGE` (padrão `1h`, `0` desativa), `STARTUP_RETRY_ATTEMPTS` / `STARTUP_RETRY_DELAY`, `LOG_LEVEL` / `LOG_PRETTY`.
 
 O serviço roda dois tipos de consumer: o roteamento transforma eventos de resultado dos domínios em comandos de entrega, e a entrega os envia e registra o histórico.
 
@@ -302,7 +309,26 @@ make test-coverage                          # gera coverage.html
 make test-integration                       # precisa de KAFKA_BROKERS, REDIS_ADDR e SMTP_ADDR / MAILPIT_URL apontando para o Mailpit
 ```
 
-O CI (`.github/workflows/ci.yml`) roda a cada push e pull request em seis jobs — `pkg`, `api-gateway` (com um container de serviço Kafka), `account-service`, `transaction-service` e `payment-service` (com containers de serviço Kafka e Cassandra) e `notification-service` (com containers de serviço Kafka, Redis e Mailpit) — checagem de `gofmt` e as suítes de `pkg`, `api-gateway`, `account-service`, `transaction-service`, `payment-service` e `notification-service`, falhando o build se a cobertura cair abaixo de 100 % (de `internal/app` para o account service, o transaction service, o payment service e o notification service).
+### Testes end-to-end e de carga
+
+O `scripts/stack.sh` sobe a plataforma inteira fora de processo, para testes que passam pelo gateway em vez de um único serviço: `up` sobe a infraestrutura raiz (Kafka, Cassandra, Redis, Mailpit, mais o one-shot `kafka-init`) sob o nome de projeto `fintech-bank-platform` e depois o compose de cada serviço; `wait` faz polling nos endpoints de saúde do gateway, de cada serviço de domínio e do Mailpit até responderem ou `STACK_TIMEOUT` (padrão 600s) esgotar; `logs` despeja as últimas 200 linhas de cada container de serviço; `down` derruba tudo. Ele respeita `GATEWAY_URL`, `MAILPIT_URL` (montada a partir de `MAILPIT_UI_PORT` se não definida) e as próprias `REDIS_PORT` / `MAILPIT_SMTP_PORT` / `MAILPIT_UI_PORT` do compose raiz.
+
+```bash
+scripts/stack.sh up
+STACK_TIMEOUT=900 scripts/stack.sh wait
+```
+
+O `tests/e2e` é um módulo Go separado (build tag `e2e`) que exercita a stack em execução através do gateway: criação de conta, depósitos/saques/transferências (incluindo uma transferência que é revertida), pagamentos (incluindo rejeições do sandbox e liquidação por webhook) e as notificações que eles disparam. O `TestMain` pula a suíte se o gateway não estiver saudável, a menos que `E2E_REQUIRED=1` transforme isso numa falha; `GATEWAY_URL` e `MAILPIT_URL` apontam a suíte para a stack. Como a suíte dispara requisições suficientes para bater no rate limit padrão do gateway, o `services/api-gateway/docker-compose.yml` agora repassa `RATE_LIMIT_REQUESTS` a partir do ambiente — aumente-o antes de rodar a suíte:
+
+```bash
+cd services/api-gateway && RATE_LIMIT_REQUESTS=100000 docker compose up -d
+cd tests/e2e && GATEWAY_URL=http://localhost:8081 MAILPIT_URL=http://localhost:8025 E2E_REQUIRED=1 go test -count=1 -tags e2e ./... -v
+scripts/stack.sh down
+```
+
+O `tests/load` tem cenários k6 que exercitam o gateway de ponta a ponta — comandos, leituras e um benchmark bruto de throughput de depósitos; veja [`tests/load/README.md`](tests/load/README.md) para os scripts, os cenários e como rodá-los.
+
+O CI (`.github/workflows/ci.yml`) roda a cada push e pull request em sete jobs — `pkg`, `api-gateway` (com um container de serviço Kafka), `account-service`, `transaction-service` e `payment-service` (com containers de serviço Kafka e Cassandra), `notification-service` (com containers de serviço Kafka, Redis e Mailpit) e `e2e` (com `RATE_LIMIT_REQUESTS` elevado, rodando `scripts/stack.sh up`/`wait`, a suíte `tests/e2e` e `scripts/stack.sh down`) — checagem de `gofmt` e as suítes de `pkg`, `api-gateway`, `account-service`, `transaction-service`, `payment-service` e `notification-service`, falhando o build se a cobertura cair abaixo de 100 % (de `internal/app` para o account service, o transaction service, o payment service e o notification service).
 
 ## Estrutura do projeto
 
@@ -311,91 +337,95 @@ fintech-bank-platform/
 ├── docker-compose.yml         Kafka · Cassandra · Redis (+ profile ui)
 ├── .env.example               todas as variáveis que a plataforma lê
 ├── .github/workflows/ci.yml   gofmt + testes + gate de cobertura
+├── scripts/stack.sh           up/down/wait/logs para a stack inteira (usado pelo job e2e)
 ├── pkg/                       módulo Go compartilhado
 │   ├── logger/  errors/  response/  validation/  events/
 │   ├── env/  middleware/  messaging/
-│   ├── domain/  cassandra/  processor/
+│   ├── domain/  cassandra/  processor/  retry/
 │   ├── Makefile · Dockerfile · docker-compose.yml
 │   └── README.md
-└── services/
-    ├── api-gateway/
-    │   ├── cmd/main.go                    ponto de entrada
-    │   ├── internal/
-    │   │   ├── config/                    env → Config tipada
-    │   │   ├── contracts/                 interfaces de config, contexto e http
-    │   │   ├── app/handlers/              endpoints de comando
-    │   │   └── infrastructure/
-    │   │       ├── http/                  server, router, handlers, middleware/
-    │   │       └── messaging/             producer kafka, circuit breaker
-    │   ├── tests/  (unit/ · feature/ · integration/)     helpers TestCase no estilo testify
-    │   ├── Makefile · Dockerfile · docker-compose.yml · .air.toml
-    │   └── .env.example
-    ├── account-service/
-    │   ├── cmd/main.go                    ponto de entrada
-    │   ├── migrations/                    arquivos .cql numerados, aplicados no boot
-    │   ├── internal/
-    │   │   ├── config/                    env → Config tipada
-    │   │   ├── contracts/                 interfaces de config, messaging e repositórios
-    │   │   ├── app/
-    │   │   │   ├── models/                tipos de domínio
-    │   │   │   ├── services/              casos de uso de contas e clientes
-    │   │   │   └── handlers/              dispatcher de comandos, DLQ, endpoints de leitura
-    │   │   └── infrastructure/
-    │   │       ├── database/              repositórios Cassandra e migrations
-    │   │       └── http/                  server, router, health, handlers de leitura
-    │   ├── tests/  (unit/ · feature/ · integration/)
-    │   ├── Makefile · Dockerfile · docker-compose.yml · .air.toml
-    │   └── .env.example
-    ├── transaction-service/
-    │   ├── cmd/main.go                    ponto de entrada
-    │   ├── migrations/                    arquivos .cql numerados, aplicados no boot
-    │   ├── internal/
-    │   │   ├── config/                    env → Config tipada
-    │   │   ├── contracts/                 interfaces de config, messaging e repositórios
-    │   │   ├── app/
-    │   │   │   ├── models/                tipos de domínio
-    │   │   │   ├── services/              casos de uso de transações e transições da saga
-    │   │   │   └── handlers/              dispatchers de comando e resposta, endpoints de leitura
-    │   │   └── infrastructure/
-    │   │       ├── database/              repositórios Cassandra e migrations
-    │   │       └── http/                  server, router, health, handlers de leitura
-    │   ├── tests/  (unit/ · feature/ · integration/)
-    │   ├── Makefile · Dockerfile · docker-compose.yml · .air.toml
-    │   └── .env.example
-    ├── payment-service/
-    │   ├── cmd/main.go                    ponto de entrada
-    │   ├── migrations/                    arquivos .cql numerados, aplicados no boot
-    │   ├── internal/
-    │   │   ├── config/                    env → Config tipada
-    │   │   ├── contracts/                 interfaces de config, messaging e repositórios
-    │   │   ├── app/
-    │   │   │   ├── models/                tipos de domínio
-    │   │   │   ├── services/              casos de uso de pagamentos e transições da saga
-    │   │   │   └── handlers/              dispatchers de comando, resposta e webhook, endpoints de leitura
-    │   │   └── infrastructure/
-    │   │       ├── database/              repositórios Cassandra e migrations
-    │   │       ├── gateway/               simulador do provedor sandbox
-    │   │       └── http/                  server, router, health, handlers de leitura
-    │   ├── tests/  (unit/ · feature/ · integration/)
-    │   ├── Makefile · Dockerfile · docker-compose.yml · .air.toml
-    │   └── .env.example
-    └── notification-service/
-        ├── cmd/main.go                    ponto de entrada
-        ├── internal/
-        │   ├── config/                    env → Config tipada
-        │   ├── contracts/                 interfaces de config, messaging, senders e storage
-        │   ├── app/
-        │   │   ├── models/                tipos de domínio
-        │   │   ├── services/              roteamento, renderização e entrega, templates/
-        │   │   └── handlers/              endpoint de leitura do histórico
-        │   └── infrastructure/
-        │       ├── directory/             cliente do endpoint de titular do account service, cache em memória
-        │       ├── senders/               senders de SMTP e sandbox de SMS/push
-        │       ├── storage/               cliente Redis, store de idempotência e histórico
-        │       └── http/                  server, router, health, handler do histórico
-        ├── tests/  (unit/ · feature/ · integration/)
-        ├── Makefile · Dockerfile · docker-compose.yml · .air.toml
-        └── .env.example
+├── services/
+│   ├── api-gateway/
+│   │   ├── cmd/main.go                    ponto de entrada
+│   │   ├── internal/
+│   │   │   ├── config/                    env → Config tipada
+│   │   │   ├── contracts/                 interfaces de config, contexto e http
+│   │   │   ├── app/handlers/              endpoints de comando
+│   │   │   └── infrastructure/
+│   │   │       ├── http/                  server, router, handlers, middleware/
+│   │   │       └── messaging/             producer kafka, circuit breaker
+│   │   ├── tests/  (unit/ · feature/ · integration/)     helpers TestCase no estilo testify
+│   │   ├── Makefile · Dockerfile · docker-compose.yml · .air.toml
+│   │   └── .env.example
+│   ├── account-service/
+│   │   ├── cmd/main.go                    ponto de entrada
+│   │   ├── migrations/                    arquivos .cql numerados, aplicados no boot
+│   │   ├── internal/
+│   │   │   ├── config/                    env → Config tipada
+│   │   │   ├── contracts/                 interfaces de config, messaging e repositórios
+│   │   │   ├── app/
+│   │   │   │   ├── models/                tipos de domínio
+│   │   │   │   ├── services/              casos de uso de contas e clientes
+│   │   │   │   └── handlers/              dispatcher de comandos, DLQ, endpoints de leitura
+│   │   │   └── infrastructure/
+│   │   │       ├── database/              repositórios Cassandra e migrations
+│   │   │       └── http/                  server, router, health, handlers de leitura
+│   │   ├── tests/  (unit/ · feature/ · integration/)
+│   │   ├── Makefile · Dockerfile · docker-compose.yml · .air.toml
+│   │   └── .env.example
+│   ├── transaction-service/
+│   │   ├── cmd/main.go                    ponto de entrada
+│   │   ├── migrations/                    arquivos .cql numerados, aplicados no boot
+│   │   ├── internal/
+│   │   │   ├── config/                    env → Config tipada
+│   │   │   ├── contracts/                 interfaces de config, messaging e repositórios
+│   │   │   ├── app/
+│   │   │   │   ├── models/                tipos de domínio
+│   │   │   │   ├── services/              casos de uso de transações e transições da saga
+│   │   │   │   └── handlers/              dispatchers de comando e resposta, endpoints de leitura
+│   │   │   └── infrastructure/
+│   │   │       ├── database/              repositórios Cassandra e migrations
+│   │   │       └── http/                  server, router, health, handlers de leitura
+│   │   ├── tests/  (unit/ · feature/ · integration/)
+│   │   ├── Makefile · Dockerfile · docker-compose.yml · .air.toml
+│   │   └── .env.example
+│   ├── payment-service/
+│   │   ├── cmd/main.go                    ponto de entrada
+│   │   ├── migrations/                    arquivos .cql numerados, aplicados no boot
+│   │   ├── internal/
+│   │   │   ├── config/                    env → Config tipada
+│   │   │   ├── contracts/                 interfaces de config, messaging e repositórios
+│   │   │   ├── app/
+│   │   │   │   ├── models/                tipos de domínio
+│   │   │   │   ├── services/              casos de uso de pagamentos e transições da saga
+│   │   │   │   └── handlers/              dispatchers de comando, resposta e webhook, endpoints de leitura
+│   │   │   └── infrastructure/
+│   │   │       ├── database/              repositórios Cassandra e migrations
+│   │   │       ├── gateway/               simulador do provedor sandbox
+│   │   │       └── http/                  server, router, health, handlers de leitura
+│   │   ├── tests/  (unit/ · feature/ · integration/)
+│   │   ├── Makefile · Dockerfile · docker-compose.yml · .air.toml
+│   │   └── .env.example
+│   └── notification-service/
+│       ├── cmd/main.go                    ponto de entrada
+│       ├── internal/
+│       │   ├── config/                    env → Config tipada
+│       │   ├── contracts/                 interfaces de config, messaging, senders e storage
+│       │   ├── app/
+│       │   │   ├── models/                tipos de domínio
+│       │   │   ├── services/              roteamento, renderização e entrega, templates/
+│       │   │   └── handlers/              endpoint de leitura do histórico
+│       │   └── infrastructure/
+│       │       ├── directory/             cliente do endpoint de titular do account service, cache em memória
+│       │       ├── senders/               senders de SMTP e sandbox de SMS/push
+│       │       ├── storage/               cliente Redis, store de idempotência e histórico
+│       │       └── http/                  server, router, health, handler do histórico
+│       ├── tests/  (unit/ · feature/ · integration/)
+│       ├── Makefile · Dockerfile · docker-compose.yml · .air.toml
+│       └── .env.example
+└── tests/
+    ├── e2e/                    módulo Go (build tag e2e): contas, transações, pagamentos, notificações
+    └── load/                   cenários k6 (comandos, leituras, throughput) · README.md
 ```
 
 Cada serviço futuro segue o mesmo layout: `cmd/`, `internal/{config,contracts,infrastructure,app}` e `tests/`, com `migrations/` (CQL) para os que persistem no Cassandra.
@@ -409,7 +439,7 @@ Cada serviço futuro segue o mesmo layout: `cmd/`, `internal/{config,contracts,i
 - [x] **Sprint 3 — Transaction Service** — depósitos, saques e transferências como sagas sobre o account service, chaves de idempotência, compensação, API de leitura repassada por proxy pelo gateway
 - [x] **Sprint 4 — Payment Service** — PIX, TED e boleto como sagas sobre o account service, provedor sandbox com webhooks assinados, estornos, API de leitura repassada por proxy pelo gateway
 - [x] **Sprint 5 — Notification Service** — e-mail, SMS e push a partir dos eventos de resultado, templates, idempotência e histórico apoiados em Redis, repassado por proxy pelo gateway
-- [ ] **Sprint 6** — testes end-to-end, de carga e um sweeper de reconciliação para transações e pagamentos presos
+- [x] **Sprint 6** — testes end-to-end, testes de carga com k6, operações de saldo idempotentes e um sweeper de reconciliação para transações e pagamentos presos
 - [ ] **Sprint 7** — observabilidade (Prometheus, Jaeger) e docs
 
 ## Licença

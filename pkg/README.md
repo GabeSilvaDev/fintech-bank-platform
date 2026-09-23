@@ -14,7 +14,8 @@ pkg/
 ├── messaging/     kafka-go producer and consumer
 ├── domain/        shared domain errors and money helpers
 ├── cassandra/     migrator and write-error mapping
-└── processor/     idempotent Kafka command processor
+├── processor/     idempotent Kafka command processor
+└── retry/         fixed-delay retry with context cancellation
 ```
 
 ## logger
@@ -240,6 +241,20 @@ err := proc.Process(ctx, msg.Key, msg.Value)
 ```
 
 `Store.MarkProcessed(ctx, eventID) (bool, error)` and `Publisher.Publish(ctx, topic, key, event) error` are the other two seams. A dispatcher error is dead-lettered right away — no retry — when `domain.IsInvalid(err)` is true or it wraps `domain.ErrNotFound`, `domain.ErrAmbiguousWrite`, `processor.ErrUnknownCommand`, `processor.ErrBadPayload` or `processor.ErrPanic`; anything else is treated as transient and retried with `Config.Backoff`.
+
+## retry
+
+```go
+import "github.com/fintech-bank-platform/pkg/retry"
+
+err := retry.Do(ctx, 30, 2*time.Second, func() error {
+    return db.Ping()
+})
+// calls fn up to 30 times, waiting 2s between attempts; returns nil on the first success,
+// the last error once attempts run out, or ctx.Err() if the context is cancelled while waiting
+```
+
+Every service uses this to wait for Cassandra (bootstrap connection, migrations, keyspace session) or Redis (ping) at start-up, configured through `STARTUP_RETRY_ATTEMPTS` (default 30) and `STARTUP_RETRY_DELAY` (default `2s`; a non-positive value falls back to the default).
 
 ## Tests
 

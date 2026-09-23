@@ -17,7 +17,7 @@
 
 </div>
 
-> **Work in progress.** Infrastructure, shared packages and all five services — the API gateway, the account service, the transaction service, the payment service and the notification service — are in place: commands flow from HTTP to Kafka to Cassandra, deposits, withdrawals and transfers settle as sagas over the account service, PIX, TED and boleto payments settle the same way through a sandbox provider with signed webhooks, and result events turn into e-mail, SMS and push through the notification service, with reads coming back through the gateway. End-to-end tests, load tests and observability are next. See the [roadmap](#roadmap) for what is done and what is planned.
+> **Work in progress.** Infrastructure, shared packages and all five services — the API gateway, the account service, the transaction service, the payment service and the notification service — are in place: commands flow from HTTP to Kafka to Cassandra, deposits, withdrawals and transfers settle as sagas over the account service, PIX, TED and boleto payments settle the same way through a sandbox provider with signed webhooks, and result events turn into e-mail, SMS and push through the notification service, with reads coming back through the gateway. Every service retries its Cassandra or Redis connection at start-up, account credits and debits are idempotent per key, a reconciliation sweeper recovers stuck transactions and payments, and the platform is exercised end to end and under k6 load, on top of its unit, feature and integration tests. Observability is next. See the [roadmap](#roadmap) for what is done and what is planned.
 
 ## Architecture
 
@@ -44,12 +44,12 @@ The gateway receives HTTP requests and publishes them as commands on Kafka; each
 | Component | Path | State |
 |---|---|---|
 | Infrastructure | `docker-compose.yml` | Kafka 3.7.1 (KRaft), Cassandra 4.1, Redis 7.2, Mailpit, optional Kafka UI and Cassandra Web |
-| Shared packages | `pkg/` | `logger`, `errors`, `response`, `validation`, `events`, `env`, `middleware`, `messaging`, `domain`, `cassandra`, `processor` — 100 % test coverage, enforced in CI |
+| Shared packages | `pkg/` | `logger`, `errors`, `response`, `validation`, `events`, `env`, `middleware`, `messaging`, `domain`, `cassandra`, `processor`, `retry` — 100 % test coverage, enforced in CI |
 | API Gateway | `services/api-gateway/` | Chi router with request-id, real-IP, logging, recovery, CORS and rate-limit middleware; `GET /health`; command endpoints publishing to Kafka through a circuit-breaker-guarded producer; typed config from env; unit + feature tests at 100 % coverage, Kafka integration test in CI; read routes proxied to the account service |
-| Account Service | `services/account-service/` | Consumes `account.commands`, persists customers and accounts in Cassandra (`fintech_accounts`, migrations applied at boot), owns balances with compare-and-set credits/debits, publishes results — including `account.credit_rejected` — on `account.events` and failures on `account.dlq`; read API on `:8082`; unit + feature tests at 100 % of `internal/app`, Cassandra and Kafka integration tests in CI |
-| Transaction Service | `services/transaction-service/` | Consumes `transaction.commands` and the account service's replies on `account.events`, records deposits, withdrawals and transfers in Cassandra (`fintech_transactions`, migrations applied at boot), orchestrates each one as a saga over `account.commands` (debit → credit → compensating credit on failure) with per-step idempotency keys, publishes `transaction.created/completed/failed` and `transaction.transfer_completed/transfer_failed` on `transaction.events`, dead-letters on `transaction.dlq`; read API on `:8083`; unit + feature tests at 100 % of `internal/app`, Cassandra and Kafka integration tests in CI |
-| Payment Service | `services/payment-service/` | Consumes `payment.commands` and the account service's replies on `account.events`, stores PIX, TED and boleto payments in Cassandra (`fintech_payments`, migrations applied at boot), reserves funds with `account.debit`, submits to a sandbox provider — PIX settles at once, TED and boleto settle through a signed webhook — refunds rejections with `account.credit`, publishes `payment.created/processed/completed/failed` on `payment.events`, dead-letters on `payment.dlq`; read API and webhook on `:8084`; unit + feature tests at 100 % of `internal/app`, Cassandra and Kafka integration tests in CI |
-| Notification Service | `services/notification-service/` | Consumes `account.events`, `transaction.events` and `payment.events` and routes the results as Portuguese e-mail, SMS and push, looking up the account service's internal owner endpoint for contacts; delivery commands on `notification.events` are sent over SMTP (Mailpit in development) or sandbox SMS/push providers and recorded in a Redis-backed history, dead-lettering on `notification.dlq`; read API on `:8085`; unit + feature tests at 100 % of `internal/app`, Kafka, Redis and Mailpit integration tests in CI |
+| Account Service | `services/account-service/` | Consumes `account.commands`, retries its Cassandra bootstrap, migrations and keyspace session at start-up (`STARTUP_RETRY_*`), persists customers and accounts in Cassandra (`fintech_accounts`), owns balances with compare-and-set credits/debits that require an `idempotency_key` and apply at most once (`balance_operations`, 30-day TTL), publishes results — including `account.credit_rejected` — on `account.events` and failures on `account.dlq`; read API on `:8082`; unit + feature tests at 100 % of `internal/app`, Cassandra and Kafka integration tests in CI |
+| Transaction Service | `services/transaction-service/` | Consumes `transaction.commands` and the account service's replies on `account.events`, retries its Cassandra bootstrap at start-up (`STARTUP_RETRY_*`), records deposits, withdrawals and transfers in Cassandra (`fintech_transactions`), orchestrates each one as a saga over `account.commands` (debit → credit → compensating credit on failure) with per-step idempotency keys, runs a reconciliation sweeper that re-sends the next step of stale non-terminal transactions (`SWEEPER_*`), publishes `transaction.created/completed/failed` and `transaction.transfer_completed/transfer_failed` on `transaction.events`, dead-letters on `transaction.dlq`; read API on `:8083`; unit + feature tests at 100 % of `internal/app`, Cassandra and Kafka integration tests in CI |
+| Payment Service | `services/payment-service/` | Consumes `payment.commands` and the account service's replies on `account.events`, retries its Cassandra bootstrap at start-up (`STARTUP_RETRY_*`), stores PIX, TED and boleto payments in Cassandra (`fintech_payments`), reserves funds with `account.debit`, submits to a sandbox provider — PIX settles at once, TED and boleto settle through a signed webhook — refunds rejections with `account.credit`, runs a reconciliation sweeper that re-sends the next step of stale non-terminal payments (`SWEEPER_*`), publishes `payment.created/processed/completed/failed` on `payment.events`, dead-letters on `payment.dlq`; read API and webhook on `:8084`; unit + feature tests at 100 % of `internal/app`, Cassandra and Kafka integration tests in CI |
+| Notification Service | `services/notification-service/` | Consumes `account.events`, `transaction.events` and `payment.events` and routes the results as Portuguese e-mail, SMS and push, retrying its Redis ping at start-up (`STARTUP_RETRY_*`), looking up the account service's internal owner endpoint for contacts; delivery commands on `notification.events` are sent over SMTP (Mailpit in development) or sandbox SMS/push providers and recorded in a Redis-backed history, dead-lettering on `notification.dlq`; read API on `:8085`; unit + feature tests at 100 % of `internal/app`, Kafka, Redis and Mailpit integration tests in CI |
 
 ### Shared packages
 
@@ -66,6 +66,7 @@ The gateway receives HTTP requests and publishes them as commands on Kafka; each
 | `domain` | Shared domain errors (`ErrNotFound`, `ErrConflict`, `ErrAmbiguousWrite`, `Invalid`/`IsInvalid`/`InvalidCode`) and money helpers (`ToCents`, `FromCents`, `Cents`) |
 | `cassandra` | `Migrator` that runs the keyspace file first, then every other `.cql` file in order over an `Executor` seam, tracking versions in `schema_migrations`; `MapWriteError` maps ambiguous Cassandra failures to `domain.ErrAmbiguousWrite` |
 | `processor` | Idempotent Kafka command processor: dedupes by event id, retries transient errors with backoff, dead-letters the rest, and publishes a dispatcher's reply events |
+| `retry` | `Do(ctx, attempts, delay, fn)` retries `fn` with a fixed delay between attempts until it succeeds, the attempts run out or the context is cancelled; used by every service to wait for Cassandra or Redis at start-up |
 
 Usage examples live in [`pkg/README.md`](pkg/README.md).
 
@@ -114,7 +115,7 @@ docker compose up -d                  # hot reload with Air, published on :8082
 curl http://localhost:8082/health     # {"success":true,"data":{"status":"healthy","cassandra":"up"}}
 ```
 
-Migrations in `migrations/*.cql` run at boot against `CASSANDRA_KEYSPACE` (default `fintech_accounts`). Configuration: `SERVER_*`, `KAFKA_BROKERS` / `KAFKA_GROUP_ID` / `KAFKA_*_TIMEOUT` / `KAFKA_MAX_ATTEMPTS`, `CONSUMER_RETRY_BACKOFF` / `CONSUMER_DRAIN_TIMEOUT`, `CASSANDRA_HOSTS` / `CASSANDRA_KEYSPACE` / `CASSANDRA_CONSISTENCY` / `CASSANDRA_*_TIMEOUT` / `CASSANDRA_MIGRATIONS_PATH`, `LOG_LEVEL` / `LOG_PRETTY`.
+Connecting to Cassandra, applying migrations in `migrations/*.cql` (against `CASSANDRA_KEYSPACE`, default `fintech_accounts`) and opening the keyspace session are retried at boot up to `STARTUP_RETRY_ATTEMPTS` times (default 30), waiting `STARTUP_RETRY_DELAY` between attempts (default `2s`; a non-positive value falls back to the default). Configuration: `SERVER_*`, `KAFKA_BROKERS` / `KAFKA_GROUP_ID` / `KAFKA_*_TIMEOUT` / `KAFKA_MAX_ATTEMPTS`, `CONSUMER_RETRY_BACKOFF` / `CONSUMER_DRAIN_TIMEOUT`, `CASSANDRA_HOSTS` / `CASSANDRA_KEYSPACE` / `CASSANDRA_CONSISTENCY` / `CASSANDRA_*_TIMEOUT` / `CASSANDRA_MIGRATIONS_PATH`, `STARTUP_RETRY_ATTEMPTS` / `STARTUP_RETRY_DELAY`, `LOG_LEVEL` / `LOG_PRETTY`.
 
 Commands it handles (topic `account.commands`) and the events it answers with (topic `account.events`):
 
@@ -123,8 +124,10 @@ Commands it handles (topic `account.commands`) and the events it answers with (t
 | `account.create` | `account.created` | invalid data, number collision after 5 tries |
 | `account.update` | `account.updated` | unknown account, closed account, empty update |
 | `account.delete` | `account.deleted` | unknown account, non-zero balance |
-| `account.credit` | `account.credited` or `account.credit_rejected` (`account_not_active`, `account_not_found`) | invalid amount or currency |
-| `account.debit` | `account.debited` or `account.debit_rejected` (`insufficient_funds`, `account_not_active`, `account_not_found`) | invalid amount or currency |
+| `account.credit` | `account.credited` or `account.credit_rejected` (`account_not_active`, `account_not_found`) — replayed as-is for a repeated `idempotency_key` | invalid amount, currency or idempotency key (`invalid_idempotency_key`, `idempotency_key_reused`), or `ambiguous_write` while that key's outcome is still pending |
+| `account.debit` | `account.debited` or `account.debit_rejected` (`insufficient_funds`, `account_not_active`, `account_not_found`) — replayed as-is for a repeated `idempotency_key` | invalid amount, currency or idempotency key (`invalid_idempotency_key`, `idempotency_key_reused`), or `ambiguous_write` while that key's outcome is still pending |
+
+Every `account.credit` and `account.debit` must carry an `idempotency_key` and is applied at most once per `(account_id, idempotency_key)`, tracked in `balance_operations` (30-day TTL, `services/account-service/migrations/007_balance_operations.cql`). A repeated key skips the balance change and replays the stored outcome as the reply — including a stored `insufficient_funds` rejection; a key still reserved by an attempt that crashed before it recorded an outcome is dead-lettered as `ambiguous_write` on every retry, since the platform can't tell whether the balance change happened, and needs manual resolution; a key already used for the other kind of operation (a credit retried as a debit, or vice versa) is rejected as `idempotency_key_reused`.
 
 Every command is applied at most once (`processed_events`, 7-day TTL); transient failures are retried with `CONSUMER_RETRY_BACKOFF` and then dead-lettered as `account.command_failed`, with `retries` counting the dispatch attempts. A Cassandra write timeout or unavailable error, a client-side write timeout, or a write whose context was cancelled or expired is dead-lettered right away as `ambiguous_write`, since the write may or may not have been applied and retrying could apply it twice. Because the event id is marked before dispatch, a dead-lettered command replayed as-is is skipped as a duplicate: replays need a new event id. On shutdown the consumer finishes the message in flight (up to `CONSUMER_DRAIN_TIMEOUT`) before committing, and a consumer that stops on an error is restarted with `CONSUMER_RETRY_BACKOFF` while the read API keeps serving.
 
@@ -137,7 +140,7 @@ docker compose up -d                  # hot reload with Air, published on :8083
 curl http://localhost:8083/health     # {"success":true,"data":{"status":"healthy","cassandra":"up"}}
 ```
 
-Migrations in `migrations/*.cql` run at boot against `CASSANDRA_KEYSPACE` (default `fintech_transactions`). Configuration reuses the account service's variable names, with `SERVER_PORT` defaulting to `8083`, `KAFKA_GROUP_ID` to `transaction-service` and `CASSANDRA_KEYSPACE` to `fintech_transactions`.
+Migrations in `migrations/*.cql` run at boot against `CASSANDRA_KEYSPACE` (default `fintech_transactions`); connecting to Cassandra, applying migrations and opening the keyspace session are retried the same way as the account service (`STARTUP_RETRY_ATTEMPTS` / `STARTUP_RETRY_DELAY`). Configuration reuses the account service's variable names, with `SERVER_PORT` defaulting to `8083`, `KAFKA_GROUP_ID` to `transaction-service` and `CASSANDRA_KEYSPACE` to `fintech_transactions`, plus the reconciliation sweeper's `SWEEPER_ENABLED` (default `true`), `SWEEPER_INTERVAL` (default `1m`), `SWEEPER_STALE_AFTER` (default `5m`) and `SWEEPER_BATCH` (default `100`).
 
 Consumes `transaction.commands` and the account service's replies on `account.events`:
 
@@ -148,7 +151,9 @@ Consumes `transaction.commands` and the account service's replies on `account.ev
 
 A transaction is recorded as `pending` with its idempotency key reserved first — a repeated key is a no-op — then driven as a saga over `account.commands`: a deposit or withdrawal asks for a single credit or debit and settles as `completed` or `failed` (`insufficient_funds`, `account_not_active`, `account_not_found`); a transfer debits the source (`pending` → `debited`), credits the counterparty (`debited` → `completed`), and compensates with a credit back to the source if that credit is rejected (`reversing` → `reversed`, or `reversal_failed` plus a `transaction.dlq` entry if the compensation itself is rejected). Every step carries its own idempotency key (`<transaction id>:debit`, `:credit` or `:reversal`) and every status change is a Cassandra lightweight transaction guarded by the expected status, so a duplicate or stale reply is ignored. Results are published on `transaction.events` (`transaction.created`, `transaction.completed`/`transaction.failed`, `transaction.transfer_completed`/`transaction.transfer_failed`); transient failures are retried with `CONSUMER_RETRY_BACKOFF` and then dead-lettered on `transaction.dlq` as `transaction.command_failed`.
 
-**Known limitations.** A transaction stays `pending`, `debited` or `reversing` if the account service's reply never arrives — for example after a crash between the reply being marked as processed and the status change, or when the account side dead-letters the command as `ambiguous_write`. Non-terminal transactions can be found through `GET /accounts/{account_id}/transactions`. As with the account service, a dead-lettered event replayed as-is is skipped as a duplicate, so a replay needs a new event id. On first deployment the `-replies` group reads `account.events` from the beginning; that is harmless and one-off, since a reply that does not match a known step is ignored. A reconciliation sweeper for stuck transactions is planned for Sprint 6 (see the [roadmap](#roadmap)).
+If the account service's reply to a step never arrives, the transaction is left stuck; a reconciliation sweeper (`SWEEPER_ENABLED`, on by default) recovers it. Every `SWEEPER_INTERVAL` it scans the whole table, page by page, for non-terminal transactions whose `updated_at` is older than `SWEEPER_STALE_AFTER`, up to `SWEEPER_BATCH` per sweep; each one is "touched" with a lightweight transaction conditioned on the status and `updated_at` it read, so only one service instance acts on it and a transaction another instance already touched simply waits another stale window. Once touched, its next step is re-sent: a `pending` deposit asks for another credit, a `pending` withdrawal or transfer asks for another debit, a `debited` transfer credits the counterparty, and a `reversing` transfer re-sends the reversal credit — reusing the transaction's original per-step idempotency keys, which the account service now deduplicates.
+
+**Known limitations.** Non-terminal transactions (`pending`, `debited` or `reversing`) can be found through `GET /accounts/{account_id}/transactions`; the sweeper described above resolves most of them on its own once they go stale. The exception is a step the account service dead-lettered as `ambiguous_write`: the reserved idempotency key stays pending forever, so every sweep hits the same `ambiguous_write` outcome and the transaction needs manual resolution. As with the account service, a dead-lettered event replayed as-is is skipped as a duplicate, so a replay needs a new event id. On first deployment the `-replies` group reads `account.events` from the beginning; that is harmless and one-off, since a reply that does not match a known step is ignored.
 
 ### Payment Service
 
@@ -159,7 +164,7 @@ docker compose up -d                  # hot reload with Air, published on :8084
 curl http://localhost:8084/health     # {"success":true,"data":{"status":"healthy","cassandra":"up"}}
 ```
 
-Migrations in `migrations/*.cql` run at boot against `CASSANDRA_KEYSPACE` (default `fintech_payments`). Configuration reuses the transaction service's variable names, with `SERVER_PORT` defaulting to `8084`, `KAFKA_GROUP_ID` to `payment-service` and `CASSANDRA_KEYSPACE` to `fintech_payments`, plus `PAYMENT_WEBHOOK_SECRET` (required, at least 16 characters), `PAYMENT_WEBHOOK_URL` (default `http://localhost:8084/webhooks/gateway`), `PAYMENT_WEBHOOK_TOLERANCE` (default `5m`) and `PAYMENT_SETTLEMENT_DELAY` (default `2s`). The `dev-webhook-secret` value in `docker-compose.yml` and `.env.example` is for local development only; anywhere else, replace it with a random secret of at least 16 characters.
+Migrations in `migrations/*.cql` run at boot against `CASSANDRA_KEYSPACE` (default `fintech_payments`); connecting to Cassandra, applying migrations and opening the keyspace session are retried the same way as the account service (`STARTUP_RETRY_ATTEMPTS` / `STARTUP_RETRY_DELAY`). Configuration reuses the transaction service's variable names, with `SERVER_PORT` defaulting to `8084`, `KAFKA_GROUP_ID` to `payment-service`, `CASSANDRA_KEYSPACE` to `fintech_payments` and the same `SWEEPER_*` reconciliation settings, plus `PAYMENT_WEBHOOK_SECRET` (required, at least 16 characters), `PAYMENT_WEBHOOK_URL` (default `http://localhost:8084/webhooks/gateway`), `PAYMENT_WEBHOOK_TOLERANCE` (default `5m`) and `PAYMENT_SETTLEMENT_DELAY` (default `2s`). The `dev-webhook-secret` value in `docker-compose.yml` and `.env.example` is for local development only; anywhere else, replace it with a random secret of at least 16 characters.
 
 Consumes `payment.commands` and the account service's replies on `account.events`:
 
@@ -181,7 +186,9 @@ The sandbox provider reports settlement through a signed webhook: `POST /webhook
 | Boleto code starting with `999` | rejected, `boleto_not_found` |
 | Anything else | settles; TED and boleto settle after `PAYMENT_SETTLEMENT_DELAY` |
 
-**Known limitations.** A payment stays `pending` if the outcome of its debit never arrives, `debited` if the provider keeps failing after the retries and the command is dead-lettered, `submitted` if the settlement never arrives (for example, the sandbox lost a scheduled callback because the service restarted before `PAYMENT_SETTLEMENT_DELAY` elapsed) until a reconciliation re-submits it, and `refunding` if the outcome of the refund credit never arrives. Non-terminal payments can be found through `GET /accounts/{account_id}/payments`. A settlement that arrives before its external id is bound, or while the submission is still being recorded, is retried and dead-lettered as `conflict` if it never lands. As with the other services, a dead-lettered event replayed as-is is skipped as a duplicate, so a replay needs a new event id. On first deployment the service reads `payment.commands` and `account.events` from the beginning. A reconciliation sweeper is planned for Sprint 6 (see the [roadmap](#roadmap)); before it can safely re-send credits and debits, the account service has to enforce idempotency keys on them.
+If a step's outcome never arrives, a payment is left stuck in `pending`, `debited`, `submitted` or `refunding` — for example when the sandbox loses a scheduled callback because the service restarted before `PAYMENT_SETTLEMENT_DELAY` elapsed. A reconciliation sweeper (`SWEEPER_ENABLED`, on by default) recovers it the same way as the transaction service's: every `SWEEPER_INTERVAL` it scans the whole table for non-terminal payments stale for `SWEEPER_STALE_AFTER`, up to `SWEEPER_BATCH` per sweep, "touching" each one with a lightweight transaction conditioned on the status and `updated_at` it read so only one instance acts on it. A touched `pending` payment is re-debited; a `debited` one gets another `payment.submit`; a `submitted` one is checked against the sandbox provider again — settled completes it, rejected starts a refund, and one still pending simply gets its callback redelivered by the sandbox; a `refunding` payment has its refund credit re-sent. Re-sent commands reuse the payment's original idempotency keys, which the account service now deduplicates.
+
+**Known limitations.** Non-terminal payments can be found through `GET /accounts/{account_id}/payments`; the sweeper above resolves most of them on its own once they go stale. The exception is a step the account service dead-lettered as `ambiguous_write`: the reserved idempotency key stays pending forever, so every sweep hits the same `ambiguous_write` outcome and the payment needs manual resolution. A settlement that arrives before its external id is bound, or while the submission is still being recorded, is retried and dead-lettered as `conflict` if it never lands. As with the other services, a dead-lettered event replayed as-is is skipped as a duplicate, so a replay needs a new event id. On first deployment the service reads `payment.commands` and `account.events` from the beginning.
 
 ### Notification Service
 
@@ -192,7 +199,7 @@ docker compose up -d                  # hot reload with Air, published on :8085
 curl http://localhost:8085/health     # {"success":true,"data":{"status":"healthy","redis":"up"}}
 ```
 
-Configuration: `SERVER_*`, `KAFKA_BROKERS` / `KAFKA_GROUP_ID` (default `notification-service`) / `KAFKA_*_TIMEOUT` / `KAFKA_MAX_ATTEMPTS`, `CONSUMER_RETRY_BACKOFF` / `CONSUMER_DRAIN_TIMEOUT`, `REDIS_ADDR` / `REDIS_PASSWORD` / `REDIS_DB`, `ACCOUNT_SERVICE_URL` / `ACCOUNT_DIRECTORY_TTL` (default `5m`) / `ACCOUNT_DIRECTORY_TIMEOUT` (default `3s`), `SMTP_ADDR` / `SMTP_FROM` (default `no-reply@fintech.local`) / `SMTP_TIMEOUT` (default `10s`), `NOTIFICATION_HISTORY_SIZE` (default `100`), `NOTIFICATION_MAX_EVENT_AGE` (default `1h`, `0` disables), `LOG_LEVEL` / `LOG_PRETTY`.
+The Redis ping is retried at boot up to `STARTUP_RETRY_ATTEMPTS` times (default 30), waiting `STARTUP_RETRY_DELAY` between attempts (default `2s`), before the service gives up and exits. Configuration: `SERVER_*`, `KAFKA_BROKERS` / `KAFKA_GROUP_ID` (default `notification-service`) / `KAFKA_*_TIMEOUT` / `KAFKA_MAX_ATTEMPTS`, `CONSUMER_RETRY_BACKOFF` / `CONSUMER_DRAIN_TIMEOUT`, `REDIS_ADDR` / `REDIS_PASSWORD` / `REDIS_DB`, `ACCOUNT_SERVICE_URL` / `ACCOUNT_DIRECTORY_TTL` (default `5m`) / `ACCOUNT_DIRECTORY_TIMEOUT` (default `3s`), `SMTP_ADDR` / `SMTP_FROM` (default `no-reply@fintech.local`) / `SMTP_TIMEOUT` (default `10s`), `NOTIFICATION_HISTORY_SIZE` (default `100`), `NOTIFICATION_MAX_EVENT_AGE` (default `1h`, `0` disables), `STARTUP_RETRY_ATTEMPTS` / `STARTUP_RETRY_DELAY`, `LOG_LEVEL` / `LOG_PRETTY`.
 
 The service runs two kinds of consumer: routing turns domain result events into delivery commands, and delivery sends them and records history.
 
@@ -302,7 +309,26 @@ make test-coverage                          # writes coverage.html
 make test-integration                       # needs KAFKA_BROKERS, REDIS_ADDR, and SMTP_ADDR / MAILPIT_URL pointing at Mailpit
 ```
 
-CI (`.github/workflows/ci.yml`) runs on every push and pull request as six jobs — `pkg`, `api-gateway` (with a Kafka service container), `account-service`, `transaction-service` and `payment-service` (with Kafka and Cassandra service containers) and `notification-service` (with Kafka, Redis and Mailpit service containers) — running `gofmt` check and the test suites for `pkg`, `api-gateway`, `account-service`, `transaction-service`, `payment-service` and `notification-service`, failing the build if coverage drops below 100 % (of `internal/app` for the account, transaction, payment and notification services).
+### End-to-end and load tests
+
+`scripts/stack.sh` runs the whole platform out of process, for tests that go through the gateway instead of a single service: `up` starts the root infrastructure (Kafka, Cassandra, Redis, Mailpit, plus the `kafka-init` one-shot) under the `fintech-bank-platform` project name and then every service's own compose stack; `wait` polls the gateway's, every domain service's and Mailpit's health endpoints until they answer or `STACK_TIMEOUT` (default 600s) elapses; `logs` dumps the last 200 lines of every service container; `down` tears everything down. It honours `GATEWAY_URL`, `MAILPIT_URL` (built from `MAILPIT_UI_PORT` if unset) and the root compose's own `REDIS_PORT` / `MAILPIT_SMTP_PORT` / `MAILPIT_UI_PORT`.
+
+```bash
+scripts/stack.sh up
+STACK_TIMEOUT=900 scripts/stack.sh wait
+```
+
+`tests/e2e` is a separate Go module (build tag `e2e`) that drives the running stack through the gateway: account creation, deposits/withdrawals/transfers (including a transfer that gets reversed), payments (including sandbox rejections and webhook settlement) and the notifications they trigger. `TestMain` skips the suite if the gateway isn't healthy, unless `E2E_REQUIRED=1` makes that a hard failure instead; `GATEWAY_URL` and `MAILPIT_URL` point it at the stack. The suite fires enough requests to hit the gateway's default rate limit, so `services/api-gateway/docker-compose.yml` now passes `RATE_LIMIT_REQUESTS` through from the environment — raise it before running the suite:
+
+```bash
+cd services/api-gateway && RATE_LIMIT_REQUESTS=100000 docker compose up -d
+cd tests/e2e && GATEWAY_URL=http://localhost:8081 MAILPIT_URL=http://localhost:8025 E2E_REQUIRED=1 go test -count=1 -tags e2e ./... -v
+scripts/stack.sh down
+```
+
+`tests/load` has k6 scenarios exercising the gateway end to end — commands, reads and a raw deposit-throughput benchmark; see [`tests/load/README.md`](tests/load/README.md) for the scripts, scenarios and how to run them.
+
+CI (`.github/workflows/ci.yml`) runs on every push and pull request as seven jobs — `pkg`, `api-gateway` (with a Kafka service container), `account-service`, `transaction-service` and `payment-service` (with Kafka and Cassandra service containers), `notification-service` (with Kafka, Redis and Mailpit service containers) and `e2e` (with `RATE_LIMIT_REQUESTS` raised, running `scripts/stack.sh up`/`wait`, the `tests/e2e` suite and `scripts/stack.sh down`) — running `gofmt` check and the test suites for `pkg`, `api-gateway`, `account-service`, `transaction-service`, `payment-service` and `notification-service`, failing the build if coverage drops below 100 % (of `internal/app` for the account, transaction, payment and notification services).
 
 ## Project structure
 
@@ -311,91 +337,95 @@ fintech-bank-platform/
 ├── docker-compose.yml         Kafka · Cassandra · Redis (+ ui profile)
 ├── .env.example               every variable the platform reads
 ├── .github/workflows/ci.yml   gofmt + tests + coverage gate
+├── scripts/stack.sh           up/down/wait/logs for the whole stack (used by the e2e job)
 ├── pkg/                       shared Go module
 │   ├── logger/  errors/  response/  validation/  events/
 │   ├── env/  middleware/  messaging/
-│   ├── domain/  cassandra/  processor/
+│   ├── domain/  cassandra/  processor/  retry/
 │   ├── Makefile · Dockerfile · docker-compose.yml
 │   └── README.md
-└── services/
-    ├── api-gateway/
-    │   ├── cmd/main.go                    entry point
-    │   ├── internal/
-    │   │   ├── config/                    env → typed Config
-    │   │   ├── contracts/                 interfaces for config, context and http
-    │   │   ├── app/handlers/              command endpoints
-    │   │   └── infrastructure/
-    │   │       ├── http/                  server, router, handlers, middleware/
-    │   │       └── messaging/             kafka producer, circuit breaker
-    │   ├── tests/  (unit/ · feature/ · integration/)     testify-style TestCase helpers
-    │   ├── Makefile · Dockerfile · docker-compose.yml · .air.toml
-    │   └── .env.example
-    ├── account-service/
-    │   ├── cmd/main.go                    entry point
-    │   ├── migrations/                    numbered .cql files, applied at boot
-    │   ├── internal/
-    │   │   ├── config/                    env → typed Config
-    │   │   ├── contracts/                 interfaces for config, messaging and repositories
-    │   │   ├── app/
-    │   │   │   ├── models/                domain types
-    │   │   │   ├── services/              account and customer use cases
-    │   │   │   └── handlers/              command dispatcher, DLQ, read endpoints
-    │   │   └── infrastructure/
-    │   │       ├── database/              Cassandra repositories and migrations
-    │   │       └── http/                  server, router, health, read handlers
-    │   ├── tests/  (unit/ · feature/ · integration/)
-    │   ├── Makefile · Dockerfile · docker-compose.yml · .air.toml
-    │   └── .env.example
-    ├── transaction-service/
-    │   ├── cmd/main.go                    entry point
-    │   ├── migrations/                    numbered .cql files, applied at boot
-    │   ├── internal/
-    │   │   ├── config/                    env → typed Config
-    │   │   ├── contracts/                 interfaces for config, messaging and repositories
-    │   │   ├── app/
-    │   │   │   ├── models/                domain types
-    │   │   │   ├── services/              transaction use cases and saga transitions
-    │   │   │   └── handlers/              command and reply dispatchers, read endpoints
-    │   │   └── infrastructure/
-    │   │       ├── database/              Cassandra repositories and migrations
-    │   │       └── http/                  server, router, health, read handlers
-    │   ├── tests/  (unit/ · feature/ · integration/)
-    │   ├── Makefile · Dockerfile · docker-compose.yml · .air.toml
-    │   └── .env.example
-    ├── payment-service/
-    │   ├── cmd/main.go                    entry point
-    │   ├── migrations/                    numbered .cql files, applied at boot
-    │   ├── internal/
-    │   │   ├── config/                    env → typed Config
-    │   │   ├── contracts/                 interfaces for config, messaging and repositories
-    │   │   ├── app/
-    │   │   │   ├── models/                domain types
-    │   │   │   ├── services/              payment use cases and saga transitions
-    │   │   │   └── handlers/              command, reply and webhook dispatchers, read endpoints
-    │   │   └── infrastructure/
-    │   │       ├── database/              Cassandra repositories and migrations
-    │   │       ├── gateway/               sandbox provider simulator
-    │   │       └── http/                  server, router, health, read handlers
-    │   ├── tests/  (unit/ · feature/ · integration/)
-    │   ├── Makefile · Dockerfile · docker-compose.yml · .air.toml
-    │   └── .env.example
-    └── notification-service/
-        ├── cmd/main.go                    entry point
-        ├── internal/
-        │   ├── config/                    env → typed Config
-        │   ├── contracts/                 interfaces for config, messaging, senders and storage
-        │   ├── app/
-        │   │   ├── models/                domain types
-        │   │   ├── services/              routing, rendering and delivery, templates/
-        │   │   └── handlers/              history read endpoint
-        │   └── infrastructure/
-        │       ├── directory/             account service owner client, in-memory cache
-        │       ├── senders/               SMTP and sandbox SMS/push senders
-        │       ├── storage/               Redis client, idempotency store and history
-        │       └── http/                  server, router, health, history handler
-        ├── tests/  (unit/ · feature/ · integration/)
-        ├── Makefile · Dockerfile · docker-compose.yml · .air.toml
-        └── .env.example
+├── services/
+│   ├── api-gateway/
+│   │   ├── cmd/main.go                    entry point
+│   │   ├── internal/
+│   │   │   ├── config/                    env → typed Config
+│   │   │   ├── contracts/                 interfaces for config, context and http
+│   │   │   ├── app/handlers/              command endpoints
+│   │   │   └── infrastructure/
+│   │   │       ├── http/                  server, router, handlers, middleware/
+│   │   │       └── messaging/             kafka producer, circuit breaker
+│   │   ├── tests/  (unit/ · feature/ · integration/)     testify-style TestCase helpers
+│   │   ├── Makefile · Dockerfile · docker-compose.yml · .air.toml
+│   │   └── .env.example
+│   ├── account-service/
+│   │   ├── cmd/main.go                    entry point
+│   │   ├── migrations/                    numbered .cql files, applied at boot
+│   │   ├── internal/
+│   │   │   ├── config/                    env → typed Config
+│   │   │   ├── contracts/                 interfaces for config, messaging and repositories
+│   │   │   ├── app/
+│   │   │   │   ├── models/                domain types
+│   │   │   │   ├── services/              account and customer use cases
+│   │   │   │   └── handlers/              command dispatcher, DLQ, read endpoints
+│   │   │   └── infrastructure/
+│   │   │       ├── database/              Cassandra repositories and migrations
+│   │   │       └── http/                  server, router, health, read handlers
+│   │   ├── tests/  (unit/ · feature/ · integration/)
+│   │   ├── Makefile · Dockerfile · docker-compose.yml · .air.toml
+│   │   └── .env.example
+│   ├── transaction-service/
+│   │   ├── cmd/main.go                    entry point
+│   │   ├── migrations/                    numbered .cql files, applied at boot
+│   │   ├── internal/
+│   │   │   ├── config/                    env → typed Config
+│   │   │   ├── contracts/                 interfaces for config, messaging and repositories
+│   │   │   ├── app/
+│   │   │   │   ├── models/                domain types
+│   │   │   │   ├── services/              transaction use cases and saga transitions
+│   │   │   │   └── handlers/              command and reply dispatchers, read endpoints
+│   │   │   └── infrastructure/
+│   │   │       ├── database/              Cassandra repositories and migrations
+│   │   │       └── http/                  server, router, health, read handlers
+│   │   ├── tests/  (unit/ · feature/ · integration/)
+│   │   ├── Makefile · Dockerfile · docker-compose.yml · .air.toml
+│   │   └── .env.example
+│   ├── payment-service/
+│   │   ├── cmd/main.go                    entry point
+│   │   ├── migrations/                    numbered .cql files, applied at boot
+│   │   ├── internal/
+│   │   │   ├── config/                    env → typed Config
+│   │   │   ├── contracts/                 interfaces for config, messaging and repositories
+│   │   │   ├── app/
+│   │   │   │   ├── models/                domain types
+│   │   │   │   ├── services/              payment use cases and saga transitions
+│   │   │   │   └── handlers/              command, reply and webhook dispatchers, read endpoints
+│   │   │   └── infrastructure/
+│   │   │       ├── database/              Cassandra repositories and migrations
+│   │   │       ├── gateway/               sandbox provider simulator
+│   │   │       └── http/                  server, router, health, read handlers
+│   │   ├── tests/  (unit/ · feature/ · integration/)
+│   │   ├── Makefile · Dockerfile · docker-compose.yml · .air.toml
+│   │   └── .env.example
+│   └── notification-service/
+│       ├── cmd/main.go                    entry point
+│       ├── internal/
+│       │   ├── config/                    env → typed Config
+│       │   ├── contracts/                 interfaces for config, messaging, senders and storage
+│       │   ├── app/
+│       │   │   ├── models/                domain types
+│       │   │   ├── services/              routing, rendering and delivery, templates/
+│       │   │   └── handlers/              history read endpoint
+│       │   └── infrastructure/
+│       │       ├── directory/             account service owner client, in-memory cache
+│       │       ├── senders/               SMTP and sandbox SMS/push senders
+│       │       ├── storage/               Redis client, idempotency store and history
+│       │       └── http/                  server, router, health, history handler
+│       ├── tests/  (unit/ · feature/ · integration/)
+│       ├── Makefile · Dockerfile · docker-compose.yml · .air.toml
+│       └── .env.example
+└── tests/
+    ├── e2e/                    Go module (build tag e2e): accounts, transactions, payments, notifications
+    └── load/                   k6 scenarios (commands, reads, throughput) · README.md
 ```
 
 Each future service follows the same layout: `cmd/`, `internal/{config,contracts,infrastructure,app}` and `tests/`, with `migrations/` (CQL) for the ones that persist to Cassandra.
@@ -409,7 +439,7 @@ Each future service follows the same layout: `cmd/`, `internal/{config,contracts
 - [x] **Sprint 3 — Transaction Service** — deposits, withdrawals and transfers as sagas over the account service, idempotency keys, compensation, read API proxied by the gateway
 - [x] **Sprint 4 — Payment Service** — PIX, TED and boleto as sagas over the account service, sandbox provider with signed webhooks, refunds, read API proxied by the gateway
 - [x] **Sprint 5 — Notification Service** — e-mail, SMS and push from result events, templates, Redis-backed idempotency and history, proxied by the gateway
-- [ ] **Sprint 6** — end-to-end tests, load tests and a reconciliation sweeper for stuck transactions and payments
+- [x] **Sprint 6** — end-to-end tests, k6 load tests, idempotent balance operations and a reconciliation sweeper for stuck transactions and payments
 - [ ] **Sprint 7** — observability (Prometheus, Jaeger) and docs
 
 ## License
