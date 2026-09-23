@@ -13,14 +13,17 @@ import (
 
 func TestMapWriteErrorFlagsAmbiguousWrites(t *testing.T) {
 	cases := map[string]error{
-		"write timeout pointer": &gocql.RequestErrWriteTimeout{Consistency: gocql.Quorum, Received: 1, BlockFor: 2, WriteType: "SIMPLE"},
-		"write timeout value":   gocql.RequestErrWriteTimeout{Consistency: gocql.Quorum, Received: 1, BlockFor: 2, WriteType: "SIMPLE"},
-		"unavailable pointer":   &gocql.RequestErrUnavailable{Consistency: gocql.Quorum, Required: 2, Alive: 1},
-		"unavailable value":     gocql.RequestErrUnavailable{Consistency: gocql.Quorum, Required: 2, Alive: 1},
-		"wrapped":               fmt.Errorf("batch: %w", &gocql.RequestErrWriteTimeout{}),
-		"timeout no response":   gocql.ErrTimeoutNoResponse,
-		"context deadline":      fmt.Errorf("x: %w", context.DeadlineExceeded),
-		"context cancelled":     context.Canceled,
+		"write timeout pointer":     &gocql.RequestErrWriteTimeout{Consistency: gocql.Quorum, Received: 1, BlockFor: 2, WriteType: "SIMPLE"},
+		"write timeout value":       gocql.RequestErrWriteTimeout{Consistency: gocql.Quorum, Received: 1, BlockFor: 2, WriteType: "SIMPLE"},
+		"unavailable pointer":       &gocql.RequestErrUnavailable{Consistency: gocql.Quorum, Required: 2, Alive: 1},
+		"unavailable value":         gocql.RequestErrUnavailable{Consistency: gocql.Quorum, Required: 2, Alive: 1},
+		"cas write unknown pointer": &gocql.RequestErrCASWriteUnknown{Consistency: gocql.Serial, Received: 1, BlockFor: 2},
+		"cas write unknown value":   gocql.RequestErrCASWriteUnknown{Consistency: gocql.Serial, Received: 1, BlockFor: 2},
+		"wrapped cas write unknown": fmt.Errorf("lwt: %w", &gocql.RequestErrCASWriteUnknown{}),
+		"wrapped":                   fmt.Errorf("batch: %w", &gocql.RequestErrWriteTimeout{}),
+		"timeout no response":       gocql.ErrTimeoutNoResponse,
+		"context deadline":          fmt.Errorf("x: %w", context.DeadlineExceeded),
+		"context cancelled":         context.Canceled,
 	}
 
 	for name, err := range cases {
