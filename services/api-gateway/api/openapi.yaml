@@ -1030,8 +1030,8 @@ components:
           type: string
           minLength: 3
           maxLength: 3
-          pattern: '^[-+]?[0-9]+(?:\.[0-9]+)?$'
-          description: Three character numeric bank code (COMPE).
+          pattern: '^[0-9]{3}$'
+          description: Three digit numeric bank code (COMPE).
           examples: ['341']
         branch:
           type: string
@@ -1072,7 +1072,8 @@ components:
           type: string
           minLength: 1
           maxLength: 120
-          description: Name of the payee.
+          pattern: '\S'
+          description: Name of the payee. Whitespace-only values are rejected.
         pix_key:
           type: string
           description: |

@@ -13,7 +13,7 @@ import (
 )
 
 type tedRequest struct {
-	BankCode string `json:"bank_code" validate:"required,len=3,numeric"`
+	BankCode string `json:"bank_code" validate:"required,len=3,number"`
 	Branch   string `json:"branch" validate:"required,agency_number"`
 	Account  string `json:"account" validate:"required,account_number"`
 	Document string `json:"document" validate:"required,cpf|cnpj"`
@@ -77,6 +77,10 @@ func (h *PaymentHandler) Process(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := validate(req); err != nil {
 		response.FromError(w, err)
+		return
+	}
+	if strings.TrimSpace(req.Recipient) == "" {
+		response.FromError(w, errors.UnprocessableEntity("VALIDATION_ERROR", "request validation failed").WithDetail("recipient", "required"))
 		return
 	}
 	if field := req.missingMethodField(); field != "" {

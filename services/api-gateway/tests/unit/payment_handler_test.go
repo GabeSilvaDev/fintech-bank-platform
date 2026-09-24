@@ -141,6 +141,27 @@ func TestProcessBoletoPaymentRequiresBoletoCode(t *testing.T) {
 	assert.Empty(t, pub.Published)
 }
 
+func TestProcessPaymentRejectsWhitespaceRecipient(t *testing.T) {
+	pub := &tests.FakePublisher{}
+
+	rec, body := call(paymentRouter(pub), http.MethodPost, "/payments", paymentBody(tests.UUID(), "pix", `,"pix_key":"ana@example.com","recipient":"   "`))
+
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	assert.Equal(t, "VALIDATION_ERROR", errorCode(body))
+	assert.Equal(t, "required", errorDetails(body)["recipient"])
+	assert.Empty(t, pub.Published)
+}
+
+func TestProcessTedPaymentRejectsNonDigitBankCode(t *testing.T) {
+	pub := &tests.FakePublisher{}
+
+	rec, body := call(paymentRouter(pub), http.MethodPost, "/payments", paymentBody(tests.UUID(), "ted", `,"ted":{"bank_code":"-12","branch":"0001","account":"123456","document":"52998224725"}`))
+
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	assert.Equal(t, "number", errorDetails(body)["bank_code"])
+	assert.Empty(t, pub.Published)
+}
+
 func TestProcessPaymentReturnsPublisherError(t *testing.T) {
 	pub := &tests.FakePublisher{Err: apperrors.ServiceUnavailable("PUBLISH_FAILED", "down")}
 
