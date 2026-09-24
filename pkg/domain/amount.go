@@ -57,12 +57,15 @@ func (a Amount) Cents() int64 {
 func (a Amount) String() string {
 	cents := int64(a)
 	sign := ""
+	var u uint64
 	if cents < 0 {
 		sign = "-"
-		cents = -cents
+		u = uint64(-(cents + 1)) + 1
+	} else {
+		u = uint64(cents)
 	}
 
-	return fmt.Sprintf("%s%d.%02d", sign, cents/100, cents%100)
+	return fmt.Sprintf("%s%d.%02d", sign, u/100, u%100)
 }
 
 func (a Amount) IsPositive() bool {

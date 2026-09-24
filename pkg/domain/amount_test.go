@@ -2,6 +2,7 @@ package domain
 
 import (
 	"encoding/json"
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -20,6 +21,8 @@ func TestParseAmountValid(t *testing.T) {
 	}{
 		{"0", 0},
 		{"0.00", 0},
+		{"-0", 0},
+		{"-0.00", 0},
 		{"1", 100},
 		{"1.5", 150},
 		{"1.50", 150},
@@ -68,6 +71,11 @@ func TestAmountString(t *testing.T) {
 	assert.Equal(t, "-0.50", AmountFromCents(-50).String())
 	assert.Equal(t, "0.50", AmountFromCents(50).String())
 	assert.Equal(t, "19.99", AmountFromCents(1999).String())
+}
+
+func TestAmountStringExtremes(t *testing.T) {
+	assert.Equal(t, "-92233720368547758.08", AmountFromCents(math.MinInt64).String())
+	assert.Equal(t, "92233720368547758.07", AmountFromCents(math.MaxInt64).String())
 }
 
 func TestAmountIsPositive(t *testing.T) {
@@ -126,6 +134,10 @@ func TestAmountUnmarshalJSONNumber(t *testing.T) {
 	assert.Equal(t, "invalid_amount", InvalidCode(err))
 
 	err = json.Unmarshal([]byte(`10000000000001`), &a)
+	assert.True(t, IsInvalid(err))
+	assert.Equal(t, "invalid_amount", InvalidCode(err))
+
+	err = json.Unmarshal([]byte(`-10000000000001`), &a)
 	assert.True(t, IsInvalid(err))
 	assert.Equal(t, "invalid_amount", InvalidCode(err))
 }
