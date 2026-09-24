@@ -14,7 +14,7 @@ import (
 const (
 	DefaultDrainTimeout = 30 * time.Second
 	consumerLagName     = "kafka_consumer_lag"
-	consumerLagHelp     = "Messages the consumer group is behind the partition high watermark"
+	consumerLagHelp     = "Messages behind the high watermark on the partition of the latest fetched message"
 )
 
 type Reader interface {

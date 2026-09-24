@@ -593,7 +593,7 @@ func TestProcessRecordsDuplicateOutcome(t *testing.T) {
 func TestProcessRecordsDeadLetteredOutcome(t *testing.T) {
 	recorder := useRecorder(t)
 	h, m := newMeasuredProcessor()
-	h.dispatcher.Errs = []error{ErrUnknownCommand}
+	h.dispatcher.Errs = []error{ErrBadPayload}
 	cmd := command(map[string]string{"a": "1"})
 
 	assert.NoError(t, h.processor.Process(context.Background(), []byte("k"), encoded(cmd)))
@@ -601,7 +601,30 @@ func TestProcessRecordsDeadLetteredOutcome(t *testing.T) {
 	assert.Equal(t, float64(1), processedCount(m, "account.create", "dead_lettered"))
 	assert.Equal(t, float64(0), processedCount(m, "account.create", "ok"))
 	assert.Equal(t, float64(0), retriesCount(m, "account.create"))
-	assertFailedSpan(t, onlySpan(t, recorder), "unknown command")
+	span := onlySpan(t, recorder)
+	assert.Equal(t, "process account.create", span.Name())
+	assert.NotContains(t, spanAttributes(span), originalTypeKey)
+	assertFailedSpan(t, span, "bad payload")
+}
+
+func TestProcessRecordsUnknownCommandsAsUnknown(t *testing.T) {
+	recorder := useRecorder(t)
+	h, m := newMeasuredProcessor()
+	h.dispatcher.Errs = []error{fmt.Errorf("%w: account.explode", ErrUnknownCommand)}
+	cmd := events.NewEvent("account.explode", "test", map[string]string{"a": "1"})
+
+	assert.NoError(t, h.processor.Process(context.Background(), []byte("k"), encoded(cmd)))
+
+	assert.Equal(t, float64(1), processedCount(m, "unknown", "dead_lettered"))
+	assert.Equal(t, uint64(1), durationSamples(t, m, "unknown"))
+	assert.Equal(t, 1, testutil.CollectAndCount(m.Registry(), processedTotalName))
+	assert.Equal(t, 1, testutil.CollectAndCount(m.Registry(), processingDurationName))
+	assert.Equal(t, "unknown_command", h.publisher.byTopic("dlq")[0].Event.Payload.(events.ErrorPayload).ErrorCode)
+
+	span := onlySpan(t, recorder)
+	assert.Equal(t, "process unknown", span.Name())
+	assert.Equal(t, "account.explode", spanAttributes(span)[originalTypeKey])
+	assertFailedSpan(t, span, "unknown command")
 }
 
 func TestProcessRecordsInvalidEventsAsUnknown(t *testing.T) {
@@ -612,19 +635,22 @@ func TestProcessRecordsInvalidEventsAsUnknown(t *testing.T) {
 	assert.NoError(t, h.processor.Process(context.Background(), []byte("k"), []byte(`{}`)))
 	assert.NoError(t, h.processor.Process(context.Background(), []byte("k"), []byte(`{"id":"not-a-uuid","type":"account.create"}`)))
 
-	assert.Equal(t, float64(2), processedCount(m, "unknown", "dead_lettered"))
-	assert.Equal(t, float64(1), processedCount(m, "account.create", "dead_lettered"))
+	assert.Equal(t, float64(3), processedCount(m, "unknown", "dead_lettered"))
+	assert.Equal(t, 1, testutil.CollectAndCount(m.Registry(), processedTotalName))
 	assert.Len(t, h.publisher.byTopic("dlq"), 3)
 
 	spans := recorder.Ended()
 	require.Len(t, spans, 3)
 	assert.Equal(t, "process unknown", spans[0].Name())
 	assert.NotContains(t, spanAttributes(spans[0]), attribute.Key("messaging.message.id"))
+	assert.NotContains(t, spanAttributes(spans[0]), originalTypeKey)
 	assertFailedSpan(t, spans[0], "invalid character")
 	assert.Equal(t, "process unknown", spans[1].Name())
 	assert.NotContains(t, spanAttributes(spans[1]), attribute.Key("messaging.message.id"))
-	assert.Equal(t, "process account.create", spans[2].Name())
+	assert.NotContains(t, spanAttributes(spans[1]), originalTypeKey)
+	assert.Equal(t, "process unknown", spans[2].Name())
 	assert.Equal(t, "not-a-uuid", spanAttributes(spans[2])["messaging.message.id"])
+	assert.Equal(t, "account.create", spanAttributes(spans[2])[originalTypeKey])
 	assertFailedSpan(t, spans[2], "event id is not a uuid")
 }
 

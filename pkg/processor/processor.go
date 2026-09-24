@@ -33,6 +33,7 @@ const (
 	outcomeOK              = "ok"
 	outcomeDuplicate       = "duplicate"
 	outcomeDeadLettered    = "dead_lettered"
+	originalTypeKey        = attribute.Key("messaging.message.type_original")
 )
 
 var (
@@ -90,6 +91,7 @@ type outcome struct {
 	name     string
 	attempts int
 	cause    error
+	unknown  bool
 }
 
 func NewProcessor(dispatcher Dispatcher, store Store, publisher Publisher, cfg Config, log *logger.Logger) *Processor {
@@ -120,6 +122,10 @@ func (p *Processor) Process(ctx context.Context, key, value []byte) error {
 	)
 	defer span.End()
 
+	if eventType == unknownType {
+		recordOriginalType(span, cmd)
+	}
+
 	result, err := p.process(ctx, key, cmd, decodeErr)
 	if err != nil {
 		markFailed(span, err)
@@ -127,6 +133,11 @@ func (p *Processor) Process(ctx context.Context, key, value []byte) error {
 	}
 	if result.cause != nil {
 		markFailed(span, result.cause)
+	}
+	if result.unknown && eventType != unknownType {
+		eventType = unknownType
+		span.SetName("process " + unknownType)
+		recordOriginalType(span, cmd)
 	}
 
 	p.processed.WithLabelValues(eventType, result.name).Inc()
@@ -172,7 +183,7 @@ func (p *Processor) process(ctx context.Context, key []byte, cmd *events.Event, 
 	}
 	if err != nil {
 		p.deadLetter(ctx, key, cmd, errorCode(err), err.Error(), attempts)
-		return outcome{name: outcomeDeadLettered, attempts: attempts, cause: err}, nil
+		return outcome{name: outcomeDeadLettered, attempts: attempts, cause: err, unknown: errors.Is(err, ErrUnknownCommand)}, nil
 	}
 
 	var publishErr error
@@ -245,10 +256,16 @@ func (p *Processor) logUndeliverable(ctx context.Context, err error, event *even
 }
 
 func typeLabel(event *events.Event) string {
-	if event == nil || event.Type == "" {
+	if event == nil || event.Type == "" || uuid.Validate(event.ID) != nil {
 		return unknownType
 	}
 	return event.Type
+}
+
+func recordOriginalType(span trace.Span, event *events.Event) {
+	if event != nil && event.Type != "" {
+		span.SetAttributes(originalTypeKey.String(event.Type))
+	}
 }
 
 func markFailed(span trace.Span, err error) {
