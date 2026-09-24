@@ -16,8 +16,18 @@ import (
 
 const otherMethodName = "HTTP"
 
+var untracedPaths = map[string]bool{
+	"/health":  true,
+	"/metrics": true,
+}
+
 func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if untracedPaths[r.URL.Path] {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		name, methodAttrs := method(r.Method)
 		ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
 		ctx, span := Tracer().Start(ctx, name,

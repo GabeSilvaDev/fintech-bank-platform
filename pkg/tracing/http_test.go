@@ -35,6 +35,8 @@ func serveWith(middleware func(http.Handler) http.Handler, handler http.HandlerF
 	router := chi.NewRouter()
 	router.Use(middleware)
 	router.Get("/accounts/{id}", handler)
+	router.Get("/health", handler)
+	router.Get("/metrics", handler)
 
 	req := httptest.NewRequest(method, target, nil)
 	for key, values := range header {
@@ -257,4 +259,30 @@ func TestTransportCollapsesNonStandardMethods(t *testing.T) {
 	attrs := attributes(spans[0])
 	assert.Equal(t, "_OTHER", attrs["http.request.method"].AsString())
 	assert.Equal(t, "FOO", attrs["http.request.method_original"].AsString())
+}
+
+func TestMiddlewareSkipsHealthChecksAndScrapes(t *testing.T) {
+	for _, middleware := range []func(http.Handler) http.Handler{Middleware} {
+		for _, path := range []string{"/health", "/metrics"} {
+			recorder := useRecorder(t)
+
+			var traced bool
+			rec := serveWith(middleware, func(w http.ResponseWriter, r *http.Request) {
+				_, _, traced = IDs(r.Context())
+				w.WriteHeader(http.StatusOK)
+			}, http.MethodGet, path, http.Header{"Traceparent": {remoteTraceParent}})
+
+			assert.Equal(t, http.StatusOK, rec.Code, path)
+			assert.False(t, traced, path)
+			assert.Empty(t, recorder.Ended(), path)
+		}
+	}
+}
+
+func TestMiddlewareTracesPathsThatOnlyStartLikeHealth(t *testing.T) {
+	recorder := useRecorder(t)
+
+	serveWith(Middleware, func(w http.ResponseWriter, r *http.Request) {}, http.MethodGet, "/healthz", nil)
+
+	assert.Len(t, recorder.Ended(), 1)
 }
