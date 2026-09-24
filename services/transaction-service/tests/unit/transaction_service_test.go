@@ -128,6 +128,24 @@ func TestCreateValidation(t *testing.T) {
 	assert.Equal(t, "invalid_idempotency_key", domain.InvalidCode(err))
 }
 
+func TestCreateDescriptionCountsCharactersNotBytes(t *testing.T) {
+	h := newHarness()
+	cmd := deposit(uuid.NewString())
+	cmd.Description = strings.Repeat("á", 255)
+
+	_, err := h.service.Create(context.Background(), cmd, "t")
+
+	assert.NoError(t, err)
+
+	h = newHarness()
+	cmd = deposit(uuid.NewString())
+	cmd.Description = strings.Repeat("á", 256)
+
+	_, err = h.service.Create(context.Background(), cmd, "t")
+
+	assert.Equal(t, "invalid_description", domain.InvalidCode(err))
+}
+
 func TestCreateDuplicateKeyIsNoOp(t *testing.T) {
 	h := newHarness()
 	account := uuid.New()

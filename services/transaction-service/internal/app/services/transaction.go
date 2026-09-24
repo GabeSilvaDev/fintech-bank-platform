@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/fintech-bank-platform/pkg/events"
@@ -139,7 +140,7 @@ func parseMoney(amount float64, currency, key, description string) (int64, strin
 	if !validation.IsValidIdempotencyKey(key) {
 		return 0, "", domain.Invalid("invalid_idempotency_key", "idempotency_key must be 1 to 64 printable ASCII characters with no spaces")
 	}
-	if len(description) > maxDescriptionLen {
+	if utf8.RuneCountInString(description) > maxDescriptionLen {
 		return 0, "", domain.Invalid("invalid_description", "description must have at most 255 characters")
 	}
 	return cents, key, nil

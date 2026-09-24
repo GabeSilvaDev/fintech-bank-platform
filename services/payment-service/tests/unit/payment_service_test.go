@@ -163,6 +163,25 @@ func TestCreateValidation(t *testing.T) {
 	}
 }
 
+func TestCreateDescriptionCountsCharactersNotBytes(t *testing.T) {
+	account := uuid.NewString()
+	h := newHarness()
+	cmd := pix(account)
+	cmd.Description = strings.Repeat("á", 255)
+
+	_, err := h.service.Create(context.Background(), cmd, "t")
+
+	assert.NoError(t, err)
+
+	h = newHarness()
+	cmd = pix(account)
+	cmd.Description = strings.Repeat("á", 256)
+
+	_, err = h.service.Create(context.Background(), cmd, "t")
+
+	assert.Equal(t, "invalid_description", domain.InvalidCode(err))
+}
+
 func TestCreateDuplicateKeyIsNoOpAndIsScopedByAccount(t *testing.T) {
 	h := newHarness()
 	account := uuid.New()
