@@ -205,6 +205,9 @@ func TestOpenAPIDocumentProtectsEveryOperationButThePublicOnes(t *testing.T) {
 			assert.Nil(t, op.Security, operation)
 			assert.Contains(t, op.Responses, "401", operation)
 			assert.Contains(t, op.Responses, "403", operation)
+			if strings.HasPrefix(path, "/api/v1/accounts/{") {
+				assert.Contains(t, op.Responses, "404", operation)
+			}
 		}
 	}
 	assert.Equal(t, 13, protected)

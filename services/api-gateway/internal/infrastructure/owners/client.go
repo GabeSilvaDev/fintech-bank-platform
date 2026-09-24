@@ -78,10 +78,15 @@ func (c *Client) Owner(ctx context.Context, accountID uuid.UUID) (uuid.UUID, err
 	return userID, nil
 }
 
+const accountNotFoundCode = "ACCOUNT_NOT_FOUND"
+
 type ownerEnvelope struct {
 	Data struct {
 		UserID string `json:"user_id"`
 	} `json:"data"`
+	Error struct {
+		Code string `json:"code"`
+	} `json:"error"`
 }
 
 func (c *Client) fetch(ctx context.Context, accountID uuid.UUID) (uuid.UUID, error) {
@@ -97,17 +102,17 @@ func (c *Client) fetch(ctx context.Context, accountID uuid.UUID) (uuid.UUID, err
 	}
 	defer drain(resp.Body)
 
-	switch resp.StatusCode {
-	case http.StatusOK:
-	case http.StatusNotFound:
-		return uuid.Nil, contracts.ErrAccountNotFound
-	default:
-		return uuid.Nil, unavailable(fmt.Errorf("unexpected owner status %d", resp.StatusCode))
-	}
-
 	var payload ownerEnvelope
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(&payload); err != nil {
-		return uuid.Nil, unavailable(err)
+	decodeErr := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(&payload)
+
+	if resp.StatusCode == http.StatusNotFound && payload.Error.Code == accountNotFoundCode {
+		return uuid.Nil, contracts.ErrAccountNotFound
+	}
+	if resp.StatusCode != http.StatusOK {
+		return uuid.Nil, unavailable(fmt.Errorf("unexpected owner status %d (%q)", resp.StatusCode, payload.Error.Code))
+	}
+	if decodeErr != nil {
+		return uuid.Nil, unavailable(decodeErr)
 	}
 	userID, err := uuid.Parse(payload.Data.UserID)
 	if err != nil {

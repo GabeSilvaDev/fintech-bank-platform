@@ -162,6 +162,8 @@ func TestOwnerClientReportsUnexpectedAnswersAsBadGateway(t *testing.T) {
 		body   string
 	}{
 		"server error":    {http.StatusInternalServerError, `{"success":false}`},
+		"other not found": {http.StatusNotFound, `{"success":false,"error":{"code":"NOT_FOUND","message":"route not found"}}`},
+		"bare not found":  {http.StatusNotFound, `404 page not found`},
 		"redirect":        {http.StatusFound, ``},
 		"invalid json":    {http.StatusOK, `{"success":`},
 		"invalid user id": {http.StatusOK, `{"success":true,"data":{"user_id":"nope"}}`},

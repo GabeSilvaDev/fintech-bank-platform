@@ -126,6 +126,6 @@ func (s *AccountsTestSuite) TestAccountsRejectUnsupportedMethods() {
 }
 
 func (s *AccountsTestSuite) TestReadRoutesAreProxied() {
-	s.Get("/api/v1/accounts/" + tests.UUID()).AssertStatus(502).AssertErrorCode("UPSTREAM_UNAVAILABLE")
+	s.Get("/api/v1/accounts/" + s.OwnedAccount()).AssertStatus(502).AssertErrorCode("UPSTREAM_UNAVAILABLE")
 	s.Get("/api/v1/users/" + s.UserID.String() + "/accounts").AssertStatus(502)
 }

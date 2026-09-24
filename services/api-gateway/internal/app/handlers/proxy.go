@@ -42,7 +42,7 @@ func newReadProxy(upstream *url.URL, serviceName string, release func(*http.Resp
 	}
 	proxy.ModifyResponse = func(resp *http.Response) error {
 		resp.Header.Del(middleware.RequestIDHeader)
-		if release == nil || resp.StatusCode != http.StatusOK {
+		if release == nil || resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 			return nil
 		}
 		return release(resp)

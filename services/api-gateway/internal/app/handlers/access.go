@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 
 	"github.com/fintech-bank-platform/api-gateway/internal/contracts"
 	"github.com/fintech-bank-platform/api-gateway/internal/infrastructure/auth"
@@ -50,12 +51,13 @@ func (g *AccessGuard) RequireSelf(param string) func(http.Handler) http.Handler 
 func (g *AccessGuard) RequireAccountOwner(param string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			accountID, err := uuid.Parse(chi.URLParam(r, param))
+			decoded, _ := url.PathUnescape(chi.URLParam(r, param))
+			accountID, err := uuid.Parse(decoded)
 			if err != nil {
 				next.ServeHTTP(w, r)
 				return
 			}
-			if err := g.checkOwner(r.Context(), accountID); err != nil && !errors.Is(err, contracts.ErrAccountNotFound) {
+			if err := g.authorize(r.Context(), accountID); err != nil {
 				response.FromError(w, err)
 				return
 			}
@@ -69,8 +71,11 @@ func (g *AccessGuard) AuthorizeAccount(ctx context.Context, rawAccountID string)
 	if err != nil {
 		return forbidden()
 	}
+	return g.authorize(ctx, accountID)
+}
 
-	err = g.checkOwner(ctx, accountID)
+func (g *AccessGuard) authorize(ctx context.Context, accountID uuid.UUID) error {
+	err := g.checkOwner(ctx, accountID)
 	if errors.Is(err, contracts.ErrAccountNotFound) {
 		return apperrors.NotFound("ACCOUNT_NOT_FOUND", "account not found")
 	}

@@ -1,6 +1,7 @@
 package feature
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -11,6 +12,7 @@ import (
 	"github.com/fintech-bank-platform/api-gateway/tests"
 	apperrors "github.com/fintech-bank-platform/pkg/errors"
 	"github.com/fintech-bank-platform/pkg/events"
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/suite"
 )
@@ -135,15 +137,56 @@ func (s *AuthorizationTestSuite) TestAccountScopedReadsAreLimitedToTheOwner() {
 	s.Equal([]string{"/accounts/" + own, "/accounts/" + own + "/transactions", "/accounts/" + own + "/payments"}, s.upstream.served())
 }
 
-func (s *AuthorizationTestSuite) TestAccountScopedReadsOfAnUnknownAccountKeepTheServiceAnswer() {
+func (s *AuthorizationTestSuite) TestAccountScopedReadsOfAnUnknownAccountAreNotFound() {
 	unknown := tests.UUID()
-	s.upstream.reply("/accounts/"+unknown, http.StatusNotFound, `{"success":false,"error":{"code":"ACCOUNT_NOT_FOUND","message":"account not found"}}`)
 
-	s.Get("/api/v1/accounts/" + unknown).AssertNotFound().AssertErrorCode("ACCOUNT_NOT_FOUND")
-	s.Get("/api/v1/accounts/" + unknown + "/transactions").AssertOk()
-	s.Get("/api/v1/accounts/" + unknown + "/payments").AssertOk()
+	for _, suffix := range []string{"", "/transactions", "/payments"} {
+		s.Get("/api/v1/accounts/" + unknown + suffix).
+			AssertNotFound().
+			AssertErrorCode("ACCOUNT_NOT_FOUND").
+			AssertErrorMessage("account not found")
+	}
 
+	s.Empty(s.upstream.served())
 	s.Equal([]uuid.UUID{uuid.MustParse(unknown), uuid.MustParse(unknown), uuid.MustParse(unknown)}, s.Owners.Lookups)
+}
+
+func (s *AuthorizationTestSuite) TestPercentEncodedAccountIDsNeverReachAnotherUsersData() {
+	foreign := s.ForeignAccount()
+	own := s.OwnedAccount()
+	service := chi.NewRouter()
+	answer := func(param string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			accountID, err := uuid.Parse(chi.URLParam(r, param))
+			if err != nil {
+				writeJSON(w, http.StatusUnprocessableEntity, `{"success":false,"error":{"code":"VALIDATION_ERROR","message":"request validation failed","details":{"`+param+`":"uuid"}}}`)
+				return
+			}
+			writeJSON(w, http.StatusOK, `{"success":true,"data":{"account_id":"`+accountID.String()+`"}}`)
+		}
+	}
+	service.Get("/accounts/{id}", answer("id"))
+	service.Get("/accounts/{account_id}/transactions", answer("account_id"))
+	service.Get("/accounts/{account_id}/payments", answer("account_id"))
+	server := httptest.NewServer(service)
+	defer server.Close()
+	s.Rebuild(func(_ *config.Config, deps *appHttp.Dependencies) {
+		deps.AccountService = tests.MustURL(server.URL)
+		deps.TransactionService = tests.MustURL(server.URL)
+		deps.PaymentService = tests.MustURL(server.URL)
+	})
+	encode := func(accountID string) string {
+		return fmt.Sprintf("%%%x", accountID[0]) + accountID[1:]
+	}
+
+	for _, suffix := range []string{"", "/transactions", "/payments"} {
+		s.assertForbidden(s.Get("/api/v1/accounts/" + encode(foreign) + suffix))
+		s.Get("/api/v1/accounts/" + encode(own) + suffix).AssertUnprocessableEntity()
+	}
+	s.Patch("/api/v1/accounts/"+encode(foreign), map[string]string{"status": "blocked"}).AssertUnprocessableEntity()
+	s.Delete("/api/v1/accounts/" + encode(foreign)).AssertUnprocessableEntity()
+
+	s.Empty(s.Publisher.Published)
 }
 
 func (s *AuthorizationTestSuite) TestAccountScopedReadsWithAnInvalidIDKeepTheServiceValidation() {

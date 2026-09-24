@@ -2,6 +2,7 @@ package unit
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -111,7 +112,7 @@ func TestRequireSelfNeedsAnAuthenticatedCaller(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, serve(router, "/users/"+tests.UUID()).Code)
 }
 
-func TestRequireAccountOwnerLetsTheServiceAnswerUnknownAndInvalidAccounts(t *testing.T) {
+func TestRequireAccountOwnerRefusesUnknownAccountsAndLetsTheServiceValidateInvalidIDs(t *testing.T) {
 	userID := uuid.New()
 	owners := tests.NewFakeOwners()
 	own := owners.Own(tests.UUID(), userID)
@@ -120,9 +121,12 @@ func TestRequireAccountOwnerLetsTheServiceAnswerUnknownAndInvalidAccounts(t *tes
 
 	assert.Equal(t, http.StatusNoContent, serve(router, "/accounts/"+own).Code)
 	assert.Equal(t, http.StatusForbidden, serve(router, "/accounts/"+foreign).Code)
-	assert.Equal(t, http.StatusNoContent, serve(router, "/accounts/"+tests.UUID()).Code)
+	assert.Equal(t, http.StatusForbidden, serve(router, "/accounts/%"+fmt.Sprintf("%x", foreign[0])+foreign[1:]).Code)
+	unknown := serve(router, "/accounts/"+tests.UUID())
+	assert.Equal(t, http.StatusNotFound, unknown.Code)
+	assert.Equal(t, "ACCOUNT_NOT_FOUND", errorCode(tests.FromJson(unknown.Body.String())))
 	assert.Equal(t, http.StatusNoContent, serve(router, "/accounts/not-a-uuid").Code)
-	assert.Len(t, owners.Lookups, 3)
+	assert.Len(t, owners.Lookups, 4)
 
 	owners.Err = apperrors.New("UPSTREAM_UNAVAILABLE", "account service is unavailable", http.StatusBadGateway)
 	assert.Equal(t, http.StatusBadGateway, serve(router, "/accounts/"+own).Code)
@@ -306,4 +310,27 @@ func TestGuardedReadAnswers502WhenTheServiceIsDown(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadGateway, rec.Code)
 	assert.Equal(t, "transaction service is unavailable", tests.FromJson(rec.Body.String())["error"].(map[string]interface{})["message"])
+}
+
+func TestGuardedReadInspectsEverySuccessfulAnswer(t *testing.T) {
+	userID := uuid.New()
+	owners := tests.NewFakeOwners()
+	own := owners.Own(tests.UUID(), userID)
+	foreign := owners.Own(tests.UUID(), uuid.New())
+	ownBody := `{"success":true,"data":{"account_id":"` + own + `"}}`
+
+	rec := guardedGet(guardedReadRouter(t, &guardedUpstream{status: http.StatusNonAuthoritativeInfo, body: ownBody}, owners, &userID))
+	assert.Equal(t, http.StatusNonAuthoritativeInfo, rec.Code)
+	assert.Equal(t, ownBody, rec.Body.String())
+
+	for _, status := range []int{http.StatusCreated, http.StatusAccepted, http.StatusPartialContent, 299} {
+		body := `{"success":true,"data":{"account_id":"` + foreign + `"}}`
+		rec := guardedGet(guardedReadRouter(t, &guardedUpstream{status: status, body: body}, owners, &userID))
+
+		assert.Equal(t, http.StatusForbidden, rec.Code, status)
+		assert.NotContains(t, rec.Body.String(), foreign)
+	}
+
+	redirect := guardedGet(guardedReadRouter(t, &guardedUpstream{status: http.StatusMultipleChoices, body: `{"success":false}`}, owners, &userID))
+	assert.Equal(t, http.StatusMultipleChoices, redirect.Code)
 }

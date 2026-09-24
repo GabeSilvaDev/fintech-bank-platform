@@ -274,7 +274,7 @@ paths:
       summary: Get an account
       description: |
         Proxied to the account service. Only the owner of the account may read it: another user's account answers
-        `403`, while an unknown account keeps the account service's `404`.
+        `403` and an unknown account `404` (`ACCOUNT_NOT_FOUND`), both without reaching the account service.
       parameters:
         - $ref: '#/components/parameters/RequestId'
       responses:
@@ -292,19 +292,7 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
-          description: No account has this id (`ACCOUNT_NOT_FOUND`).
-          headers:
-            X-Request-ID:
-              $ref: '#/components/headers/XRequestID'
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorEnvelope'
-              example:
-                success: false
-                error:
-                  code: ACCOUNT_NOT_FOUND
-                  message: account not found
+          $ref: '#/components/responses/AccountNotFound'
         '422':
           $ref: '#/components/responses/InvalidPathId'
         '429':
@@ -448,7 +436,8 @@ paths:
       summary: List the transactions of an account
       description: |
         Proxied to the transaction service. Newest first. Includes balances as seen from `account_id`. Only the owner
-        of the account may list its transactions; another user's account answers `403`.
+        of the account may list its transactions: another user's account answers `403` and an unknown account `404`
+        (`ACCOUNT_NOT_FOUND`).
       parameters:
         - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/LedgerLimit'
@@ -469,6 +458,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AccountNotFound'
         '422':
           $ref: '#/components/responses/InvalidListQuery'
         '429':
@@ -616,8 +607,8 @@ paths:
       operationId: listAccountPayments
       summary: List the payments of an account
       description: |
-        Proxied to the payment service. Newest first. Only the owner of the account may list its payments; another
-        user's account answers `403`.
+        Proxied to the payment service. Newest first. Only the owner of the account may list its payments: another
+        user's account answers `403` and an unknown account `404` (`ACCOUNT_NOT_FOUND`).
       parameters:
         - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/LedgerLimit'
@@ -638,6 +629,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AccountNotFound'
         '422':
           $ref: '#/components/responses/InvalidListQuery'
         '429':

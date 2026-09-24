@@ -424,7 +424,69 @@ func TestSetupRouterStartsNewTraceForClientTraceContext(t *testing.T) {
 	assert.Empty(t, upstreamHeader.Get("baggage"))
 }
 
-func TestEveryRouteButThePublicOnesRequiresAToken(t *testing.T) {
+type accessRule string
+
+const (
+	ruleSelf          accessRule = "self"
+	ruleAccountPath   accessRule = "account in path"
+	ruleGuardedRead   accessRule = "guarded read"
+	ruleAccountBody   accessRule = "account in body"
+	ruleCreateForSelf accessRule = "create for self"
+)
+
+var protectedRoutes = map[string]accessRule{
+	"POST /api/v1/accounts":                          ruleCreateForSelf,
+	"PATCH /api/v1/accounts/{id}":                    ruleAccountPath,
+	"DELETE /api/v1/accounts/{id}":                   ruleAccountPath,
+	"GET /api/v1/accounts/{id}":                      ruleAccountPath,
+	"GET /api/v1/users/{user_id}/accounts":           ruleSelf,
+	"GET /api/v1/accounts/{account_id}/transactions": ruleAccountPath,
+	"POST /api/v1/transactions":                      ruleAccountBody,
+	"POST /api/v1/transfers":                         ruleAccountBody,
+	"GET /api/v1/transactions/{id}":                  ruleGuardedRead,
+	"GET /api/v1/accounts/{account_id}/payments":     ruleAccountPath,
+	"POST /api/v1/payments":                          ruleAccountBody,
+	"GET /api/v1/payments/{id}":                      ruleGuardedRead,
+	"GET /api/v1/users/{user_id}/notifications":      ruleSelf,
+}
+
+var publicRoutes = map[string]bool{
+	"GET /health":                true,
+	"GET /metrics":               true,
+	"GET /api/v1/openapi.yaml":   true,
+	"POST /api/v1/auth/register": true,
+	"POST /api/v1/auth/login":    true,
+}
+
+func accountBody(route, accountID string) string {
+	switch route {
+	case "POST /api/v1/transfers":
+		return `{"from_account_id":"` + accountID + `","to_account_id":"` + uuid.NewString() + `","amount":"1.00","currency":"BRL","idempotency_key":"k-1"}`
+	case "POST /api/v1/payments":
+		return `{"account_id":"` + accountID + `","payment_method":"pix","amount":"1.00","currency":"BRL","recipient":"Loja","pix_key":"11999887766","idempotency_key":"k-1"}`
+	case "PATCH /api/v1/accounts/{id}":
+		return `{"status":"blocked"}`
+	}
+	return `{"account_id":"` + accountID + `","type":"deposit","amount":"1.00","currency":"BRL","idempotency_key":"k-1"}`
+}
+
+type ruleHarness struct {
+	router  http.Handler
+	userID  uuid.UUID
+	owners  *tests.FakeOwners
+	foreign string
+}
+
+func newRuleHarness(t *testing.T, metricsName string) *ruleHarness {
+	t.Helper()
+	h := &ruleHarness{userID: uuid.New(), owners: tests.NewFakeOwners()}
+	h.foreign = h.owners.Own(uuid.NewString(), uuid.New())
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true,"data":{"account_id":"` + h.foreign + `"}}`))
+	}))
+	t.Cleanup(upstream.Close)
+
 	router := chi.NewRouter()
 	cfg := &config.Config{
 		CORS:          contracts.CORSConfig{AllowedOrigins: []string{"*"}, AllowedMethods: []string{"GET"}},
@@ -433,40 +495,84 @@ func TestEveryRouteButThePublicOnesRequiresAToken(t *testing.T) {
 		Auth:          tests.AuthConfig(),
 	}
 	deps := testDependencies()
-	deps.Metrics = metrics.New("test-router-requires-token")
+	deps.Metrics = metrics.New(metricsName)
+	deps.Owners = h.owners
+	target, _ := url.Parse(upstream.URL)
+	deps.AccountService, deps.TransactionService, deps.PaymentService, deps.NotificationService = target, target, target, target
 	appHttp.SetupRouter(router, cfg, deps)
+	h.router = router
+	return h
+}
 
-	public := map[string]bool{
-		"GET /health":                true,
-		"GET /metrics":               true,
-		"GET /api/v1/openapi.yaml":   true,
-		"POST /api/v1/auth/register": true,
-		"POST /api/v1/auth/login":    true,
+func (h *ruleHarness) do(method, path, body string, authenticated bool) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	if authenticated {
+		req.Header.Set("Authorization", tests.BearerToken(h.userID))
 	}
-	id := uuid.NewString()
-	var protected []string
-	err := chi.Walk(router, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
-		route = normaliseRoute(route)
-		if public[method+" "+route] {
+	rec := httptest.NewRecorder()
+	h.router.ServeHTTP(rec, req)
+	return rec
+}
+
+func (h *ruleHarness) assertRule(t *testing.T, operation string, rule accessRule) {
+	t.Helper()
+	method, route, _ := strings.Cut(operation, " ")
+	unknown := uuid.NewString()
+	withID := func(id string) string { return routeParamRegexp.ReplaceAllString(route, id) }
+
+	var denied, missing *httptest.ResponseRecorder
+	switch rule {
+	case ruleSelf:
+		denied = h.do(method, withID(uuid.NewString()), "", true)
+	case ruleAccountPath:
+		denied = h.do(method, withID(h.foreign), accountBody(operation, h.foreign), true)
+		missing = h.do(method, withID(unknown), accountBody(operation, unknown), true)
+	case ruleGuardedRead:
+		denied = h.do(method, withID("t-1"), "", true)
+	case ruleAccountBody:
+		denied = h.do(method, route, accountBody(operation, h.foreign), true)
+		missing = h.do(method, route, accountBody(operation, unknown), true)
+	case ruleCreateForSelf:
+		denied = h.do(method, route, `{"user_id":"`+uuid.NewString()+`","account_type":"checking","name":"Ana Souza","email":"ana@example.com","document":"52998224725"}`, true)
+	default:
+		t.Fatalf("%s has no access rule", operation)
+	}
+
+	assert.Equal(t, http.StatusForbidden, denied.Code, operation)
+	assert.Equal(t, "FORBIDDEN", errorCode(tests.FromJson(denied.Body.String())), operation)
+	if missing != nil {
+		assert.Equal(t, http.StatusNotFound, missing.Code, operation)
+		assert.Equal(t, "ACCOUNT_NOT_FOUND", errorCode(tests.FromJson(missing.Body.String())), operation)
+	}
+}
+
+func TestEveryProtectedRouteRequiresATokenAndHasAnAccessRule(t *testing.T) {
+	h := newRuleHarness(t, "test-router-access-rules")
+
+	seen := make(map[string]bool)
+	err := chi.Walk(h.router.(*chi.Mux), func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		operation := method + " " + normaliseRoute(route)
+		if publicRoutes[operation] {
 			return nil
 		}
-		protected = append(protected, method+" "+route)
-		path := routeParamRegexp.ReplaceAllString(route, id)
-		for _, candidate := range []string{path, path + "/"} {
-			req := httptest.NewRequest(method, candidate, strings.NewReader("{}"))
-			rec := httptest.NewRecorder()
-			router.ServeHTTP(rec, req)
+		seen[operation] = true
+		rule, ok := protectedRoutes[operation]
+		if !assert.True(t, ok, "%s is protected but has no access rule in the table", operation) {
+			return nil
+		}
 
+		path := routeParamRegexp.ReplaceAllString(normaliseRoute(route), uuid.NewString())
+		for _, candidate := range []string{path, path + "/"} {
+			rec := h.do(method, candidate, "{}", false)
 			assert.Equal(t, http.StatusUnauthorized, rec.Code, method+" "+candidate)
 			assert.Equal(t, "Bearer", rec.Header().Get("WWW-Authenticate"), method+" "+candidate)
 		}
+
+		h.assertRule(t, operation, rule)
 		return nil
 	})
-	require.NoError(t, err)
-	assert.Len(t, protected, 13)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/"+id+"/", nil)
-	rec := httptest.NewRecorder()
-	router.ServeHTTP(rec, req)
-	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	require.NoError(t, err)
+	assert.Len(t, seen, len(protectedRoutes))
 }

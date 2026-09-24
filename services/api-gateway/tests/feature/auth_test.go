@@ -143,7 +143,8 @@ func (s *AuthTestSuite) TestLoginIssuesAWorkingToken() {
 		AssertJsonMissing("data.user_id")
 
 	token := response.Json()["data"].(map[string]interface{})["access_token"].(string)
-	s.WithToken(token).Get("/api/v1/accounts/" + tests.UUID()).AssertOk()
+	accountID := s.Owners.Own(tests.UUID(), s.accounts.identities[email].userID)
+	s.WithToken(token).Get("/api/v1/accounts/" + accountID).AssertOk()
 }
 
 func (s *AuthTestSuite) TestRegisterTwiceIsAConflict() {
@@ -217,7 +218,7 @@ func (s *AuthTestSuite) TestAuthRoutesShareAStricterRateLimit() {
 
 	s.Equal(3, s.accounts.calls)
 	s.Get("/health").AssertOk()
-	s.ActingAs(uuid.New()).Get("/api/v1/accounts/" + tests.UUID()).AssertOk()
+	s.ActingAs(uuid.New()).Get("/api/v1/accounts/" + s.OwnedAccount()).AssertOk()
 }
 
 func (s *AuthTestSuite) TestAuthRoutesDoNotRequireAToken() {
