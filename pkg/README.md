@@ -155,7 +155,7 @@ router.Use(middleware.RequestID, middleware.Logger(log), middleware.Recovery(log
 requestID := middleware.GetRequestID(r.Context())
 ```
 
-`Logger` adds `otel_trace_id` and `otel_span_id` to the request log line when the request context carries a span, so mount `tracing.Middleware` outside it. `Recovery(log)` logs a panic at error level (`panic`, `stack`, `request_id`, `method`, `path`, and the trace ids when present) with `handler panicked`, then answers the JSON error envelope with a 500 `INTERNAL_ERROR` unless the handler already wrote a response; `http.ErrAbortHandler` re-panics instead of being swallowed, and a `nil` logger falls back to `logger.NewDefault()`.
+`Logger` adds `otel_trace_id` and `otel_span_id` to the request log line when the request context carries a span, so mount `tracing.Middleware` outside it; likewise it adds `client_ip` when a chi `ClientIPFrom*` middleware mounted outside it resolved the client address, next to the TCP peer in `remote_addr`. `Recovery(log)` logs a panic at error level (`panic`, `stack`, `request_id`, `method`, `path`, and the trace ids when present) with `handler panicked`, then answers the JSON error envelope with a 500 `INTERNAL_ERROR` unless the handler already wrote a response; `http.ErrAbortHandler` re-panics instead of being swallowed, and a `nil` logger falls back to `logger.NewDefault()`.
 
 ## messaging
 
