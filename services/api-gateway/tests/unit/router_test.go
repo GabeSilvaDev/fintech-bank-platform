@@ -300,12 +300,19 @@ func TestSetupRouterMountsCommandRoutes(t *testing.T) {
 		assert.Equal(t, http.StatusUnprocessableEntity, rec.Code, path)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/x", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/"+tests.UUID(), nil)
 	req.Header.Set("Authorization", tests.BearerToken(uuid.New()))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusBadGateway, rec.Code)
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/accounts/x", nil)
+	req.Header.Set("Authorization", tests.BearerToken(uuid.New()))
+	rec = httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
 }
 
 func TestSetupRouterServesMetricsWhenEnabled(t *testing.T) {
@@ -361,11 +368,13 @@ func TestSetupRouterRecordsRoutePatternForProxiedReads(t *testing.T) {
 	deps.Metrics = m
 	accountService, _ := url.Parse(upstream.URL)
 	deps.AccountService = accountService
+	userID := uuid.New()
+	deps.Owners = tests.OwnedBy(userID)
 
 	appHttp.SetupRouter(router, cfg, deps)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/abc", nil)
-	req.Header.Set("Authorization", tests.BearerToken(uuid.New()))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/"+tests.UUID(), nil)
+	req.Header.Set("Authorization", tests.BearerToken(userID))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -395,11 +404,13 @@ func TestSetupRouterStartsNewTraceForClientTraceContext(t *testing.T) {
 	deps := testDependencies()
 	accountService, _ := url.Parse(upstream.URL)
 	deps.AccountService = accountService
+	userID := uuid.New()
+	deps.Owners = tests.OwnedBy(userID)
 
 	appHttp.SetupRouter(router, cfg, deps)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/abc", nil)
-	req.Header.Set("Authorization", tests.BearerToken(uuid.New()))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/"+tests.UUID(), nil)
+	req.Header.Set("Authorization", tests.BearerToken(userID))
 	req.Header.Set("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
 	req.Header.Set("tracestate", "vendor=value")
 	req.Header.Set("baggage", "user_id=attacker")

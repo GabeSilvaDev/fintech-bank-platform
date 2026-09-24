@@ -12,7 +12,6 @@ import (
 	"github.com/fintech-bank-platform/api-gateway/tests"
 	apperrors "github.com/fintech-bank-platform/pkg/errors"
 	"github.com/fintech-bank-platform/pkg/events"
-	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/suite"
 )
@@ -154,48 +153,36 @@ func (s *AuthorizationTestSuite) TestAccountScopedReadsOfAnUnknownAccountAreNotF
 func (s *AuthorizationTestSuite) TestPercentEncodedAccountIDsNeverReachAnotherUsersData() {
 	foreign := s.ForeignAccount()
 	own := s.OwnedAccount()
-	service := chi.NewRouter()
-	answer := func(param string) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			accountID, err := uuid.Parse(chi.URLParam(r, param))
-			if err != nil {
-				writeJSON(w, http.StatusUnprocessableEntity, `{"success":false,"error":{"code":"VALIDATION_ERROR","message":"request validation failed","details":{"`+param+`":"uuid"}}}`)
-				return
-			}
-			writeJSON(w, http.StatusOK, `{"success":true,"data":{"account_id":"`+accountID.String()+`"}}`)
-		}
-	}
-	service.Get("/accounts/{id}", answer("id"))
-	service.Get("/accounts/{account_id}/transactions", answer("account_id"))
-	service.Get("/accounts/{account_id}/payments", answer("account_id"))
-	server := httptest.NewServer(service)
-	defer server.Close()
-	s.Rebuild(func(_ *config.Config, deps *appHttp.Dependencies) {
-		deps.AccountService = tests.MustURL(server.URL)
-		deps.TransactionService = tests.MustURL(server.URL)
-		deps.PaymentService = tests.MustURL(server.URL)
-	})
 	encode := func(accountID string) string {
 		return fmt.Sprintf("%%%x", accountID[0]) + accountID[1:]
 	}
 
-	for _, suffix := range []string{"", "/transactions", "/payments"} {
-		s.assertForbidden(s.Get("/api/v1/accounts/" + encode(foreign) + suffix))
-		s.Get("/api/v1/accounts/" + encode(own) + suffix).AssertUnprocessableEntity()
+	for _, route := range []struct{ suffix, param string }{{"", "id"}, {"/transactions", "account_id"}, {"/payments", "account_id"}} {
+		s.assertForbidden(s.Get("/api/v1/accounts/" + encode(foreign) + route.suffix))
+		s.Get("/api/v1/accounts/" + encode(own) + route.suffix).
+			AssertUnprocessableEntity().
+			AssertErrorCode("VALIDATION_ERROR").
+			AssertJsonPath("error.details."+route.param, "uuid")
+		s.Get("/api/v1/accounts/" + encode(tests.UUID()) + route.suffix).AssertNotFound().AssertErrorCode("ACCOUNT_NOT_FOUND")
+		s.Get("/api/v1/accounts/not%2Da-uuid" + route.suffix).AssertUnprocessableEntity().AssertJsonPath("error.details."+route.param, "uuid")
 	}
 	s.Patch("/api/v1/accounts/"+encode(foreign), map[string]string{"status": "blocked"}).AssertUnprocessableEntity()
 	s.Delete("/api/v1/accounts/" + encode(foreign)).AssertUnprocessableEntity()
 
+	s.Empty(s.upstream.served())
 	s.Empty(s.Publisher.Published)
 }
 
-func (s *AuthorizationTestSuite) TestAccountScopedReadsWithAnInvalidIDKeepTheServiceValidation() {
-	s.upstream.reply("/accounts/not-a-uuid/transactions", http.StatusUnprocessableEntity, `{"success":false,"error":{"code":"VALIDATION_ERROR","message":"request validation failed","details":{"account_id":"uuid"}}}`)
+func (s *AuthorizationTestSuite) TestAccountScopedReadsRejectUnparseableIDsAtTheGateway() {
+	for _, route := range []struct{ suffix, param string }{{"", "id"}, {"/transactions", "account_id"}, {"/payments", "account_id"}} {
+		s.Get("/api/v1/accounts/not-a-uuid" + route.suffix).
+			AssertUnprocessableEntity().
+			AssertErrorCode("VALIDATION_ERROR").
+			AssertErrorMessage("request validation failed").
+			AssertJsonPath("error.details."+route.param, "uuid")
+	}
 
-	s.Get("/api/v1/accounts/not-a-uuid/transactions").
-		AssertUnprocessableEntity().
-		AssertJsonPath("error.details.account_id", "uuid")
-
+	s.Empty(s.upstream.served())
 	s.Empty(s.Owners.Lookups)
 }
 

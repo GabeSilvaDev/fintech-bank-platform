@@ -86,6 +86,7 @@ func guardedRouter(guard *handlers.AccessGuard, userID *uuid.UUID) http.Handler 
 	reached := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
 	r.With(guard.RequireSelf("user_id")).Get("/users/{user_id}", reached)
 	r.With(guard.RequireAccountOwner("id")).Get("/accounts/{id}", reached)
+	r.With(guard.RequireAccountOwner("account_id")).Get("/accounts/{account_id}/items", reached)
 	return r
 }
 
@@ -112,24 +113,57 @@ func TestRequireSelfNeedsAnAuthenticatedCaller(t *testing.T) {
 	assert.Equal(t, http.StatusForbidden, serve(router, "/users/"+tests.UUID()).Code)
 }
 
-func TestRequireAccountOwnerRefusesUnknownAccountsAndLetsTheServiceValidateInvalidIDs(t *testing.T) {
+func assertInvalidAccountID(t *testing.T, rec *httptest.ResponseRecorder, param string) {
+	t.Helper()
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	errorBody := tests.FromJson(rec.Body.String())["error"].(map[string]interface{})
+	assert.Equal(t, "VALIDATION_ERROR", errorBody["code"])
+	assert.Equal(t, "request validation failed", errorBody["message"])
+	assert.Equal(t, map[string]interface{}{param: "uuid"}, errorBody["details"])
+}
+
+func TestRequireAccountOwnerRefusesUnknownAccountsAndInvalidIDs(t *testing.T) {
 	userID := uuid.New()
 	owners := tests.NewFakeOwners()
 	own := owners.Own(tests.UUID(), userID)
 	foreign := owners.Own(tests.UUID(), uuid.New())
 	router := guardedRouter(handlers.NewAccessGuard(owners), &userID)
+	encode := func(accountID string) string { return "%" + fmt.Sprintf("%x", accountID[0]) + accountID[1:] }
 
 	assert.Equal(t, http.StatusNoContent, serve(router, "/accounts/"+own).Code)
+	assert.Equal(t, http.StatusNoContent, serve(router, "/accounts/"+strings.ToUpper(own)).Code)
 	assert.Equal(t, http.StatusForbidden, serve(router, "/accounts/"+foreign).Code)
-	assert.Equal(t, http.StatusForbidden, serve(router, "/accounts/%"+fmt.Sprintf("%x", foreign[0])+foreign[1:]).Code)
+	assert.Equal(t, http.StatusForbidden, serve(router, "/accounts/"+encode(foreign)).Code)
 	unknown := serve(router, "/accounts/"+tests.UUID())
 	assert.Equal(t, http.StatusNotFound, unknown.Code)
 	assert.Equal(t, "ACCOUNT_NOT_FOUND", errorCode(tests.FromJson(unknown.Body.String())))
-	assert.Equal(t, http.StatusNoContent, serve(router, "/accounts/not-a-uuid").Code)
-	assert.Len(t, owners.Lookups, 4)
+	assert.Len(t, owners.Lookups, 5)
+
+	assertInvalidAccountID(t, serve(router, "/accounts/"+encode(own)), "id")
+	assert.Len(t, owners.Lookups, 6)
+
+	for _, invalid := range []string{"not-a-uuid", "not%2Da-uuid", "%25" + own} {
+		assertInvalidAccountID(t, serve(router, "/accounts/"+invalid), "id")
+	}
+	undecodable := httptest.NewRequest(http.MethodGet, "/accounts/x", nil)
+	undecodable.URL.RawPath = "/accounts/%zz"
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, undecodable)
+	assertInvalidAccountID(t, rec, "id")
+	assert.Len(t, owners.Lookups, 6)
 
 	owners.Err = apperrors.New("UPSTREAM_UNAVAILABLE", "account service is unavailable", http.StatusBadGateway)
 	assert.Equal(t, http.StatusBadGateway, serve(router, "/accounts/"+own).Code)
+}
+
+func TestRequireAccountOwnerNamesTheRouteParameter(t *testing.T) {
+	userID := uuid.New()
+	owners := tests.NewFakeOwners()
+	router := guardedRouter(handlers.NewAccessGuard(owners), &userID)
+
+	assertInvalidAccountID(t, serve(router, "/accounts/nope/items"), "account_id")
+	assert.Equal(t, http.StatusNoContent, serve(router, "/accounts/"+owners.Own(tests.UUID(), userID)+"/items").Code)
+	assert.Empty(t, owners.Lookups[1:])
 }
 
 func TestRequireAccountOwnerNeedsAnAuthenticatedCaller(t *testing.T) {

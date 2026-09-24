@@ -51,19 +51,31 @@ func (g *AccessGuard) RequireSelf(param string) func(http.Handler) http.Handler 
 func (g *AccessGuard) RequireAccountOwner(param string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			decoded, _ := url.PathUnescape(chi.URLParam(r, param))
-			accountID, err := uuid.Parse(decoded)
+			raw := chi.URLParam(r, param)
+			decoded, err := url.PathUnescape(raw)
+			var accountID uuid.UUID
+			if err == nil {
+				accountID, err = uuid.Parse(decoded)
+			}
 			if err != nil {
-				next.ServeHTTP(w, r)
+				response.FromError(w, invalidAccountID(param))
 				return
 			}
 			if err := g.authorize(r.Context(), accountID); err != nil {
 				response.FromError(w, err)
 				return
 			}
+			if decoded != raw {
+				response.FromError(w, invalidAccountID(param))
+				return
+			}
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+func invalidAccountID(param string) *apperrors.AppError {
+	return apperrors.UnprocessableEntity("VALIDATION_ERROR", "request validation failed").WithDetail(param, "uuid")
 }
 
 func (g *AccessGuard) AuthorizeAccount(ctx context.Context, rawAccountID string) error {

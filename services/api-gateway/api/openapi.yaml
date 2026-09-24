@@ -274,7 +274,8 @@ paths:
       summary: Get an account
       description: |
         Proxied to the account service. Only the owner of the account may read it: another user's account answers
-        `403` and an unknown account `404` (`ACCOUNT_NOT_FOUND`), both without reaching the account service.
+        `403` and an unknown account `404` (`ACCOUNT_NOT_FOUND`), both without reaching the account service. An `id`
+        that is not a UUID, or that is percent-encoded, answers `422` from the gateway itself.
       parameters:
         - $ref: '#/components/parameters/RequestId'
       responses:
@@ -437,7 +438,8 @@ paths:
       description: |
         Proxied to the transaction service. Newest first. Includes balances as seen from `account_id`. Only the owner
         of the account may list its transactions: another user's account answers `403` and an unknown account `404`
-        (`ACCOUNT_NOT_FOUND`).
+        (`ACCOUNT_NOT_FOUND`). An `account_id` that is not a UUID, or that is percent-encoded, answers `422` from the
+        gateway itself.
       parameters:
         - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/LedgerLimit'
@@ -608,7 +610,8 @@ paths:
       summary: List the payments of an account
       description: |
         Proxied to the payment service. Newest first. Only the owner of the account may list its payments: another
-        user's account answers `403` and an unknown account `404` (`ACCOUNT_NOT_FOUND`).
+        user's account answers `403` and an unknown account `404` (`ACCOUNT_NOT_FOUND`). An `account_id` that is not a
+        UUID, or that is percent-encoded, answers `422` from the gateway itself.
       parameters:
         - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/LedgerLimit'
