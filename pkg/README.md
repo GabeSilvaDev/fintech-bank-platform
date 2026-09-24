@@ -203,6 +203,17 @@ domain.InvalidCode(err)   // "invalid_amount"
 cents, err := domain.ToCents(19.99) // 1999; rejects amounts <= 0 or with more than two decimal places
 domain.FromCents(1999)              // 19.99
 domain.Cents(19.99)                 // 1999, unvalidated
+
+amount, err := domain.ParseAmount("19.99") // domain.Amount(1999); ^-?[0-9]{1,15}(\.[0-9]{1,2})?$, integer arithmetic, domain.Invalid("invalid_amount", …) otherwise
+domain.AmountFromCents(1999) // domain.Amount(1999), unvalidated
+amount.Cents()       // 1999
+amount.String()      // "19.99"; "-0.50" and "-3.00" keep their sign
+amount.IsPositive()  // true
+
+data, _ := json.Marshal(amount)     // "19.99", from the value receiver, so it also marshals *domain.Amount struct fields
+_ = json.Unmarshal(data, &amount)   // accepts a JSON string (ParseAmount) or a JSON number (rounded to cents, ±1e15 bound)
+// json.Unmarshal([]byte("null"), &amount) fails with invalid_amount "amount is required";
+// encoding/json only calls UnmarshalJSON for null on non-pointer fields, so a *domain.Amount struct field set to null stays nil instead
 ```
 
 ## cassandra
