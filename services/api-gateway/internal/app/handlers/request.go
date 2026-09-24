@@ -17,6 +17,8 @@ import (
 
 const maxBodyBytes = 1 << 20
 
+const maxAmountCents = 999999999999999
+
 func decode(r *http.Request, dst interface{}) error {
 	r.Body = http.MaxBytesReader(nil, r.Body, maxBodyBytes)
 
@@ -27,6 +29,9 @@ func decode(r *http.Request, dst interface{}) error {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
 			return apperrors.New("PAYLOAD_TOO_LARGE", "request body exceeds 1 MiB", http.StatusRequestEntityTooLarge).Wrap(err)
+		}
+		if domain.InvalidCode(err) == "invalid_amount" {
+			return apperrors.UnprocessableEntity("VALIDATION_ERROR", "request validation failed").WithDetail("amount", "amount")
 		}
 		return apperrors.BadRequest("INVALID_JSON", "request body is not valid JSON").Wrap(err)
 	}
@@ -50,13 +55,15 @@ func validate(dst interface{}) error {
 	return apperrors.UnprocessableEntity("VALIDATION_ERROR", "request validation failed").WithDetails(details)
 }
 
-func amountOf(value float64) (domain.Amount, error) {
-	cents, err := domain.ToCents(value)
-	if err != nil {
-		return 0, apperrors.UnprocessableEntity("VALIDATION_ERROR", "request validation failed").WithDetail("amount", "amount")
+func validateAmount(amount domain.Amount) error {
+	if amount.Cents() <= 0 {
+		return apperrors.UnprocessableEntity("VALIDATION_ERROR", "request validation failed").WithDetail("amount", "gt")
+	}
+	if amount.Cents() > maxAmountCents {
+		return apperrors.UnprocessableEntity("VALIDATION_ERROR", "request validation failed").WithDetail("amount", "lte")
 	}
 
-	return domain.AmountFromCents(cents), nil
+	return nil
 }
 
 func validateID(id string) error {

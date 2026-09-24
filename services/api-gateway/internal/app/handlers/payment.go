@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/fintech-bank-platform/api-gateway/internal/contracts"
+	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/fintech-bank-platform/pkg/errors"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/response"
@@ -19,16 +20,16 @@ type tedRequest struct {
 }
 
 type paymentRequest struct {
-	AccountID      string      `json:"account_id" validate:"required,uuid"`
-	PaymentMethod  string      `json:"payment_method" validate:"required,oneof=pix ted boleto"`
-	Amount         float64     `json:"amount" validate:"required,gt=0"`
-	Currency       string      `json:"currency" validate:"required,currency"`
-	Recipient      string      `json:"recipient" validate:"required,max=120"`
-	PixKey         string      `json:"pix_key" validate:"omitempty,pix_key"`
-	BoletoCode     string      `json:"boleto_code" validate:"omitempty,boleto"`
-	TED            *tedRequest `json:"ted" validate:"omitempty"`
-	Description    string      `json:"description" validate:"max=255"`
-	IdempotencyKey string      `json:"idempotency_key" validate:"required,idempotency_key"`
+	AccountID      string        `json:"account_id" validate:"required,uuid"`
+	PaymentMethod  string        `json:"payment_method" validate:"required,oneof=pix ted boleto"`
+	Amount         domain.Amount `json:"amount"`
+	Currency       string        `json:"currency" validate:"required,currency"`
+	Recipient      string        `json:"recipient" validate:"required,max=120"`
+	PixKey         string        `json:"pix_key" validate:"omitempty,pix_key"`
+	BoletoCode     string        `json:"boleto_code" validate:"omitempty,boleto"`
+	TED            *tedRequest   `json:"ted" validate:"omitempty"`
+	Description    string        `json:"description" validate:"max=255"`
+	IdempotencyKey string        `json:"idempotency_key" validate:"required,idempotency_key"`
 }
 
 func (r paymentRequest) missingMethodField() string {
@@ -86,13 +87,12 @@ func (h *PaymentHandler) Process(w http.ResponseWriter, r *http.Request) {
 		response.FromError(w, errors.UnprocessableEntity("VALIDATION_ERROR", "request validation failed").WithDetail(field, "required"))
 		return
 	}
-	amount, err := amountOf(req.Amount)
-	if err != nil {
+	if err := validateAmount(req.Amount); err != nil {
 		response.FromError(w, err)
 		return
 	}
 	if req.PaymentMethod == "boleto" {
-		if boletoCents, ok := validation.BoletoAmountCents(req.BoletoCode); ok && boletoCents > 0 && amount.Cents() != boletoCents {
+		if boletoCents, ok := validation.BoletoAmountCents(req.BoletoCode); ok && boletoCents > 0 && req.Amount.Cents() != boletoCents {
 			response.FromError(w, errors.UnprocessableEntity("VALIDATION_ERROR", "request validation failed").WithDetail("amount", "boleto_amount"))
 			return
 		}
@@ -101,7 +101,7 @@ func (h *PaymentHandler) Process(w http.ResponseWriter, r *http.Request) {
 	event := events.NewPaymentCommand(events.EventTypes.ProcessPayment, events.ProcessPaymentPayload{
 		AccountID:      req.AccountID,
 		PaymentMethod:  req.PaymentMethod,
-		Amount:         amount,
+		Amount:         req.Amount,
 		Currency:       strings.ToUpper(req.Currency),
 		Recipient:      req.Recipient,
 		PixKey:         req.PixKey,

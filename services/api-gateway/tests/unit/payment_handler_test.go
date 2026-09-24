@@ -108,13 +108,12 @@ func TestProcessPaymentValidatesFields(t *testing.T) {
 	pub := &tests.FakePublisher{}
 
 	rec, body := call(paymentRouter(pub), http.MethodPost, "/payments",
-		`{"account_id":"x","payment_method":"cash","amount":-1,"currency":"BRL","recipient":"","idempotency_key":"k","pix_key":"!!","boleto_code":"ab"}`)
+		`{"account_id":"x","payment_method":"cash","amount":10,"currency":"BRL","recipient":"","idempotency_key":"k","pix_key":"!!","boleto_code":"ab"}`)
 
 	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
 	details := errorDetails(body)
 	assert.Equal(t, "uuid", details["account_id"])
 	assert.Equal(t, "oneof", details["payment_method"])
-	assert.Equal(t, "gt", details["amount"])
 	assert.Equal(t, "required", details["recipient"])
 	assert.Equal(t, "pix_key", details["pix_key"])
 	assert.Equal(t, "boleto", details["boleto_code"])
@@ -180,5 +179,84 @@ func TestPaymentAmountsWithMoreThanTwoDecimalsAreRejected(t *testing.T) {
 	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
 	assert.Equal(t, "VALIDATION_ERROR", errorCode(body))
 	assert.Equal(t, "amount", errorDetails(body)["amount"])
+	assert.Empty(t, pub.Published)
+}
+
+func TestProcessPaymentAcceptsStringAmount(t *testing.T) {
+	pub := &tests.FakePublisher{}
+	accountID := tests.UUID()
+
+	rec, _ := call(paymentRouter(pub), http.MethodPost, "/payments",
+		`{"account_id":"`+accountID+`","payment_method":"pix","amount":"42.50","currency":"BRL","recipient":"Loja X","pix_key":"ana@example.com","idempotency_key":"pay-2"}`)
+
+	assert.Equal(t, http.StatusAccepted, rec.Code)
+	payload := pub.Last().Event.Payload.(events.ProcessPaymentPayload)
+	assert.Equal(t, domain.AmountFromCents(4250), payload.Amount)
+}
+
+func TestProcessPaymentAmountMustBePositive(t *testing.T) {
+	pub := &tests.FakePublisher{}
+	cases := []string{`"0"`, `"-1"`}
+
+	for _, amount := range cases {
+		rec, body := call(paymentRouter(pub), http.MethodPost, "/payments",
+			`{"account_id":"`+tests.UUID()+`","payment_method":"pix","amount":`+amount+`,"currency":"BRL","recipient":"Loja X","pix_key":"ana@example.com","idempotency_key":"pay-3"}`)
+
+		assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+		assert.Equal(t, "gt", errorDetails(body)["amount"])
+	}
+
+	rec, body := call(paymentRouter(pub), http.MethodPost, "/payments",
+		`{"account_id":"`+tests.UUID()+`","payment_method":"pix","currency":"BRL","recipient":"Loja X","pix_key":"ana@example.com","idempotency_key":"pay-4"}`)
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	assert.Equal(t, "gt", errorDetails(body)["amount"])
+	assert.Empty(t, pub.Published)
+}
+
+func TestProcessPaymentAmountAboveUpperBoundIsRejected(t *testing.T) {
+	pub := &tests.FakePublisher{}
+
+	rec, body := call(paymentRouter(pub), http.MethodPost, "/payments",
+		`{"account_id":"`+tests.UUID()+`","payment_method":"pix","amount":"10000000000000.00","currency":"BRL","recipient":"Loja X","pix_key":"ana@example.com","idempotency_key":"pay-5"}`)
+
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	assert.Equal(t, "lte", errorDetails(body)["amount"])
+	assert.Empty(t, pub.Published)
+}
+
+func TestProcessPaymentMalformedStringAmountsAreRejected(t *testing.T) {
+	pub := &tests.FakePublisher{}
+	cases := []string{`"1.234"`, `"abc"`}
+
+	for _, amount := range cases {
+		rec, body := call(paymentRouter(pub), http.MethodPost, "/payments",
+			`{"account_id":"`+tests.UUID()+`","payment_method":"pix","amount":`+amount+`,"currency":"BRL","recipient":"Loja X","pix_key":"ana@example.com","idempotency_key":"pay-6"}`)
+
+		assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+		assert.Equal(t, "VALIDATION_ERROR", errorCode(body))
+		assert.Equal(t, "amount", errorDetails(body)["amount"])
+	}
+	assert.Empty(t, pub.Published)
+}
+
+func TestProcessBoletoPaymentAcceptsMatchingStringAmount(t *testing.T) {
+	pub := &tests.FakePublisher{}
+
+	rec, _ := call(paymentRouter(pub), http.MethodPost, "/payments",
+		`{"account_id":"`+tests.UUID()+`","payment_method":"boleto","amount":"150.00","currency":"BRL","recipient":"Energia SA","idempotency_key":"bol-4","boleto_code":"`+boletoCodeWithAmount+`"}`)
+
+	assert.Equal(t, http.StatusAccepted, rec.Code)
+	assert.Equal(t, boletoCodeWithAmount, pub.Last().Event.Payload.(events.ProcessPaymentPayload).BoletoCode)
+}
+
+func TestProcessBoletoPaymentRejectsMismatchedStringAmount(t *testing.T) {
+	pub := &tests.FakePublisher{}
+
+	rec, body := call(paymentRouter(pub), http.MethodPost, "/payments",
+		`{"account_id":"`+tests.UUID()+`","payment_method":"boleto","amount":"10.00","currency":"BRL","recipient":"Energia SA","idempotency_key":"bol-5","boleto_code":"`+boletoCodeWithAmount+`"}`)
+
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	assert.Equal(t, "VALIDATION_ERROR", errorCode(body))
+	assert.Equal(t, "boleto_amount", errorDetails(body)["amount"])
 	assert.Empty(t, pub.Published)
 }

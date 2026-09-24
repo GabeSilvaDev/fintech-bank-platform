@@ -5,26 +5,27 @@ import (
 	"strings"
 
 	"github.com/fintech-bank-platform/api-gateway/internal/contracts"
+	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/response"
 )
 
 type createTransactionRequest struct {
-	AccountID      string  `json:"account_id" validate:"required,uuid"`
-	Type           string  `json:"type" validate:"required,oneof=deposit withdrawal"`
-	Amount         float64 `json:"amount" validate:"required,gt=0"`
-	Currency       string  `json:"currency" validate:"required,currency"`
-	Description    string  `json:"description" validate:"max=255"`
-	IdempotencyKey string  `json:"idempotency_key" validate:"required,idempotency_key"`
+	AccountID      string        `json:"account_id" validate:"required,uuid"`
+	Type           string        `json:"type" validate:"required,oneof=deposit withdrawal"`
+	Amount         domain.Amount `json:"amount"`
+	Currency       string        `json:"currency" validate:"required,currency"`
+	Description    string        `json:"description" validate:"max=255"`
+	IdempotencyKey string        `json:"idempotency_key" validate:"required,idempotency_key"`
 }
 
 type transferRequest struct {
-	FromAccountID  string  `json:"from_account_id" validate:"required,uuid"`
-	ToAccountID    string  `json:"to_account_id" validate:"required,uuid,nefield=FromAccountID"`
-	Amount         float64 `json:"amount" validate:"required,gt=0"`
-	Currency       string  `json:"currency" validate:"required,currency"`
-	Description    string  `json:"description" validate:"max=255"`
-	IdempotencyKey string  `json:"idempotency_key" validate:"required,idempotency_key"`
+	FromAccountID  string        `json:"from_account_id" validate:"required,uuid"`
+	ToAccountID    string        `json:"to_account_id" validate:"required,uuid,nefield=FromAccountID"`
+	Amount         domain.Amount `json:"amount"`
+	Currency       string        `json:"currency" validate:"required,currency"`
+	Description    string        `json:"description" validate:"max=255"`
+	IdempotencyKey string        `json:"idempotency_key" validate:"required,idempotency_key"`
 }
 
 type TransactionHandler struct {
@@ -45,8 +46,7 @@ func (h *TransactionHandler) Create(w http.ResponseWriter, r *http.Request) {
 		response.FromError(w, err)
 		return
 	}
-	amount, err := amountOf(req.Amount)
-	if err != nil {
+	if err := validateAmount(req.Amount); err != nil {
 		response.FromError(w, err)
 		return
 	}
@@ -54,7 +54,7 @@ func (h *TransactionHandler) Create(w http.ResponseWriter, r *http.Request) {
 	event := events.NewTransactionCommand(events.EventTypes.CreateTransaction, events.CreateTransactionPayload{
 		AccountID:      req.AccountID,
 		Type:           req.Type,
-		Amount:         amount,
+		Amount:         req.Amount,
 		Currency:       strings.ToUpper(req.Currency),
 		Description:    req.Description,
 		IdempotencyKey: req.IdempotencyKey,
@@ -73,8 +73,7 @@ func (h *TransactionHandler) Transfer(w http.ResponseWriter, r *http.Request) {
 		response.FromError(w, err)
 		return
 	}
-	amount, err := amountOf(req.Amount)
-	if err != nil {
+	if err := validateAmount(req.Amount); err != nil {
 		response.FromError(w, err)
 		return
 	}
@@ -82,7 +81,7 @@ func (h *TransactionHandler) Transfer(w http.ResponseWriter, r *http.Request) {
 	event := events.NewTransactionCommand(events.EventTypes.ProcessTransfer, events.ProcessTransferPayload{
 		FromAccountID:  req.FromAccountID,
 		ToAccountID:    req.ToAccountID,
-		Amount:         amount,
+		Amount:         req.Amount,
 		Currency:       strings.ToUpper(req.Currency),
 		Description:    req.Description,
 		IdempotencyKey: req.IdempotencyKey,

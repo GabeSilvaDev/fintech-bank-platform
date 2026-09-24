@@ -60,13 +60,12 @@ func TestCreateTransactionValidatesFields(t *testing.T) {
 	pub := &tests.FakePublisher{}
 
 	rec, body := call(transactionRouter(pub), http.MethodPost, "/transactions",
-		`{"account_id":"x","type":"refund","amount":0,"currency":"XYZ","idempotency_key":""}`)
+		`{"account_id":"x","type":"refund","amount":10,"currency":"XYZ","idempotency_key":""}`)
 
 	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
 	details := errorDetails(body)
 	assert.Equal(t, "uuid", details["account_id"])
 	assert.Equal(t, "oneof", details["type"])
-	assert.Equal(t, "required", details["amount"])
 	assert.Equal(t, "currency", details["currency"])
 	assert.Equal(t, "required", details["idempotency_key"])
 	assert.Empty(t, pub.Published)
@@ -135,6 +134,28 @@ func TestTransferRejectsMalformedJSON(t *testing.T) {
 	assert.Equal(t, "INVALID_JSON", errorCode(body))
 }
 
+func TestTransferAmountMustBePositive(t *testing.T) {
+	pub := &tests.FakePublisher{}
+
+	rec, body := call(transactionRouter(pub), http.MethodPost, "/transfers",
+		`{"from_account_id":"`+tests.UUID()+`","to_account_id":"`+tests.UUID()+`","amount":"0","currency":"BRL","idempotency_key":"tr-5"}`)
+
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	assert.Equal(t, "gt", errorDetails(body)["amount"])
+	assert.Empty(t, pub.Published)
+}
+
+func TestTransferAmountAboveUpperBoundIsRejected(t *testing.T) {
+	pub := &tests.FakePublisher{}
+
+	rec, body := call(transactionRouter(pub), http.MethodPost, "/transfers",
+		`{"from_account_id":"`+tests.UUID()+`","to_account_id":"`+tests.UUID()+`","amount":"10000000000000.00","currency":"BRL","idempotency_key":"tr-6"}`)
+
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	assert.Equal(t, "lte", errorDetails(body)["amount"])
+	assert.Empty(t, pub.Published)
+}
+
 func TestTransferRejectsSameAccount(t *testing.T) {
 	pub := &tests.FakePublisher{}
 	id := tests.UUID()
@@ -169,5 +190,62 @@ func TestTransactionAmountsWithMoreThanTwoDecimalsAreRejected(t *testing.T) {
 		`{"from_account_id":"`+tests.UUID()+`","to_account_id":"`+tests.UUID()+`","amount":0.001,"currency":"BRL","idempotency_key":"tr-4"}`)
 	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
 	assert.Equal(t, "amount", errorDetails(body)["amount"])
+	assert.Empty(t, pub.Published)
+}
+
+func TestCreateTransactionAcceptsStringAmount(t *testing.T) {
+	pub := &tests.FakePublisher{}
+	accountID := tests.UUID()
+
+	rec, _ := call(transactionRouter(pub), http.MethodPost, "/transactions",
+		`{"account_id":"`+accountID+`","type":"deposit","amount":"10.50","currency":"BRL","idempotency_key":"dep-3"}`)
+
+	assert.Equal(t, http.StatusAccepted, rec.Code)
+	payload := pub.Last().Event.Payload.(events.CreateTransactionPayload)
+	assert.Equal(t, domain.AmountFromCents(1050), payload.Amount)
+}
+
+func TestCreateTransactionAmountMustBePositive(t *testing.T) {
+	pub := &tests.FakePublisher{}
+	cases := []string{`"0"`, `"-1"`}
+
+	for _, amount := range cases {
+		rec, body := call(transactionRouter(pub), http.MethodPost, "/transactions",
+			`{"account_id":"`+tests.UUID()+`","type":"deposit","amount":`+amount+`,"currency":"BRL","idempotency_key":"dep-4"}`)
+
+		assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+		assert.Equal(t, "gt", errorDetails(body)["amount"])
+	}
+
+	rec, body := call(transactionRouter(pub), http.MethodPost, "/transactions",
+		`{"account_id":"`+tests.UUID()+`","type":"deposit","currency":"BRL","idempotency_key":"dep-5"}`)
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	assert.Equal(t, "gt", errorDetails(body)["amount"])
+	assert.Empty(t, pub.Published)
+}
+
+func TestCreateTransactionAmountAboveUpperBoundIsRejected(t *testing.T) {
+	pub := &tests.FakePublisher{}
+
+	rec, body := call(transactionRouter(pub), http.MethodPost, "/transactions",
+		`{"account_id":"`+tests.UUID()+`","type":"deposit","amount":"10000000000000.00","currency":"BRL","idempotency_key":"dep-6"}`)
+
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	assert.Equal(t, "lte", errorDetails(body)["amount"])
+	assert.Empty(t, pub.Published)
+}
+
+func TestCreateTransactionMalformedStringAmountsAreRejected(t *testing.T) {
+	pub := &tests.FakePublisher{}
+	cases := []string{`"1.234"`, `"abc"`}
+
+	for _, amount := range cases {
+		rec, body := call(transactionRouter(pub), http.MethodPost, "/transactions",
+			`{"account_id":"`+tests.UUID()+`","type":"deposit","amount":`+amount+`,"currency":"BRL","idempotency_key":"dep-7"}`)
+
+		assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+		assert.Equal(t, "VALIDATION_ERROR", errorCode(body))
+		assert.Equal(t, "amount", errorDetails(body)["amount"])
+	}
 	assert.Empty(t, pub.Published)
 }
