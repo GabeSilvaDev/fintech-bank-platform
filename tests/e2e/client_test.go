@@ -97,6 +97,12 @@ func retryAfter(header string) time.Duration {
 
 func send(t *testing.T, method, url string, body interface{}) (int, []byte) {
 	t.Helper()
+	status, _, raw := exchange(t, method, url, body)
+	return status, raw
+}
+
+func exchange(t *testing.T, method, url string, body interface{}) (int, http.Header, []byte) {
+	t.Helper()
 	var payload []byte
 	if body != nil {
 		encoded, err := json.Marshal(body)
@@ -120,7 +126,7 @@ func send(t *testing.T, method, url string, body interface{}) (int, []byte) {
 		resp.Body.Close()
 		require.NoError(t, err)
 		if resp.StatusCode != http.StatusTooManyRequests {
-			return resp.StatusCode, raw
+			return resp.StatusCode, resp.Header, raw
 		}
 		wait := retryAfter(resp.Header.Get("Retry-After"))
 		if time.Now().Add(wait).After(deadline) {
