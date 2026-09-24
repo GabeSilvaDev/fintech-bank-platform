@@ -58,7 +58,7 @@ func NewIdentityService(identities contracts.IdentityRepository, hasher contract
 }
 
 func (s *IdentityService) Register(ctx context.Context, email, password string) (uuid.UUID, error) {
-	email = NormaliseEmail(email)
+	email = normaliseEmail(email)
 	if validation.ValidateVar(email, "required,email") != nil {
 		return uuid.Nil, domain.Invalid("invalid_email", "email is not valid")
 	}
@@ -83,20 +83,29 @@ func (s *IdentityService) Register(ctx context.Context, email, password string) 
 }
 
 func (s *IdentityService) Verify(ctx context.Context, email, password string) (uuid.UUID, error) {
-	identity, err := s.identities.GetByEmail(ctx, NormaliseEmail(email))
+	email = normaliseEmail(email)
+	if validation.ValidateVar(email, "required,email") != nil {
+		return s.reject(password)
+	}
+	identity, err := s.identities.GetByEmail(ctx, email)
 	if errors.Is(err, domain.ErrNotFound) {
-		_ = s.hasher.Compare(s.dummyHash, password)
-		return uuid.Nil, ErrInvalidCredentials
+		return s.reject(password)
 	}
 	if err != nil {
 		return uuid.Nil, err
 	}
-	if s.hasher.Compare(identity.PasswordHash, password) != nil {
+	matched := s.hasher.Compare(identity.PasswordHash, password) == nil
+	if !matched || len(password) > maxPasswordLength {
 		return uuid.Nil, ErrInvalidCredentials
 	}
 	return identity.UserID, nil
 }
 
-func NormaliseEmail(email string) string {
+func (s *IdentityService) reject(password string) (uuid.UUID, error) {
+	_ = s.hasher.Compare(s.dummyHash, password)
+	return uuid.Nil, ErrInvalidCredentials
+}
+
+func normaliseEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
 }

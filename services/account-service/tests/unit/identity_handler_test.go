@@ -59,7 +59,7 @@ func TestIdentityHandlersReturnUserID(t *testing.T) {
 func TestIdentityHandlersRejectMalformedBodies(t *testing.T) {
 	router := identityRouter(stubIdentities{userID: uuid.New()})
 	for _, path := range []string{"/identities", "/identities/verify"} {
-		for _, body := range []string{"", "{", `{"email":1}`, `{"email":"a@b.com","password":"12345678","extra":true}`} {
+		for _, body := range []string{"", "{", `{"email":1}`, `{"email":"a@b.com","password":"12345678","extra":true}`, `{"email":"a@b.com","password":"12345678"}{}`, `{"email":"a@b.com","password":"12345678"} x`, `{"email":"a@b.com","password":"12345678"}}`, `{"email":"a@b.com","password":"12345678"} 1`} {
 			rec, decoded := post(router, path, body)
 
 			assert.Equal(t, http.StatusBadRequest, rec.Code, body)
@@ -78,6 +78,24 @@ func TestIdentityHandlersRejectOversizedBodies(t *testing.T) {
 		assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
 		assert.Equal(t, "PAYLOAD_TOO_LARGE", decoded["error"].(map[string]interface{})["code"])
 	}
+}
+
+func TestIdentityHandlersAcceptTrailingWhitespace(t *testing.T) {
+	router := identityRouter(stubIdentities{userID: uuid.New()})
+
+	rec, _ := post(router, "/identities/verify", "{\"email\":\"a@b.com\",\"password\":\"12345678\"}\n  \n")
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestIdentityHandlersRejectOversizedTrailingData(t *testing.T) {
+	router := identityRouter(stubIdentities{userID: uuid.New()})
+	body := `{"email":"ana@example.com","password":"correct horse"}` + strings.Repeat(" ", 16<<10)
+
+	rec, decoded := post(router, "/identities", body)
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+	assert.Equal(t, "PAYLOAD_TOO_LARGE", decoded["error"].(map[string]interface{})["code"])
 }
 
 func TestIdentityHandlersHideUnexpectedErrors(t *testing.T) {

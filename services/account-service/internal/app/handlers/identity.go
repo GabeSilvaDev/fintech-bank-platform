@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 
 	"github.com/fintech-bank-platform/account-service/internal/app/services"
@@ -14,6 +15,8 @@ import (
 )
 
 const maxIdentityBodyBytes = 16 << 10
+
+var errTrailingData = errors.New("unexpected data after the JSON object")
 
 type IdentityManager interface {
 	Register(ctx context.Context, email, password string) (uuid.UUID, error)
@@ -73,14 +76,29 @@ func decodeCredentials(w http.ResponseWriter, r *http.Request, dst *credentialsR
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxIdentityBodyBytes))
 	decoder.DisallowUnknownFields()
 
-	if err := decoder.Decode(dst); err != nil {
-		var tooLarge *http.MaxBytesError
-		if errors.As(err, &tooLarge) {
-			return apperrors.New("PAYLOAD_TOO_LARGE", "request body exceeds 16 KiB", http.StatusRequestEntityTooLarge)
-		}
-		return apperrors.BadRequest("INVALID_JSON", "request body is not valid JSON")
+	err := decoder.Decode(dst)
+	if err == nil {
+		err = rejectTrailing(decoder)
 	}
-	return nil
+	if err == nil {
+		return nil
+	}
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		return apperrors.New("PAYLOAD_TOO_LARGE", "request body exceeds 16 KiB", http.StatusRequestEntityTooLarge)
+	}
+	return apperrors.BadRequest("INVALID_JSON", "request body is not valid JSON")
+}
+
+func rejectTrailing(decoder *json.Decoder) error {
+	_, err := decoder.Token()
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	if err == nil {
+		return errTrailingData
+	}
+	return err
 }
 
 func mapIdentityError(err error) error {

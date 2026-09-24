@@ -174,8 +174,46 @@ func TestVerifyUsesStoredIdentity(t *testing.T) {
 	assert.Equal(t, userID, verified)
 }
 
-func TestNormaliseEmail(t *testing.T) {
-	assert.Equal(t, "ana@example.com", services.NormaliseEmail("\t Ana@EXAMPLE.com \n"))
+func TestVerifyRejectsUnusableEmailWithDummyCompare(t *testing.T) {
+	for _, email := range []string{"", "   ", "not-an-email"} {
+		h := newIdentityHarness(t)
+		h.repo.GetErr = errors.New("repository must not be called")
+		dummyHash := "hashed:" + h.hasher.Hashed[0]
+
+		verified, err := h.service.Verify(context.Background(), email, "correct horse")
+
+		assert.ErrorIs(t, err, services.ErrInvalidCredentials, email)
+		assert.Equal(t, uuid.Nil, verified)
+		require.Len(t, h.hasher.Comparisons, 1)
+		assert.Equal(t, tests.Comparison{Hash: dummyHash, Password: "correct horse"}, h.hasher.Comparisons[0])
+	}
+}
+
+func TestVerifyRejectsPasswordLongerThanBcryptLimit(t *testing.T) {
+	h := newIdentityHarness(t)
+	long := strings.Repeat("a", 73)
+	h.repo.Identities["ana@example.com"] = &models.Identity{Email: "ana@example.com", UserID: uuid.New(), PasswordHash: "hashed:" + long}
+
+	verified, err := h.service.Verify(context.Background(), "ana@example.com", long)
+
+	assert.ErrorIs(t, err, services.ErrInvalidCredentials)
+	assert.Equal(t, uuid.Nil, verified)
+	assert.Len(t, h.hasher.Comparisons, 1)
+}
+
+func TestVerifyWithBcryptRejectsSuffixBeyondSeventyTwoBytes(t *testing.T) {
+	service, err := services.NewIdentityService(tests.NewFakeIdentityRepo(), services.NewBcryptHasher(bcrypt.MinCost), tests.FakeClock{T: now})
+	require.NoError(t, err)
+	password := strings.Repeat("a", 72)
+	userID, err := service.Register(context.Background(), "ana@example.com", password)
+	require.NoError(t, err)
+
+	verified, err := service.Verify(context.Background(), "ana@example.com", password)
+	require.NoError(t, err)
+	assert.Equal(t, userID, verified)
+
+	_, err = service.Verify(context.Background(), "ana@example.com", password+"suffix")
+	assert.ErrorIs(t, err, services.ErrInvalidCredentials)
 }
 
 func TestBcryptHasherRoundTrip(t *testing.T) {

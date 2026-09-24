@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fintech-bank-platform/account-service/internal/app/models"
 	"github.com/fintech-bank-platform/account-service/tests"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/suite"
@@ -76,6 +77,29 @@ func (s *IdentitiesAPISuite) TestVerifyRejectsBadCredentialsWithOneError() {
 
 	s.Equal(wrong.Body(), unknown.Body())
 	s.Len(s.Hasher.Comparisons, 2)
+}
+
+func (s *IdentitiesAPISuite) TestVerifyRejectsUnusableEmailLikeWrongPassword() {
+	s.register("ana@example.com", "correct horse").AssertCreated()
+	wrong := s.verify("ana@example.com", "wrong horse").AssertUnauthorized()
+
+	for _, email := range []string{"", "   ", "not-an-email"} {
+		rejected := s.verify(email, "correct horse").AssertUnauthorized().AssertErrorCode("INVALID_CREDENTIALS")
+		s.Equal(wrong.Body(), rejected.Body())
+	}
+	s.Len(s.Hasher.Comparisons, 4)
+}
+
+func (s *IdentitiesAPISuite) TestVerifyRejectsPasswordBeyondSeventyTwoBytes() {
+	long := strings.Repeat("a", 73)
+	s.Identities.Identities["ana@example.com"] = &models.Identity{Email: "ana@example.com", UserID: uuid.New(), PasswordHash: "hashed:" + long}
+
+	s.verify("ana@example.com", long).AssertUnauthorized().AssertErrorCode("INVALID_CREDENTIALS")
+}
+
+func (s *IdentitiesAPISuite) TestRejectsTrailingDataAfterBody() {
+	s.Post("/identities", `{"email":"ana@example.com","password":"correct horse"}{}`).AssertBadRequest().AssertErrorCode("INVALID_JSON")
+	s.Empty(s.Identities.Created)
 }
 
 func (s *IdentitiesAPISuite) TestResponsesNeverExposePasswordOrHash() {
