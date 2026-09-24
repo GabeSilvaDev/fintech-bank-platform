@@ -25,10 +25,10 @@ func parsePayment(cmd events.ProcessPaymentPayload) (*models.Payment, error) {
 	if !ok {
 		return nil, domain.Invalid("invalid_payment_method", "payment_method must be pix, ted or boleto")
 	}
-	cents, err := domain.ToCents(cmd.Amount)
-	if err != nil {
-		return nil, err
+	if !cmd.Amount.IsPositive() {
+		return nil, domain.Invalid("invalid_amount", "amount must be greater than zero")
 	}
+	cents := cmd.Amount.Cents()
 	if !strings.EqualFold(cmd.Currency, models.Currency) {
 		return nil, domain.Invalid("unsupported_currency", "only BRL is supported")
 	}

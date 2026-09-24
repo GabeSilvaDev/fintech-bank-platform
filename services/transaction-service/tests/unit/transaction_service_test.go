@@ -31,11 +31,11 @@ func newHarness() *harness {
 }
 
 func deposit(accountID string) events.CreateTransactionPayload {
-	return events.CreateTransactionPayload{AccountID: accountID, Type: "deposit", Amount: 100.25, Currency: "BRL", Description: "salary", IdempotencyKey: "dep-1"}
+	return events.CreateTransactionPayload{AccountID: accountID, Type: "deposit", Amount: domain.AmountFromCents(10025), Currency: "BRL", Description: "salary", IdempotencyKey: "dep-1"}
 }
 
 func transfer(from, to string) events.ProcessTransferPayload {
-	return events.ProcessTransferPayload{FromAccountID: from, ToAccountID: to, Amount: 30, Currency: "brl", Description: "rent", IdempotencyKey: "tr-1"}
+	return events.ProcessTransferPayload{FromAccountID: from, ToAccountID: to, Amount: domain.AmountFromCents(3000), Currency: "brl", Description: "rent", IdempotencyKey: "tr-1"}
 }
 
 func TestCreateDepositRecordsAndRequestsCredit(t *testing.T) {
@@ -68,7 +68,7 @@ func TestCreateDepositRecordsAndRequestsCredit(t *testing.T) {
 	payload := created.Event.Payload.(events.TransactionCreatedPayload)
 	assert.Equal(t, h.nextID.String(), payload.TransactionID)
 	assert.Equal(t, "deposit", payload.Type)
-	assert.Equal(t, 100.25, payload.Amount)
+	assert.Equal(t, domain.AmountFromCents(10025), payload.Amount)
 	assert.Equal(t, "", payload.CounterpartyID)
 
 	command := res.Messages[1]
@@ -79,7 +79,7 @@ func TestCreateDepositRecordsAndRequestsCredit(t *testing.T) {
 	assert.Equal(t, "trace-1", command.Event.TraceID)
 	credit := command.Event.Payload.(events.CreditAccountPayload)
 	assert.Equal(t, account.String(), credit.AccountID)
-	assert.Equal(t, 100.25, credit.Amount)
+	assert.Equal(t, domain.AmountFromCents(10025), credit.Amount)
 	assert.Equal(t, "BRL", credit.Currency)
 	assert.Equal(t, h.nextID.String(), credit.Reference)
 	assert.Equal(t, h.nextID.String()+":credit", credit.IdempotencyKey)
@@ -243,7 +243,7 @@ func TestTransferRecordsAndRequestsDebit(t *testing.T) {
 	assert.Equal(t, from.String(), res.Messages[1].Key)
 	debit := res.Messages[1].Event.Payload.(events.DebitAccountPayload)
 	assert.Equal(t, from.String(), debit.AccountID)
-	assert.Equal(t, 30.0, debit.Amount)
+	assert.Equal(t, domain.AmountFromCents(3000), debit.Amount)
 	assert.Equal(t, h.nextID.String()+":debit", debit.IdempotencyKey)
 	assert.Equal(t, "trace-3", res.Messages[1].Event.TraceID)
 }
@@ -254,9 +254,9 @@ func TestTransferValidation(t *testing.T) {
 		"invalid_from_account_id": transfer("x", uuid.NewString()),
 		"invalid_to_account_id":   transfer(uuid.NewString(), "x"),
 		"same_account":            transfer(same, same),
-		"invalid_amount":          {FromAccountID: uuid.NewString(), ToAccountID: uuid.NewString(), Amount: 1.005, Currency: "BRL", IdempotencyKey: "k"},
-		"unsupported_currency":    {FromAccountID: uuid.NewString(), ToAccountID: uuid.NewString(), Amount: 1, Currency: "EUR", IdempotencyKey: "k"},
-		"invalid_idempotency_key": {FromAccountID: uuid.NewString(), ToAccountID: uuid.NewString(), Amount: 1, Currency: "BRL"},
+		"invalid_amount":          {FromAccountID: uuid.NewString(), ToAccountID: uuid.NewString(), Amount: domain.AmountFromCents(-100), Currency: "BRL", IdempotencyKey: "k"},
+		"unsupported_currency":    {FromAccountID: uuid.NewString(), ToAccountID: uuid.NewString(), Amount: domain.AmountFromCents(100), Currency: "EUR", IdempotencyKey: "k"},
+		"invalid_idempotency_key": {FromAccountID: uuid.NewString(), ToAccountID: uuid.NewString(), Amount: domain.AmountFromCents(100), Currency: "BRL"},
 	}
 	for code, cmd := range cases {
 		h := newHarness()

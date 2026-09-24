@@ -22,7 +22,7 @@ func createdEvent(payment *models.Payment, trace string) *events.Event {
 		PaymentID:      payment.ID.String(),
 		AccountID:      payment.AccountID.String(),
 		PaymentMethod:  string(payment.Method),
-		Amount:         domain.FromCents(payment.AmountCents),
+		Amount:         domain.AmountFromCents(payment.AmountCents),
 		Currency:       payment.Currency,
 		Recipient:      payment.Recipient,
 		Description:    payment.Description,
@@ -34,7 +34,7 @@ func createdEvent(payment *models.Payment, trace string) *events.Event {
 func debitCommand(payment *models.Payment, trace string) *events.Event {
 	return events.NewEvent(events.EventTypes.DebitAccount, source, events.DebitAccountPayload{
 		AccountID:      payment.AccountID.String(),
-		Amount:         domain.FromCents(payment.AmountCents),
+		Amount:         domain.AmountFromCents(payment.AmountCents),
 		Currency:       payment.Currency,
 		Reference:      models.Reference(payment.ID),
 		IdempotencyKey: models.StepKey(payment.ID, models.StepDebit),
@@ -44,7 +44,7 @@ func debitCommand(payment *models.Payment, trace string) *events.Event {
 func refundCommand(payment *models.Payment, trace string) *events.Event {
 	return events.NewEvent(events.EventTypes.CreditAccount, source, events.CreditAccountPayload{
 		AccountID:      payment.AccountID.String(),
-		Amount:         domain.FromCents(payment.AmountCents),
+		Amount:         domain.AmountFromCents(payment.AmountCents),
 		Currency:       payment.Currency,
 		Reference:      models.Reference(payment.ID),
 		IdempotencyKey: models.StepKey(payment.ID, models.StepRefund),
@@ -60,7 +60,7 @@ func processedEvent(payment *models.Payment, externalID string, now time.Time, t
 		PaymentID:     payment.ID.String(),
 		AccountID:     payment.AccountID.String(),
 		PaymentMethod: string(payment.Method),
-		Amount:        domain.FromCents(payment.AmountCents),
+		Amount:        domain.AmountFromCents(payment.AmountCents),
 		Currency:      payment.Currency,
 		ExternalID:    externalID,
 		Status:        string(models.StatusSubmitted),
@@ -73,7 +73,7 @@ func completedEvent(payment *models.Payment, externalID string, now time.Time, t
 		PaymentID:     payment.ID.String(),
 		AccountID:     payment.AccountID.String(),
 		PaymentMethod: string(payment.Method),
-		Amount:        domain.FromCents(payment.AmountCents),
+		Amount:        domain.AmountFromCents(payment.AmountCents),
 		Currency:      payment.Currency,
 		Status:        string(models.StatusCompleted),
 		ExternalID:    externalID,
@@ -86,7 +86,7 @@ func failedEvent(payment *models.Payment, reason string, status models.Status, n
 		PaymentID:     payment.ID.String(),
 		AccountID:     payment.AccountID.String(),
 		PaymentMethod: string(payment.Method),
-		Amount:        domain.FromCents(payment.AmountCents),
+		Amount:        domain.AmountFromCents(payment.AmountCents),
 		Currency:      payment.Currency,
 		Reason:        reason,
 		Status:        string(status),

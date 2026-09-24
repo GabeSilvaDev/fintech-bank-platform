@@ -22,6 +22,7 @@ import (
 	"github.com/fintech-bank-platform/payment-service/internal/infrastructure/database"
 	"github.com/fintech-bank-platform/payment-service/internal/infrastructure/gateway"
 	appHttp "github.com/fintech-bank-platform/payment-service/internal/infrastructure/http"
+	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/logger"
 	"github.com/fintech-bank-platform/pkg/messaging"
@@ -126,11 +127,11 @@ func field(event *events.Event, name string) string {
 	return value
 }
 
-func answer(command *events.Event, kind string, balance float64) *events.Event {
+func answer(command *events.Event, kind string, balance int64) *events.Event {
 	account, reference, key := field(command, "account_id"), field(command, "reference"), field(command, "idempotency_key")
-	var payload interface{} = events.AccountDebitedPayload{AccountID: account, BalanceAfter: balance, Reference: reference, IdempotencyKey: key}
+	var payload interface{} = events.AccountDebitedPayload{AccountID: account, BalanceAfter: domain.AmountFromCents(balance), Reference: reference, IdempotencyKey: key}
 	if kind == events.EventTypes.AccountCredited {
-		payload = events.AccountCreditedPayload{AccountID: account, BalanceAfter: balance, Reference: reference, IdempotencyKey: key}
+		payload = events.AccountCreditedPayload{AccountID: account, BalanceAfter: domain.AmountFromCents(balance), Reference: reference, IdempotencyKey: key}
 	}
 	return events.NewAccountEvent(kind, payload).WithTraceID(command.TraceID)
 }
@@ -208,7 +209,7 @@ func TestPaymentsEndToEnd(t *testing.T) {
 
 	tedTrace := prefix + "-ted"
 	ted := events.NewPaymentCommand(events.EventTypes.ProcessPayment, events.ProcessPaymentPayload{
-		AccountID: account, PaymentMethod: "ted", Amount: 1000, Currency: "BRL", Recipient: "Bruno Lima", IdempotencyKey: tedTrace,
+		AccountID: account, PaymentMethod: "ted", Amount: domain.AmountFromCents(100000), Currency: "BRL", Recipient: "Bruno Lima", IdempotencyKey: tedTrace,
 		TED: &events.TEDDetails{BankCode: "341", Branch: "0001", Account: "123456", Document: "52998224725"},
 	}).WithTraceID(tedTrace)
 	require.NoError(t, producer.Publish(ctx, events.Topics.PaymentCommands, account, ted))
@@ -217,7 +218,7 @@ func TestPaymentsEndToEnd(t *testing.T) {
 	tedID := uuid.MustParse(field(created, "payment_id"))
 	debit := awaitEvent(t, ctx, accountCommands, events.EventTypes.DebitAccount, tedTrace, withField("reference", models.Reference(tedID)))
 	require.Equal(t, models.StepKey(tedID, models.StepDebit), field(debit, "idempotency_key"))
-	require.NoError(t, producer.Publish(ctx, replies, account, answer(debit, events.EventTypes.AccountDebited, 9000)))
+	require.NoError(t, producer.Publish(ctx, replies, account, answer(debit, events.EventTypes.AccountDebited, 900000)))
 
 	processed := awaitEvent(t, ctx, results, events.EventTypes.PaymentProcessed, tedTrace, withField("payment_id", tedID.String()))
 	externalID := field(processed, "external_id")
@@ -259,16 +260,16 @@ func TestPaymentsEndToEnd(t *testing.T) {
 
 	pixTrace := prefix + "-pix"
 	pix := events.NewPaymentCommand(events.EventTypes.ProcessPayment, events.ProcessPaymentPayload{
-		AccountID: account, PaymentMethod: "pix", Amount: 20, Currency: "BRL", Recipient: "Ana", PixKey: "reject@reject.test", IdempotencyKey: pixTrace,
+		AccountID: account, PaymentMethod: "pix", Amount: domain.AmountFromCents(2000), Currency: "BRL", Recipient: "Ana", PixKey: "reject@reject.test", IdempotencyKey: pixTrace,
 	}).WithTraceID(pixTrace)
 	require.NoError(t, producer.Publish(ctx, events.Topics.PaymentCommands, account, pix))
 	pixID := uuid.MustParse(field(awaitEvent(t, ctx, results, events.EventTypes.PaymentCreated, pixTrace, storedIn(ctx, repo)), "payment_id"))
 	pixDebit := awaitEvent(t, ctx, accountCommands, events.EventTypes.DebitAccount, pixTrace, withField("reference", models.Reference(pixID)))
 	require.Equal(t, models.StepKey(pixID, models.StepDebit), field(pixDebit, "idempotency_key"))
-	require.NoError(t, producer.Publish(ctx, replies, account, answer(pixDebit, events.EventTypes.AccountDebited, 8980)))
+	require.NoError(t, producer.Publish(ctx, replies, account, answer(pixDebit, events.EventTypes.AccountDebited, 898000)))
 	refund := awaitEvent(t, ctx, accountCommands, events.EventTypes.CreditAccount, pixTrace, withField("reference", models.Reference(pixID)))
 	require.Equal(t, models.StepKey(pixID, models.StepRefund), field(refund, "idempotency_key"))
-	require.NoError(t, producer.Publish(ctx, replies, account, answer(refund, events.EventTypes.AccountCredited, 9000)))
+	require.NoError(t, producer.Publish(ctx, replies, account, answer(refund, events.EventTypes.AccountCredited, 900000)))
 
 	failed := awaitEvent(t, ctx, results, events.EventTypes.PaymentFailed, pixTrace, withField("payment_id", pixID.String()))
 	require.Equal(t, "refunded", field(failed, "status"))

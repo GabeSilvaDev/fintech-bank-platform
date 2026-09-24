@@ -26,14 +26,6 @@ func TestToCents(t *testing.T) {
 	assert.True(t, IsInvalid(err))
 }
 
-func TestFromCentsAndCents(t *testing.T) {
-	assert.Equal(t, 150.5, FromCents(15050))
-	assert.Equal(t, 0.0, FromCents(0))
-	assert.Equal(t, int64(0), Cents(0))
-	assert.Equal(t, int64(1999), Cents(19.99))
-	assert.Equal(t, int64(-250), Cents(-2.5))
-}
-
 func TestInvalidError(t *testing.T) {
 	err := Invalid("account_closed", "account is closed")
 

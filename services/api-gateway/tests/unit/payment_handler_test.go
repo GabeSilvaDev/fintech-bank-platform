@@ -7,6 +7,7 @@ import (
 	"github.com/fintech-bank-platform/api-gateway/internal/app/handlers"
 	"github.com/fintech-bank-platform/api-gateway/internal/contracts"
 	"github.com/fintech-bank-platform/api-gateway/tests"
+	"github.com/fintech-bank-platform/pkg/domain"
 	apperrors "github.com/fintech-bank-platform/pkg/errors"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/go-chi/chi/v5"
@@ -43,7 +44,7 @@ func TestProcessPixPaymentPublishesCommand(t *testing.T) {
 	payload := cmd.Event.Payload.(events.ProcessPaymentPayload)
 	assert.Equal(t, accountID, payload.AccountID)
 	assert.Equal(t, "pix", payload.PaymentMethod)
-	assert.Equal(t, 42.5, payload.Amount)
+	assert.Equal(t, domain.AmountFromCents(4250), payload.Amount)
 	assert.Equal(t, "BRL", payload.Currency)
 	assert.Equal(t, "Loja X", payload.Recipient)
 	assert.Equal(t, "ana@example.com", payload.PixKey)
@@ -168,4 +169,16 @@ func TestProcessPaymentReturnsPublisherError(t *testing.T) {
 	rec, _ := call(paymentRouter(pub), http.MethodPost, "/payments", paymentBody(tests.UUID(), "ted", `,"ted":{"bank_code":"341","branch":"0001","account":"123456","document":"52998224725"}`))
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+}
+
+func TestPaymentAmountsWithMoreThanTwoDecimalsAreRejected(t *testing.T) {
+	pub := &tests.FakePublisher{}
+
+	rec, body := call(paymentRouter(pub), http.MethodPost, "/payments",
+		`{"account_id":"`+tests.UUID()+`","payment_method":"boleto","amount":150.001,"currency":"BRL","recipient":"Energia SA","idempotency_key":"bol-3","boleto_code":"`+boletoCodeWithAmount+`"}`)
+
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	assert.Equal(t, "VALIDATION_ERROR", errorCode(body))
+	assert.Equal(t, "amount", errorDetails(body)["amount"])
+	assert.Empty(t, pub.Published)
 }

@@ -29,17 +29,17 @@ func NewReadHandler(accounts AccountReader) *ReadHandler {
 }
 
 type accountResponse struct {
-	AccountID string     `json:"account_id"`
-	UserID    string     `json:"user_id"`
-	Agency    string     `json:"agency"`
-	Number    string     `json:"number"`
-	Type      string     `json:"type"`
-	Status    string     `json:"status"`
-	Currency  string     `json:"currency"`
-	Balance   float64    `json:"balance"`
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
-	ClosedAt  *time.Time `json:"closed_at,omitempty"`
+	AccountID string        `json:"account_id"`
+	UserID    string        `json:"user_id"`
+	Agency    string        `json:"agency"`
+	Number    string        `json:"number"`
+	Type      string        `json:"type"`
+	Status    string        `json:"status"`
+	Currency  string        `json:"currency"`
+	Balance   domain.Amount `json:"balance"`
+	CreatedAt time.Time     `json:"created_at"`
+	UpdatedAt time.Time     `json:"updated_at"`
+	ClosedAt  *time.Time    `json:"closed_at,omitempty"`
 }
 
 func (h *ReadHandler) GetAccount(w http.ResponseWriter, r *http.Request) {
@@ -132,7 +132,7 @@ func toResponse(account *models.Account) accountResponse {
 		Type:      string(account.Type),
 		Status:    string(account.Status),
 		Currency:  account.Currency,
-		Balance:   domain.FromCents(account.BalanceCents),
+		Balance:   domain.AmountFromCents(account.BalanceCents),
 		CreatedAt: account.CreatedAt,
 		UpdatedAt: account.UpdatedAt,
 		ClosedAt:  account.ClosedAt,

@@ -33,7 +33,7 @@ func (s *ReadAPISuite) TestGetAccountThroughRouter() {
 		Get("/accounts/"+account.AccountID.String()).
 		AssertOk().
 		AssertSuccess().
-		AssertJsonPath("data.balance", 2.5).
+		AssertJsonPath("data.balance", "2.50").
 		AssertHeader("X-Request-ID", "read-1")
 
 	s.Get("/accounts/" + uuid.NewString()).AssertNotFound().AssertErrorCode("ACCOUNT_NOT_FOUND")

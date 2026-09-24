@@ -8,6 +8,7 @@ import (
 	"github.com/fintech-bank-platform/api-gateway/internal/app/handlers"
 	"github.com/fintech-bank-platform/api-gateway/internal/contracts"
 	"github.com/fintech-bank-platform/api-gateway/tests"
+	"github.com/fintech-bank-platform/pkg/domain"
 	apperrors "github.com/fintech-bank-platform/pkg/errors"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/go-chi/chi/v5"
@@ -39,7 +40,7 @@ func TestCreateTransactionPublishesCommand(t *testing.T) {
 	payload := cmd.Event.Payload.(events.CreateTransactionPayload)
 	assert.Equal(t, accountID, payload.AccountID)
 	assert.Equal(t, "deposit", payload.Type)
-	assert.Equal(t, 150.5, payload.Amount)
+	assert.Equal(t, domain.AmountFromCents(15050), payload.Amount)
 	assert.Equal(t, "BRL", payload.Currency)
 	assert.Equal(t, "salary", payload.Description)
 	assert.Equal(t, "dep-1", payload.IdempotencyKey)
@@ -119,7 +120,7 @@ func TestTransferPublishesCommand(t *testing.T) {
 	payload := cmd.Event.Payload.(events.ProcessTransferPayload)
 	assert.Equal(t, from, payload.FromAccountID)
 	assert.Equal(t, to, payload.ToAccountID)
-	assert.Equal(t, 99.9, payload.Amount)
+	assert.Equal(t, domain.AmountFromCents(9990), payload.Amount)
 	assert.Equal(t, "BRL", payload.Currency)
 	assert.Equal(t, "rent", payload.Description)
 	assert.Equal(t, "tr-1", payload.IdempotencyKey)
@@ -153,4 +154,20 @@ func TestTransferReturnsPublisherError(t *testing.T) {
 		`{"from_account_id":"`+tests.UUID()+`","to_account_id":"`+tests.UUID()+`","amount":5,"currency":"BRL","idempotency_key":"tr-3"}`)
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+}
+
+func TestTransactionAmountsWithMoreThanTwoDecimalsAreRejected(t *testing.T) {
+	pub := &tests.FakePublisher{}
+
+	rec, body := call(transactionRouter(pub), http.MethodPost, "/transactions",
+		`{"account_id":"`+tests.UUID()+`","type":"deposit","amount":10.005,"currency":"BRL","idempotency_key":"dep-2"}`)
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	assert.Equal(t, "VALIDATION_ERROR", errorCode(body))
+	assert.Equal(t, "amount", errorDetails(body)["amount"])
+
+	rec, body = call(transactionRouter(pub), http.MethodPost, "/transfers",
+		`{"from_account_id":"`+tests.UUID()+`","to_account_id":"`+tests.UUID()+`","amount":0.001,"currency":"BRL","idempotency_key":"tr-4"}`)
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	assert.Equal(t, "amount", errorDetails(body)["amount"])
+	assert.Empty(t, pub.Published)
 }

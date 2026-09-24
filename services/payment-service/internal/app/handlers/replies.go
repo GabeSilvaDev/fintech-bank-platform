@@ -5,6 +5,7 @@ import (
 
 	"github.com/fintech-bank-platform/payment-service/internal/app/models"
 	"github.com/fintech-bank-platform/payment-service/internal/app/services"
+	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/logger"
 	"github.com/fintech-bank-platform/pkg/processor"
@@ -20,10 +21,10 @@ func NewReplyDispatcher(payments *services.PaymentService, log *logger.Logger) *
 }
 
 type accountReply struct {
-	Reference      string  `json:"reference"`
-	IdempotencyKey string  `json:"idempotency_key"`
-	BalanceAfter   float64 `json:"balance_after"`
-	Reason         string  `json:"reason"`
+	Reference      string        `json:"reference"`
+	IdempotencyKey string        `json:"idempotency_key"`
+	BalanceAfter   domain.Amount `json:"balance_after"`
+	Reason         string        `json:"reason"`
 }
 
 func (d *ReplyDispatcher) Dispatch(ctx context.Context, event *events.Event) (processor.Result, error) {

@@ -47,7 +47,7 @@ func TestGetAccountReturnsAccount(t *testing.T) {
 	assert.Equal(t, "checking", data["type"])
 	assert.Equal(t, "active", data["status"])
 	assert.Equal(t, "BRL", data["currency"])
-	assert.Equal(t, 10.5, data["balance"])
+	assert.Equal(t, "10.50", data["balance"])
 	assert.NotContains(t, data, "closed_at")
 }
 

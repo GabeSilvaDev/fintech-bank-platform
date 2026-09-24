@@ -11,6 +11,7 @@ import (
 	"github.com/fintech-bank-platform/notification-service/internal/app/services"
 	"github.com/fintech-bank-platform/notification-service/internal/contracts"
 	"github.com/fintech-bank-platform/notification-service/tests"
+	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/logger"
 	"github.com/fintech-bank-platform/pkg/processor"
@@ -110,7 +111,7 @@ func TestAccountCreatedEmailsTheOwner(t *testing.T) {
 
 func TestTransferCompletedPushesBothParties(t *testing.T) {
 	p := newPipeline(t, ana, bruno)
-	source := events.NewTransactionEvent(events.EventTypes.TransferCompleted, events.TransferCompletedPayload{FromAccountID: ana.AccountID.String(), ToAccountID: bruno.AccountID.String(), Amount: 30, FromBalanceAfter: 70, ToBalanceAfter: 30})
+	source := events.NewTransactionEvent(events.EventTypes.TransferCompleted, events.TransferCompletedPayload{FromAccountID: ana.AccountID.String(), ToAccountID: bruno.AccountID.String(), Amount: domain.AmountFromCents(3000), FromBalanceAfter: domain.AmountFromCents(7000), ToBalanceAfter: domain.AmountFromCents(3000)})
 
 	p.send(t, p.routing, source)
 
@@ -124,13 +125,13 @@ func TestTransferCompletedPushesBothParties(t *testing.T) {
 func TestRefundFailedEscalatesBySMSWhenAvailable(t *testing.T) {
 	p := newPipeline(t, ana, bruno)
 
-	p.send(t, p.routing, events.NewPaymentEvent(events.EventTypes.PaymentFailed, events.PaymentFailedPayload{AccountID: ana.AccountID.String(), PaymentMethod: "pix", Amount: 10, Reason: "pix_key_not_found", Status: "refund_failed"}))
+	p.send(t, p.routing, events.NewPaymentEvent(events.EventTypes.PaymentFailed, events.PaymentFailedPayload{AccountID: ana.AccountID.String(), PaymentMethod: "pix", Amount: domain.AmountFromCents(1000), Reason: "pix_key_not_found", Status: "refund_failed"}))
 	assert.Len(t, p.push.Sent, 1)
 	assert.Len(t, p.email.Sent, 1)
 	assert.Len(t, p.sms.Sent, 1)
 	assert.Equal(t, ana.Phone, p.sms.Sent[0].To)
 
-	p.send(t, p.routing, events.NewPaymentEvent(events.EventTypes.PaymentFailed, events.PaymentFailedPayload{AccountID: bruno.AccountID.String(), PaymentMethod: "pix", Amount: 10, Reason: "pix_key_not_found", Status: "refund_failed"}))
+	p.send(t, p.routing, events.NewPaymentEvent(events.EventTypes.PaymentFailed, events.PaymentFailedPayload{AccountID: bruno.AccountID.String(), PaymentMethod: "pix", Amount: domain.AmountFromCents(1000), Reason: "pix_key_not_found", Status: "refund_failed"}))
 	assert.Len(t, p.push.Sent, 2)
 	assert.Len(t, p.email.Sent, 2)
 	assert.Len(t, p.sms.Sent, 1)
@@ -142,7 +143,7 @@ func TestFailingPushIsDeadLetteredButEmailStillGoesOut(t *testing.T) {
 	p := newPipeline(t, ana)
 	p.push.Errs = []error{errors.New("fcm down"), errors.New("fcm down")}
 
-	p.send(t, p.routing, events.NewPaymentEvent(events.EventTypes.PaymentCompleted, events.PaymentCompletedPayload{AccountID: ana.AccountID.String(), PaymentMethod: "pix", Amount: 42.5}))
+	p.send(t, p.routing, events.NewPaymentEvent(events.EventTypes.PaymentCompleted, events.PaymentCompletedPayload{AccountID: ana.AccountID.String(), PaymentMethod: "pix", Amount: domain.AmountFromCents(4250)}))
 
 	assert.Empty(t, p.push.Sent)
 	assert.Len(t, p.email.Sent, 1)

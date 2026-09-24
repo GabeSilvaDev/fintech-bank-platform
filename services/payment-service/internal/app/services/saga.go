@@ -20,7 +20,7 @@ type Reply struct {
 	Kind           string
 	Reference      string
 	IdempotencyKey string
-	BalanceAfter   float64
+	BalanceAfter   domain.Amount
 	Reason         string
 	TraceID        string
 }
@@ -46,7 +46,7 @@ func (s *PaymentService) ApplyAccountEvent(ctx context.Context, reply Reply) (pr
 
 	switch {
 	case reply.Kind == events.EventTypes.AccountDebited && step == models.StepDebit:
-		balance := domain.Cents(reply.BalanceAfter)
+		balance := reply.BalanceAfter.Cents()
 		return s.apply(ctx, payment, models.StatusPending, models.StatusDebited,
 			models.Patch{BalanceAfterCents: &balance, UpdatedAt: now},
 			processor.Message{Topic: events.Topics.PaymentCommands, Key: payment.ID.String(), Event: submitCommand(payment, trace)})
@@ -55,7 +55,7 @@ func (s *PaymentService) ApplyAccountEvent(ctx context.Context, reply Reply) (pr
 			models.Patch{FailureReason: &reply.Reason, UpdatedAt: now},
 			toEvents(payment, failedEvent(payment, reply.Reason, models.StatusFailed, now, trace)))
 	case reply.Kind == events.EventTypes.AccountCredited && step == models.StepRefund:
-		balance := domain.Cents(reply.BalanceAfter)
+		balance := reply.BalanceAfter.Cents()
 		return s.apply(ctx, payment, models.StatusRefunding, models.StatusRefunded,
 			models.Patch{BalanceAfterCents: &balance, UpdatedAt: now},
 			toEvents(payment, failedEvent(payment, payment.FailureReason, models.StatusRefunded, now, trace)))

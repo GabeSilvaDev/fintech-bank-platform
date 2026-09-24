@@ -20,7 +20,7 @@ func TestCreditFirstCallReservesAppliesAndCompletes(t *testing.T) {
 	h := newHarness()
 	account := h.activeAccount(0)
 
-	result, err := h.service.Credit(context.Background(), credit(account.AccountID.String(), 10))
+	result, err := h.service.Credit(context.Background(), credit(account.AccountID.String(), 1000))
 
 	assert.NoError(t, err)
 	assert.NotNil(t, result.Credited)
@@ -43,10 +43,10 @@ func TestCreditSecondCallWithSameKeyReplaysWithoutTouchingBalance(t *testing.T) 
 	h := newHarness()
 	account := h.activeAccount(0)
 
-	first, err := h.service.Credit(context.Background(), credit(account.AccountID.String(), 10))
+	first, err := h.service.Credit(context.Background(), credit(account.AccountID.String(), 1000))
 	assert.NoError(t, err)
 
-	second, err := h.service.Credit(context.Background(), credit(account.AccountID.String(), 10))
+	second, err := h.service.Credit(context.Background(), credit(account.AccountID.String(), 1000))
 	assert.NoError(t, err)
 
 	assert.Equal(t, 1, h.accounts.CASCalls)
@@ -60,12 +60,12 @@ func TestDebitRejectionIsReplayedWithoutRereadingTheBalance(t *testing.T) {
 	h := newHarness()
 	account := h.activeAccount(100)
 
-	first, err := h.service.Debit(context.Background(), debit(account.AccountID.String(), 5))
+	first, err := h.service.Debit(context.Background(), debit(account.AccountID.String(), 500))
 	assert.NoError(t, err)
 	assert.Equal(t, "insufficient_funds", first.Rejected.Reason)
 
 	h.accounts.GetErrs = []error{errors.New("should not be called")}
-	second, err := h.service.Debit(context.Background(), debit(account.AccountID.String(), 5))
+	second, err := h.service.Debit(context.Background(), debit(account.AccountID.String(), 500))
 	assert.NoError(t, err)
 	assert.NotNil(t, second.Rejected)
 	assert.Equal(t, first.Rejected.Reason, second.Rejected.Reason)
@@ -80,7 +80,7 @@ func TestCreditWithPendingKeyIsAmbiguous(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, reserved)
 
-	_, err = h.service.Credit(context.Background(), credit(account.AccountID.String(), 10))
+	_, err = h.service.Credit(context.Background(), credit(account.AccountID.String(), 1000))
 	assert.True(t, errors.Is(err, domain.ErrAmbiguousWrite))
 }
 
@@ -88,10 +88,10 @@ func TestKeyReusedForDifferentKindIsRejected(t *testing.T) {
 	h := newHarness()
 	account := h.activeAccount(1000)
 
-	_, err := h.service.Credit(context.Background(), credit(account.AccountID.String(), 10))
+	_, err := h.service.Credit(context.Background(), credit(account.AccountID.String(), 1000))
 	assert.NoError(t, err)
 
-	_, err = h.service.Debit(context.Background(), events.DebitAccountPayload{AccountID: account.AccountID.String(), Amount: 5, Currency: "BRL", IdempotencyKey: "k-1"})
+	_, err = h.service.Debit(context.Background(), events.DebitAccountPayload{AccountID: account.AccountID.String(), Amount: domain.AmountFromCents(500), Currency: "BRL", IdempotencyKey: "k-1"})
 	assert.Equal(t, "idempotency_key_reused", domain.InvalidCode(err))
 }
 
@@ -103,7 +103,7 @@ func TestKeyReuseIsReportedEvenWhilePending(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, reserved)
 
-	_, err = h.service.Debit(context.Background(), events.DebitAccountPayload{AccountID: account.AccountID.String(), Amount: 5, Currency: "BRL", IdempotencyKey: "k-1"})
+	_, err = h.service.Debit(context.Background(), events.DebitAccountPayload{AccountID: account.AccountID.String(), Amount: domain.AmountFromCents(500), Currency: "BRL", IdempotencyKey: "k-1"})
 	assert.Equal(t, "idempotency_key_reused", domain.InvalidCode(err))
 }
 
@@ -111,10 +111,10 @@ func TestCreditRequiresIdempotencyKey(t *testing.T) {
 	h := newHarness()
 	account := h.activeAccount(0)
 
-	_, err := h.service.Credit(context.Background(), events.CreditAccountPayload{AccountID: account.AccountID.String(), Amount: 1, Currency: "BRL", IdempotencyKey: "   "})
+	_, err := h.service.Credit(context.Background(), events.CreditAccountPayload{AccountID: account.AccountID.String(), Amount: domain.AmountFromCents(100), Currency: "BRL", IdempotencyKey: "   "})
 	assert.Equal(t, "invalid_idempotency_key", domain.InvalidCode(err))
 
-	_, err = h.service.Debit(context.Background(), events.DebitAccountPayload{AccountID: account.AccountID.String(), Amount: 1, Currency: "BRL"})
+	_, err = h.service.Debit(context.Background(), events.DebitAccountPayload{AccountID: account.AccountID.String(), Amount: domain.AmountFromCents(100), Currency: "BRL"})
 	assert.Equal(t, "invalid_idempotency_key", domain.InvalidCode(err))
 }
 
@@ -123,7 +123,7 @@ func TestConflictFromCASReleasesTheKeyForRetry(t *testing.T) {
 	account := h.activeAccount(0)
 	h.accounts.CASResults = []tests.CASResult{{}, {}, {}, {}, {}}
 
-	_, err := h.service.Credit(context.Background(), credit(account.AccountID.String(), 10))
+	_, err := h.service.Credit(context.Background(), credit(account.AccountID.String(), 1000))
 
 	assert.ErrorIs(t, err, domain.ErrConflict)
 	assert.Equal(t, 1, h.operations.ReleaseCalls)
@@ -131,7 +131,7 @@ func TestConflictFromCASReleasesTheKeyForRetry(t *testing.T) {
 	assert.False(t, ok)
 
 	h.accounts.CASResults = nil
-	result, err := h.service.Credit(context.Background(), credit(account.AccountID.String(), 10))
+	result, err := h.service.Credit(context.Background(), credit(account.AccountID.String(), 1000))
 	assert.NoError(t, err)
 	assert.NotNil(t, result.Credited)
 }
@@ -141,7 +141,7 @@ func TestAmbiguousCASErrorKeepsTheKeyPending(t *testing.T) {
 	account := h.activeAccount(0)
 	h.accounts.CASResults = []tests.CASResult{{Err: fmt.Errorf("%w: timeout", domain.ErrAmbiguousWrite)}}
 
-	_, err := h.service.Credit(context.Background(), credit(account.AccountID.String(), 10))
+	_, err := h.service.Credit(context.Background(), credit(account.AccountID.String(), 1000))
 
 	assert.True(t, errors.Is(err, domain.ErrAmbiguousWrite))
 	assert.Equal(t, 0, h.operations.ReleaseCalls)
@@ -156,7 +156,7 @@ func TestReleaseFailureIsReturnedInsteadOfTheOriginalError(t *testing.T) {
 	h.accounts.CASResults = []tests.CASResult{{}, {}, {}, {}, {}}
 	h.operations.ReleaseErr = errors.New("release boom")
 
-	_, err := h.service.Credit(context.Background(), credit(account.AccountID.String(), 10))
+	_, err := h.service.Credit(context.Background(), credit(account.AccountID.String(), 1000))
 
 	assert.EqualError(t, err, "release boom")
 }
@@ -166,13 +166,13 @@ func TestCompleteFailureStillReturnsTheResult(t *testing.T) {
 	account := h.activeAccount(0)
 	h.operations.CompleteErr = errors.New("complete boom")
 
-	result, err := h.service.Credit(context.Background(), credit(account.AccountID.String(), 10))
+	result, err := h.service.Credit(context.Background(), credit(account.AccountID.String(), 1000))
 
 	assert.NoError(t, err)
 	assert.NotNil(t, result.Credited)
 
 	h.operations.CompleteErr = nil
-	_, err = h.service.Credit(context.Background(), credit(account.AccountID.String(), 10))
+	_, err = h.service.Credit(context.Background(), credit(account.AccountID.String(), 1000))
 
 	assert.True(t, errors.Is(err, domain.ErrAmbiguousWrite))
 	assert.Equal(t, 1, h.accounts.CASCalls)
@@ -186,7 +186,7 @@ func TestReleaseRunsEvenWhenTheCommandContextIsCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := h.service.Credit(ctx, credit(account.AccountID.String(), 10))
+	_, err := h.service.Credit(ctx, credit(account.AccountID.String(), 1000))
 
 	assert.ErrorIs(t, err, domain.ErrConflict)
 	assert.Equal(t, 1, h.operations.ReleaseCalls)
@@ -205,7 +205,7 @@ func TestKeyReleasedBetweenReserveAndGetIsARetryableConflict(t *testing.T) {
 	assert.True(t, reserved)
 	h.operations.GetErr = domain.ErrNotFound
 
-	_, err = h.service.Credit(context.Background(), credit(account.AccountID.String(), 10))
+	_, err = h.service.Credit(context.Background(), credit(account.AccountID.String(), 1000))
 
 	assert.ErrorIs(t, err, domain.ErrConflict)
 	assert.NotErrorIs(t, err, domain.ErrNotFound)
@@ -218,7 +218,7 @@ func TestReserveErrorPropagates(t *testing.T) {
 	account := h.activeAccount(0)
 	h.operations.ReserveErr = errors.New("reserve boom")
 
-	_, err := h.service.Credit(context.Background(), credit(account.AccountID.String(), 10))
+	_, err := h.service.Credit(context.Background(), credit(account.AccountID.String(), 1000))
 
 	assert.EqualError(t, err, "reserve boom")
 }
@@ -232,7 +232,26 @@ func TestGetErrorPropagatesWhenKeyIsAlreadyReserved(t *testing.T) {
 	assert.True(t, reserved)
 	h.operations.GetErr = errors.New("get boom")
 
-	_, err = h.service.Credit(context.Background(), credit(account.AccountID.String(), 10))
+	_, err = h.service.Credit(context.Background(), credit(account.AccountID.String(), 1000))
 
 	assert.EqualError(t, err, "get boom")
+}
+
+func TestLegacyStoredResultWithNumericAmountsIsReplayed(t *testing.T) {
+	h := newHarness()
+	account := h.activeAccount(0)
+	h.operations.Operations[account.AccountID.String()+"/k-1"] = &models.BalanceOperation{
+		AccountID: account.AccountID,
+		Key:       "k-1",
+		Kind:      "credit",
+		Status:    models.OperationDone,
+		Result:    `{"Credited":{"account_id":"` + account.AccountID.String() + `","amount":10.5,"balance_after":1234.56,"reference":"tx-1","idempotency_key":"k-1","occurred_at":"2026-01-02T03:04:05Z"},"Rejected":null}`,
+	}
+
+	result, err := h.service.Credit(context.Background(), credit(account.AccountID.String(), 1050))
+
+	assert.NoError(t, err)
+	assert.Equal(t, domain.AmountFromCents(1050), result.Credited.Amount)
+	assert.Equal(t, domain.AmountFromCents(123456), result.Credited.BalanceAfter)
+	assert.Equal(t, 0, h.accounts.CASCalls)
 }

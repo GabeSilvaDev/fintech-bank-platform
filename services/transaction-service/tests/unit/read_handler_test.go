@@ -44,7 +44,7 @@ func TestGetTransaction(t *testing.T) {
 	assert.Equal(t, "debited", data["status"])
 	assert.Equal(t, tx.AccountID.String(), data["account_id"])
 	assert.Equal(t, tx.CounterpartyID.String(), data["counterparty_id"])
-	assert.Equal(t, 30.0, data["amount"])
+	assert.Equal(t, "30.00", data["amount"])
 	assert.Equal(t, "BRL", data["currency"])
 	assert.Equal(t, "rent", data["description"])
 	assert.NotContains(t, data, "from_balance_after")
@@ -104,7 +104,7 @@ func TestListAccountTransactionsDepositAndWithdrawalKeepOwnBalance(t *testing.T)
 	items := body["data"].([]interface{})
 	assert.Len(t, items, 1)
 	withdrawalView := items[0].(map[string]interface{})
-	assert.Equal(t, 70.0, withdrawalView["from_balance_after"])
+	assert.Equal(t, "70.00", withdrawalView["from_balance_after"])
 	assert.NotContains(t, withdrawalView, "to_balance_after")
 
 	rec, body = get(readRouter(h), "/accounts/"+deposit.AccountID.String()+"/transactions")
@@ -112,7 +112,7 @@ func TestListAccountTransactionsDepositAndWithdrawalKeepOwnBalance(t *testing.T)
 	items = body["data"].([]interface{})
 	assert.Len(t, items, 1)
 	depositView := items[0].(map[string]interface{})
-	assert.Equal(t, 50.0, depositView["to_balance_after"])
+	assert.Equal(t, "50.00", depositView["to_balance_after"])
 	assert.NotContains(t, depositView, "from_balance_after")
 }
 
@@ -130,7 +130,7 @@ func TestListAccountTransactionsTransferBalanceVisibility(t *testing.T) {
 	items := body["data"].([]interface{})
 	assert.Len(t, items, 1)
 	senderView := items[0].(map[string]interface{})
-	assert.Equal(t, 70.0, senderView["from_balance_after"])
+	assert.Equal(t, "70.00", senderView["from_balance_after"])
 	assert.NotContains(t, senderView, "to_balance_after")
 
 	rec, body = get(readRouter(h), "/accounts/"+tx.CounterpartyID.String()+"/transactions")
@@ -138,7 +138,7 @@ func TestListAccountTransactionsTransferBalanceVisibility(t *testing.T) {
 	items = body["data"].([]interface{})
 	assert.Len(t, items, 1)
 	counterpartyView := items[0].(map[string]interface{})
-	assert.Equal(t, 30.0, counterpartyView["to_balance_after"])
+	assert.Equal(t, "30.00", counterpartyView["to_balance_after"])
 	assert.NotContains(t, counterpartyView, "from_balance_after")
 }
 

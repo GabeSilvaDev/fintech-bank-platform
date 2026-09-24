@@ -38,15 +38,15 @@ func newHarness() *harness {
 }
 
 func pix(accountID string) events.ProcessPaymentPayload {
-	return events.ProcessPaymentPayload{AccountID: accountID, PaymentMethod: "pix", Amount: 42.5, Currency: "brl", Recipient: "  Ana Souza  ", PixKey: "ana@example.com", Description: "lunch", IdempotencyKey: "pay-1"}
+	return events.ProcessPaymentPayload{AccountID: accountID, PaymentMethod: "pix", Amount: domain.AmountFromCents(4250), Currency: "brl", Recipient: "  Ana Souza  ", PixKey: "ana@example.com", Description: "lunch", IdempotencyKey: "pay-1"}
 }
 
-func boleto(accountID, code string, amount float64) events.ProcessPaymentPayload {
-	return events.ProcessPaymentPayload{AccountID: accountID, PaymentMethod: "boleto", Amount: amount, Currency: "BRL", Recipient: "Energia SA", BoletoCode: code, IdempotencyKey: "bol-1"}
+func boleto(accountID, code string, cents int64) events.ProcessPaymentPayload {
+	return events.ProcessPaymentPayload{AccountID: accountID, PaymentMethod: "boleto", Amount: domain.AmountFromCents(cents), Currency: "BRL", Recipient: "Energia SA", BoletoCode: code, IdempotencyKey: "bol-1"}
 }
 
 func ted(accountID string) events.ProcessPaymentPayload {
-	return events.ProcessPaymentPayload{AccountID: accountID, PaymentMethod: "ted", Amount: 1000, Currency: "BRL", Recipient: "Bruno Lima", IdempotencyKey: "ted-1", TED: &events.TEDDetails{BankCode: "341", Branch: "0001", Account: "123456", Document: "52998224725"}}
+	return events.ProcessPaymentPayload{AccountID: accountID, PaymentMethod: "ted", Amount: domain.AmountFromCents(100000), Currency: "BRL", Recipient: "Bruno Lima", IdempotencyKey: "ted-1", TED: &events.TEDDetails{BankCode: "341", Branch: "0001", Account: "123456", Document: "52998224725"}}
 }
 
 func TestCreatePixRecordsAndRequestsDebit(t *testing.T) {
@@ -80,7 +80,7 @@ func TestCreatePixRecordsAndRequestsDebit(t *testing.T) {
 	createdPayload := created.Event.Payload.(events.PaymentCreatedPayload)
 	assert.Equal(t, h.nextID.String(), createdPayload.PaymentID)
 	assert.Equal(t, "pix", createdPayload.PaymentMethod)
-	assert.Equal(t, 42.5, createdPayload.Amount)
+	assert.Equal(t, domain.AmountFromCents(4250), createdPayload.Amount)
 	assert.Equal(t, "Ana Souza", createdPayload.Recipient)
 	assert.Equal(t, "pay-1", createdPayload.IdempotencyKey)
 	assert.Equal(t, now, createdPayload.CreatedAt)
@@ -93,7 +93,7 @@ func TestCreatePixRecordsAndRequestsDebit(t *testing.T) {
 	assert.Equal(t, "trace-1", debit.Event.TraceID)
 	debitPayload := debit.Event.Payload.(events.DebitAccountPayload)
 	assert.Equal(t, account.String(), debitPayload.AccountID)
-	assert.Equal(t, 42.5, debitPayload.Amount)
+	assert.Equal(t, domain.AmountFromCents(4250), debitPayload.Amount)
 	assert.Equal(t, "BRL", debitPayload.Currency)
 	assert.Equal(t, "payment:"+h.nextID.String(), debitPayload.Reference)
 	assert.Equal(t, "payment:"+h.nextID.String()+":debit", debitPayload.IdempotencyKey)
@@ -101,13 +101,13 @@ func TestCreatePixRecordsAndRequestsDebit(t *testing.T) {
 
 func TestCreateBoletoAndTed(t *testing.T) {
 	h := newHarness()
-	_, err := h.service.Create(context.Background(), boleto(uuid.NewString(), boleto150, 150), "t")
+	_, err := h.service.Create(context.Background(), boleto(uuid.NewString(), boleto150, 15000), "t")
 	assert.NoError(t, err)
 	assert.Equal(t, boleto150, h.repo.Created[0].BoletoCode)
 	assert.Nil(t, h.repo.Created[0].TED)
 
 	h = newHarness()
-	_, err = h.service.Create(context.Background(), boleto(uuid.NewString(), boletoOpen, 99.99), "t")
+	_, err = h.service.Create(context.Background(), boleto(uuid.NewString(), boletoOpen, 9999), "t")
 	assert.NoError(t, err)
 	assert.Equal(t, int64(9999), h.repo.Created[0].AmountCents)
 
@@ -144,8 +144,8 @@ func TestCreateValidation(t *testing.T) {
 		build("invalid_idempotency_key", pix(account), func(c *events.ProcessPaymentPayload) { c.IdempotencyKey = "pay 1" }),
 		build("invalid_description", pix(account), func(c *events.ProcessPaymentPayload) { c.Description = strings.Repeat("d", 256) }),
 		build("invalid_pix_key", pix(account), func(c *events.ProcessPaymentPayload) { c.PixKey = "not a key" }),
-		build("invalid_boleto", boleto(account, boletoBad, 150), func(c *events.ProcessPaymentPayload) {}),
-		build("boleto_amount_mismatch", boleto(account, boleto150, 149.99), func(c *events.ProcessPaymentPayload) {}),
+		build("invalid_boleto", boleto(account, boletoBad, 15000), func(c *events.ProcessPaymentPayload) {}),
+		build("boleto_amount_mismatch", boleto(account, boleto150, 14999), func(c *events.ProcessPaymentPayload) {}),
 		build("invalid_ted_destination", ted(account), func(c *events.ProcessPaymentPayload) { c.TED = nil }),
 		build("invalid_ted_destination", ted(account), func(c *events.ProcessPaymentPayload) { c.TED.BankCode = "34a" }),
 		build("invalid_ted_destination", ted(account), func(c *events.ProcessPaymentPayload) { c.TED.BankCode = "3411" }),

@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/fintech-bank-platform/api-gateway/internal/contracts"
-	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/fintech-bank-platform/pkg/errors"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/response"
@@ -87,19 +86,22 @@ func (h *PaymentHandler) Process(w http.ResponseWriter, r *http.Request) {
 		response.FromError(w, errors.UnprocessableEntity("VALIDATION_ERROR", "request validation failed").WithDetail(field, "required"))
 		return
 	}
+	amount, err := amountOf(req.Amount)
+	if err != nil {
+		response.FromError(w, err)
+		return
+	}
 	if req.PaymentMethod == "boleto" {
-		if boletoCents, ok := validation.BoletoAmountCents(req.BoletoCode); ok && boletoCents > 0 {
-			if cents, err := domain.ToCents(req.Amount); err == nil && cents != boletoCents {
-				response.FromError(w, errors.UnprocessableEntity("VALIDATION_ERROR", "request validation failed").WithDetail("amount", "boleto_amount"))
-				return
-			}
+		if boletoCents, ok := validation.BoletoAmountCents(req.BoletoCode); ok && boletoCents > 0 && amount.Cents() != boletoCents {
+			response.FromError(w, errors.UnprocessableEntity("VALIDATION_ERROR", "request validation failed").WithDetail("amount", "boleto_amount"))
+			return
 		}
 	}
 
 	event := events.NewPaymentCommand(events.EventTypes.ProcessPayment, events.ProcessPaymentPayload{
 		AccountID:      req.AccountID,
 		PaymentMethod:  req.PaymentMethod,
-		Amount:         req.Amount,
+		Amount:         amount,
 		Currency:       strings.ToUpper(req.Currency),
 		Recipient:      req.Recipient,
 		PixKey:         req.PixKey,

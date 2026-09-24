@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -129,7 +130,7 @@ func TestProcessTransferPayload(t *testing.T) {
 	payload := ProcessTransferPayload{
 		FromAccountID:  "acc-123",
 		ToAccountID:    "acc-456",
-		Amount:         100.50,
+		Amount:         domain.AmountFromCents(10050),
 		Currency:       "BRL",
 		Description:    "Test transfer",
 		IdempotencyKey: "idem-123",
@@ -149,7 +150,7 @@ func TestProcessPaymentPayload(t *testing.T) {
 	payload := ProcessPaymentPayload{
 		AccountID:      "acc-123",
 		PaymentMethod:  "pix",
-		Amount:         250.00,
+		Amount:         domain.AmountFromCents(25000),
 		Currency:       "BRL",
 		Recipient:      "Merchant XYZ",
 		PixKey:         "merchant@example.com",
@@ -172,9 +173,9 @@ func TestTransactionCompletedPayload(t *testing.T) {
 		TransactionID: "txn-123",
 		AccountID:     "acc-123",
 		Type:          "credit",
-		Amount:        500.00,
+		Amount:        domain.AmountFromCents(50000),
 		Currency:      "BRL",
-		BalanceAfter:  1500.00,
+		BalanceAfter:  domain.AmountFromCents(150000),
 		Status:        "completed",
 		CompletedAt:   now,
 	}
@@ -346,11 +347,11 @@ func TestBalanceEventTypes(t *testing.T) {
 func TestBalancePayloadsRoundTrip(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	cases := []interface{}{
-		CreditAccountPayload{AccountID: "a", Amount: 10.5, Currency: "BRL", Reference: "tx-1", IdempotencyKey: "k1"},
-		DebitAccountPayload{AccountID: "a", Amount: 3, Currency: "BRL", Reference: "tx-2", IdempotencyKey: "k2"},
-		AccountCreditedPayload{AccountID: "a", Amount: 10.5, BalanceAfter: 10.5, Reference: "tx-1", IdempotencyKey: "k1", OccurredAt: now},
-		AccountDebitedPayload{AccountID: "a", Amount: 3, BalanceAfter: 7.5, Reference: "tx-2", IdempotencyKey: "k2", OccurredAt: now},
-		DebitRejectedPayload{AccountID: "a", Amount: 100, Balance: 7.5, Reason: "insufficient_funds", Reference: "tx-3", IdempotencyKey: "k3"},
+		CreditAccountPayload{AccountID: "a", Amount: domain.AmountFromCents(1050), Currency: "BRL", Reference: "tx-1", IdempotencyKey: "k1"},
+		DebitAccountPayload{AccountID: "a", Amount: domain.AmountFromCents(300), Currency: "BRL", Reference: "tx-2", IdempotencyKey: "k2"},
+		AccountCreditedPayload{AccountID: "a", Amount: domain.AmountFromCents(1050), BalanceAfter: domain.AmountFromCents(1050), Reference: "tx-1", IdempotencyKey: "k1", OccurredAt: now},
+		AccountDebitedPayload{AccountID: "a", Amount: domain.AmountFromCents(300), BalanceAfter: domain.AmountFromCents(750), Reference: "tx-2", IdempotencyKey: "k2", OccurredAt: now},
+		DebitRejectedPayload{AccountID: "a", Amount: domain.AmountFromCents(10000), Balance: domain.AmountFromCents(750), Reason: "insufficient_funds", Reference: "tx-3", IdempotencyKey: "k3"},
 		AccountUpdatedPayload{AccountID: "a", UserID: "u", Name: "Ana", Email: "ana@example.com", Phone: "11999887766", Status: "active", UpdatedAt: now},
 		AccountDeletedPayload{AccountID: "a", UserID: "u", Reason: "customer request", ClosedAt: now},
 	}
@@ -372,10 +373,10 @@ func TestSprintThreeEventTypes(t *testing.T) {
 func TestSprintThreePayloadsRoundTrip(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	cases := []interface{}{
-		CreditRejectedPayload{AccountID: "a", Amount: 5, Balance: 1, Reason: "account_not_active", Reference: "t1", IdempotencyKey: "t1:credit"},
-		TransactionCreatedPayload{TransactionID: "t1", Type: "transfer", AccountID: "a", CounterpartyID: "b", Amount: 5, Currency: "BRL", Description: "rent", IdempotencyKey: "k", CreatedAt: now},
-		TransactionFailedPayload{TransactionID: "t1", AccountID: "a", Type: "deposit", Amount: 5, Currency: "BRL", Reason: "account_not_active", FailedAt: now},
-		TransferFailedPayload{TransferID: "t1", FromAccountID: "a", ToAccountID: "b", Amount: 5, Currency: "BRL", Reason: "insufficient_funds", Status: "failed", FailedAt: now},
+		CreditRejectedPayload{AccountID: "a", Amount: domain.AmountFromCents(500), Balance: domain.AmountFromCents(100), Reason: "account_not_active", Reference: "t1", IdempotencyKey: "t1:credit"},
+		TransactionCreatedPayload{TransactionID: "t1", Type: "transfer", AccountID: "a", CounterpartyID: "b", Amount: domain.AmountFromCents(500), Currency: "BRL", Description: "rent", IdempotencyKey: "k", CreatedAt: now},
+		TransactionFailedPayload{TransactionID: "t1", AccountID: "a", Type: "deposit", Amount: domain.AmountFromCents(500), Currency: "BRL", Reason: "account_not_active", FailedAt: now},
+		TransferFailedPayload{TransferID: "t1", FromAccountID: "a", ToAccountID: "b", Amount: domain.AmountFromCents(500), Currency: "BRL", Reason: "insufficient_funds", Status: "failed", FailedAt: now},
 	}
 
 	for _, payload := range cases {
@@ -401,12 +402,12 @@ func TestSprintFourEventTypes(t *testing.T) {
 func TestSprintFourPayloadsRoundTrip(t *testing.T) {
 	at := time.Date(2026, 9, 23, 10, 0, 0, 0, time.UTC)
 	payloads := []interface{}{
-		ProcessPaymentPayload{AccountID: "a", PaymentMethod: "ted", Amount: 10, Currency: "BRL", Recipient: "Ana", TED: &TEDDetails{BankCode: "341", Branch: "0001", Account: "123456", Document: "52998224725"}, IdempotencyKey: "k"},
+		ProcessPaymentPayload{AccountID: "a", PaymentMethod: "ted", Amount: domain.AmountFromCents(1000), Currency: "BRL", Recipient: "Ana", TED: &TEDDetails{BankCode: "341", Branch: "0001", Account: "123456", Document: "52998224725"}, IdempotencyKey: "k"},
 		SubmitPaymentPayload{PaymentID: "p"},
 		SettlePaymentPayload{ExternalID: "ted_1", Status: "rejected", Reason: "invalid_destination"},
-		PaymentCreatedPayload{PaymentID: "p", AccountID: "a", PaymentMethod: "pix", Amount: 1.5, Currency: "BRL", Recipient: "Ana", IdempotencyKey: "k", CreatedAt: at},
-		PaymentProcessedPayload{PaymentID: "p", AccountID: "a", PaymentMethod: "ted", Amount: 1.5, Currency: "BRL", ExternalID: "ted_1", Status: "submitted", ProcessedAt: at},
-		PaymentFailedPayload{PaymentID: "p", AccountID: "a", PaymentMethod: "boleto", Amount: 1.5, Currency: "BRL", Reason: "boleto_not_found", Status: "refunded", FailedAt: at},
+		PaymentCreatedPayload{PaymentID: "p", AccountID: "a", PaymentMethod: "pix", Amount: domain.AmountFromCents(150), Currency: "BRL", Recipient: "Ana", IdempotencyKey: "k", CreatedAt: at},
+		PaymentProcessedPayload{PaymentID: "p", AccountID: "a", PaymentMethod: "ted", Amount: domain.AmountFromCents(150), Currency: "BRL", ExternalID: "ted_1", Status: "submitted", ProcessedAt: at},
+		PaymentFailedPayload{PaymentID: "p", AccountID: "a", PaymentMethod: "boleto", Amount: domain.AmountFromCents(150), Currency: "BRL", Reason: "boleto_not_found", Status: "refunded", FailedAt: at},
 	}
 	for _, payload := range payloads {
 		raw, err := NewPaymentEvent(EventTypes.PaymentFailed, payload).ToJSON()
@@ -427,4 +428,24 @@ func TestSprintFourPayloadsRoundTrip(t *testing.T) {
 func TestSprintFiveNames(t *testing.T) {
 	assert.Equal(t, "notification.dlq", Topics.NotificationDLQ)
 	assert.Equal(t, "notification.command_failed", EventTypes.NotificationCommandFailed)
+}
+
+func TestMoneyFieldsMarshalAsDecimalStrings(t *testing.T) {
+	data, err := json.Marshal(TransferCompletedPayload{
+		Amount:           domain.AmountFromCents(123450),
+		FromBalanceAfter: domain.AmountFromCents(5),
+		ToBalanceAfter:   domain.AmountFromCents(-100),
+	})
+	assert.NoError(t, err)
+	assert.Contains(t, string(data), `"amount":"1234.50"`)
+	assert.Contains(t, string(data), `"from_balance_after":"0.05"`)
+	assert.Contains(t, string(data), `"to_balance_after":"-1.00"`)
+}
+
+func TestMoneyFieldsDecodeLegacyNumbers(t *testing.T) {
+	var payload AccountDebitedPayload
+	err := json.Unmarshal([]byte(`{"account_id":"a","amount":10.5,"balance_after":1234.56}`), &payload)
+	assert.NoError(t, err)
+	assert.Equal(t, domain.AmountFromCents(1050), payload.Amount)
+	assert.Equal(t, domain.AmountFromCents(123456), payload.BalanceAfter)
 }

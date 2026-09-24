@@ -10,6 +10,7 @@ import (
 	"github.com/fintech-bank-platform/payment-service/internal/app/models"
 	"github.com/fintech-bank-platform/payment-service/internal/app/services"
 	"github.com/fintech-bank-platform/payment-service/tests"
+	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/logger"
 	"github.com/fintech-bank-platform/pkg/processor"
@@ -70,7 +71,7 @@ func (p *pipeline) only(t *testing.T) *models.Payment {
 	return p.repo.Payments[p.repo.Created[0].ID]
 }
 
-func answer(command *events.Event, kind string, balance float64, reason string) *events.Event {
+func answer(command *events.Event, kind string, balance int64, reason string) *events.Event {
 	var account, reference, key string
 	switch payload := command.Payload.(type) {
 	case events.DebitAccountPayload:
@@ -81,9 +82,9 @@ func answer(command *events.Event, kind string, balance float64, reason string) 
 	var payload interface{}
 	switch kind {
 	case events.EventTypes.AccountDebited:
-		payload = events.AccountDebitedPayload{AccountID: account, BalanceAfter: balance, Reference: reference, IdempotencyKey: key}
+		payload = events.AccountDebitedPayload{AccountID: account, BalanceAfter: domain.AmountFromCents(balance), Reference: reference, IdempotencyKey: key}
 	case events.EventTypes.AccountCredited:
-		payload = events.AccountCreditedPayload{AccountID: account, BalanceAfter: balance, Reference: reference, IdempotencyKey: key}
+		payload = events.AccountCreditedPayload{AccountID: account, BalanceAfter: domain.AmountFromCents(balance), Reference: reference, IdempotencyKey: key}
 	case events.EventTypes.DebitRejected:
 		payload = events.DebitRejectedPayload{AccountID: account, Reason: reason, Reference: reference, IdempotencyKey: key}
 	default:
@@ -93,7 +94,7 @@ func answer(command *events.Event, kind string, balance float64, reason string) 
 }
 
 func process(accountID string, method string, key string) *events.Event {
-	payload := events.ProcessPaymentPayload{AccountID: accountID, PaymentMethod: method, Amount: 150, Currency: "BRL", Recipient: "Energia SA", IdempotencyKey: key}
+	payload := events.ProcessPaymentPayload{AccountID: accountID, PaymentMethod: method, Amount: domain.AmountFromCents(15000), Currency: "BRL", Recipient: "Energia SA", IdempotencyKey: key}
 	switch method {
 	case "pix":
 		payload.PixKey = "ana@example.com"
@@ -112,7 +113,7 @@ func TestPixSettlesSynchronously(t *testing.T) {
 	debit := p.lastAccountCommand(t)
 	assert.Equal(t, events.EventTypes.DebitAccount, debit.Type)
 
-	p.send(t, p.replies, answer(debit, events.EventTypes.AccountDebited, 850, ""))
+	p.send(t, p.replies, answer(debit, events.EventTypes.AccountDebited, 85000, ""))
 
 	assert.Equal(t, events.EventTypes.PaymentCompleted, p.lastResult(t).Type)
 	assert.Equal(t, "t-pix-1", p.lastResult(t).TraceID)
@@ -130,7 +131,7 @@ func TestTedSettlesThroughTheWebhook(t *testing.T) {
 	p := newPipeline()
 	p.gateway.Submissions = []models.Submission{{ExternalID: "ted_1", Status: models.SubmissionPending}}
 	p.send(t, p.commands, process(uuid.NewString(), "ted", "ted-1"))
-	p.send(t, p.replies, answer(p.lastAccountCommand(t), events.EventTypes.AccountDebited, 850, ""))
+	p.send(t, p.replies, answer(p.lastAccountCommand(t), events.EventTypes.AccountDebited, 85000, ""))
 
 	assert.Equal(t, events.EventTypes.PaymentProcessed, p.lastResult(t).Type)
 	assert.Equal(t, models.StatusSubmitted, p.only(t).Status)
@@ -149,14 +150,14 @@ func TestBoletoRejectedByTheProviderIsRefunded(t *testing.T) {
 	p := newPipeline()
 	p.gateway.Submissions = []models.Submission{{ExternalID: "bol_1", Status: models.SubmissionPending}}
 	p.send(t, p.commands, process(uuid.NewString(), "boleto", "bol-1"))
-	p.send(t, p.replies, answer(p.lastAccountCommand(t), events.EventTypes.AccountDebited, 850, ""))
+	p.send(t, p.replies, answer(p.lastAccountCommand(t), events.EventTypes.AccountDebited, 85000, ""))
 	p.send(t, p.commands, events.NewEvent(events.EventTypes.SettlePayment, "payment-service", events.SettlePaymentPayload{ExternalID: "bol_1", Status: "rejected", Reason: "boleto_not_found"}))
 
 	refund := p.lastAccountCommand(t)
 	assert.Equal(t, events.EventTypes.CreditAccount, refund.Type)
 	assert.Equal(t, models.StatusRefunding, p.only(t).Status)
 
-	p.send(t, p.replies, answer(refund, events.EventTypes.AccountCredited, 1000, ""))
+	p.send(t, p.replies, answer(refund, events.EventTypes.AccountCredited, 100000, ""))
 
 	failed := p.lastResult(t)
 	assert.Equal(t, events.EventTypes.PaymentFailed, failed.Type)
@@ -169,7 +170,7 @@ func TestRejectedPixWhoseRefundFailsIsEscalated(t *testing.T) {
 	p := newPipeline()
 	p.gateway.Submissions = []models.Submission{{Status: models.SubmissionRejected, Reason: "pix_key_not_found"}}
 	p.send(t, p.commands, process(uuid.NewString(), "pix", "pix-2"))
-	p.send(t, p.replies, answer(p.lastAccountCommand(t), events.EventTypes.AccountDebited, 850, ""))
+	p.send(t, p.replies, answer(p.lastAccountCommand(t), events.EventTypes.AccountDebited, 85000, ""))
 	p.send(t, p.replies, answer(p.lastAccountCommand(t), events.EventTypes.CreditRejected, 0, "account_not_active"))
 
 	assert.Equal(t, models.StatusRefundFailed, p.only(t).Status)

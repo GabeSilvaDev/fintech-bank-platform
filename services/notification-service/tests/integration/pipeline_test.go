@@ -22,6 +22,7 @@ import (
 	"github.com/fintech-bank-platform/notification-service/internal/contracts"
 	"github.com/fintech-bank-platform/notification-service/internal/infrastructure/directory"
 	"github.com/fintech-bank-platform/notification-service/internal/infrastructure/storage"
+	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/logger"
 	"github.com/fintech-bank-platform/pkg/messaging"
@@ -199,7 +200,7 @@ func TestNotificationPipelineEndToEnd(t *testing.T) {
 
 	transferTrace := prefix + "-transfer"
 	transferCompleted := events.NewTransactionEvent(events.EventTypes.TransferCompleted, events.TransferCompletedPayload{
-		FromAccountID: ana.AccountID.String(), ToAccountID: bruno.AccountID.String(), Amount: 30, FromBalanceAfter: 70, ToBalanceAfter: 30,
+		FromAccountID: ana.AccountID.String(), ToAccountID: bruno.AccountID.String(), Amount: domain.AmountFromCents(3000), FromBalanceAfter: domain.AmountFromCents(7000), ToBalanceAfter: domain.AmountFromCents(3000),
 	}).WithTraceID(transferTrace)
 	require.NoError(t, producer.Publish(ctx, events.Topics.TransactionEvents, ana.AccountID.String(), transferCompleted))
 
@@ -209,7 +210,7 @@ func TestNotificationPipelineEndToEnd(t *testing.T) {
 
 	paymentTrace := prefix + "-payment"
 	paymentFailed := events.NewPaymentEvent(events.EventTypes.PaymentFailed, events.PaymentFailedPayload{
-		AccountID: ana.AccountID.String(), PaymentMethod: "pix", Amount: 10, Reason: "pix_key_not_found", Status: "refund_failed",
+		AccountID: ana.AccountID.String(), PaymentMethod: "pix", Amount: domain.AmountFromCents(1000), Reason: "pix_key_not_found", Status: "refund_failed",
 	}).WithTraceID(paymentTrace)
 	require.NoError(t, producer.Publish(ctx, events.Topics.PaymentEvents, ana.AccountID.String(), paymentFailed))
 

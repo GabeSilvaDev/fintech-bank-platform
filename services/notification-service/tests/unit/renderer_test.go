@@ -1,10 +1,12 @@
 package unit
 
 import (
+	"math"
 	"testing"
 	"testing/fstest"
 
 	"github.com/fintech-bank-platform/notification-service/internal/app/services"
+	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -61,9 +63,9 @@ func TestRenderErrors(t *testing.T) {
 }
 
 func TestFormatBRL(t *testing.T) {
-	cases := map[float64]string{0: "R$ 0,00", 0.1: "R$ 0,10", 42.5: "R$ 42,50", 1234.56: "R$ 1.234,56", 1000000: "R$ 1.000.000,00", -42.5: "-R$ 42,50", 999.999: "R$ 1.000,00"}
-	for amount, want := range cases {
-		assert.Equal(t, want, services.FormatBRL(amount), amount)
+	cases := map[int64]string{0: "R$ 0,00", 10: "R$ 0,10", 4250: "R$ 42,50", 123456: "R$ 1.234,56", 100000000: "R$ 1.000.000,00", -4250: "-R$ 42,50", 100000: "R$ 1.000,00", math.MinInt64: "-R$ 92.233.720.368.547.758,08"}
+	for cents, want := range cases {
+		assert.Equal(t, want, services.FormatBRL(domain.AmountFromCents(cents)), cents)
 	}
 }
 

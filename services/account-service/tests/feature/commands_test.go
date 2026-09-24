@@ -10,6 +10,7 @@ import (
 	"github.com/fintech-bank-platform/account-service/internal/app/models"
 	"github.com/fintech-bank-platform/account-service/internal/app/services"
 	"github.com/fintech-bank-platform/account-service/tests"
+	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/logger"
 	"github.com/fintech-bank-platform/pkg/processor"
@@ -40,7 +41,7 @@ func TestCommandsEndToEndWithFakeInfrastructure(t *testing.T) {
 	accountID := uuid.MustParse(created.AccountID)
 	assert.Equal(t, models.AccountStatusActive, accounts.Accounts[accountID].Status)
 
-	debit := events.NewAccountCommand(events.EventTypes.DebitAccount, events.DebitAccountPayload{AccountID: created.AccountID, Amount: 10, Currency: "BRL", IdempotencyKey: "d-1"}).WithTraceID("t-2")
+	debit := events.NewAccountCommand(events.EventTypes.DebitAccount, events.DebitAccountPayload{AccountID: created.AccountID, Amount: domain.AmountFromCents(1000), Currency: "BRL", IdempotencyKey: "d-1"}).WithTraceID("t-2")
 	raw, _ = debit.ToJSON()
 	assert.NoError(t, proc.Process(ctx, []byte(created.AccountID), raw))
 

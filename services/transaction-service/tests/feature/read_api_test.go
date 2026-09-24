@@ -30,7 +30,7 @@ func (s *ReadAPISuite) TestReadsThroughRouter() {
 
 	s.WithHeader("X-Request-ID", "read-1").
 		Get("/transactions/"+tx.ID.String()).
-		AssertOk().AssertSuccess().AssertJsonPath("data.amount", 2.5).AssertHeader("X-Request-ID", "read-1")
+		AssertOk().AssertSuccess().AssertJsonPath("data.amount", "2.50").AssertHeader("X-Request-ID", "read-1")
 	s.Get("/accounts/"+tx.AccountID.String()+"/transactions").AssertOk().AssertJsonCount(1, "data")
 	s.Get("/transactions/" + uuid.NewString()).AssertNotFound().AssertErrorCode("TRANSACTION_NOT_FOUND")
 	s.Get("/nope").AssertNotFound()

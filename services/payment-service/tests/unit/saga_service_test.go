@@ -28,15 +28,15 @@ func (h *harness) stored(method models.Method, status models.Status) *models.Pay
 	return payment
 }
 
-func reply(kind string, payment *models.Payment, step models.Step, balance float64, reason string) services.Reply {
-	return services.Reply{Kind: kind, Reference: models.Reference(payment.ID), IdempotencyKey: models.StepKey(payment.ID, step), BalanceAfter: balance, Reason: reason, TraceID: "trace-9"}
+func reply(kind string, payment *models.Payment, step models.Step, balance int64, reason string) services.Reply {
+	return services.Reply{Kind: kind, Reference: models.Reference(payment.ID), IdempotencyKey: models.StepKey(payment.ID, step), BalanceAfter: domain.AmountFromCents(balance), Reason: reason, TraceID: "trace-9"}
 }
 
 func TestDebitedRequestsSubmission(t *testing.T) {
 	h := newHarness()
 	payment := h.stored(models.MethodPix, models.StatusPending)
 
-	res, err := h.service.ApplyAccountEvent(context.Background(), reply(events.EventTypes.AccountDebited, payment, models.StepDebit, 57.5, ""))
+	res, err := h.service.ApplyAccountEvent(context.Background(), reply(events.EventTypes.AccountDebited, payment, models.StepDebit, 5750, ""))
 
 	assert.NoError(t, err)
 	stored := h.repo.Payments[payment.ID]
@@ -68,7 +68,7 @@ func TestDebitRejectedFails(t *testing.T) {
 	failed := msg.Event.Payload.(events.PaymentFailedPayload)
 	assert.Equal(t, payment.ID.String(), failed.PaymentID)
 	assert.Equal(t, "ted", failed.PaymentMethod)
-	assert.Equal(t, 42.5, failed.Amount)
+	assert.Equal(t, domain.AmountFromCents(4250), failed.Amount)
 	assert.Equal(t, "insufficient_funds", failed.Reason)
 	assert.Equal(t, "failed", failed.Status)
 	assert.Equal(t, now, failed.FailedAt)
@@ -80,7 +80,7 @@ func TestRefundRepliesSettleTheRefund(t *testing.T) {
 	payment.FailureReason = "pix_key_not_found"
 	h.repo.Put(payment)
 
-	res, err := h.service.ApplyAccountEvent(context.Background(), reply(events.EventTypes.AccountCredited, payment, models.StepRefund, 100, ""))
+	res, err := h.service.ApplyAccountEvent(context.Background(), reply(events.EventTypes.AccountCredited, payment, models.StepRefund, 10000, ""))
 	assert.NoError(t, err)
 	assert.Equal(t, models.StatusRefunded, h.repo.Payments[payment.ID].Status)
 	assert.Equal(t, int64(10000), *h.repo.Payments[payment.ID].BalanceAfterCents)
@@ -118,9 +118,9 @@ func TestApplyIgnoresForeignStaleAndUnknownReplies(t *testing.T) {
 		{Kind: events.EventTypes.AccountDebited, Reference: models.Reference(payment.ID), IdempotencyKey: "free-form"},
 		{Kind: events.EventTypes.AccountDebited, Reference: models.Reference(payment.ID), IdempotencyKey: models.StepKey(other, models.StepDebit)},
 		{Kind: events.EventTypes.AccountDebited, Reference: models.Reference(other), IdempotencyKey: models.StepKey(other, models.StepDebit)},
-		reply(events.EventTypes.AccountCredited, payment, models.StepDebit, 1, ""),
-		reply(events.EventTypes.AccountDebited, payment, models.StepRefund, 1, ""),
-		reply(events.EventTypes.AccountCreated, payment, models.StepDebit, 1, ""),
+		reply(events.EventTypes.AccountCredited, payment, models.StepDebit, 100, ""),
+		reply(events.EventTypes.AccountDebited, payment, models.StepRefund, 100, ""),
+		reply(events.EventTypes.AccountCreated, payment, models.StepDebit, 100, ""),
 	}
 	for i, r := range never {
 		res, err := h.service.ApplyAccountEvent(context.Background(), r)
@@ -129,7 +129,7 @@ func TestApplyIgnoresForeignStaleAndUnknownReplies(t *testing.T) {
 	}
 	assert.Empty(t, h.repo.Transitions)
 
-	res, err := h.service.ApplyAccountEvent(context.Background(), reply(events.EventTypes.AccountCredited, payment, models.StepRefund, 1, ""))
+	res, err := h.service.ApplyAccountEvent(context.Background(), reply(events.EventTypes.AccountCredited, payment, models.StepRefund, 100, ""))
 	assert.NoError(t, err)
 	assert.Empty(t, res.Messages)
 	assert.Equal(t, models.StatusPending, h.repo.Payments[payment.ID].Status)
@@ -141,11 +141,11 @@ func TestApplyPropagatesRepositoryErrors(t *testing.T) {
 	payment := h.stored(models.MethodPix, models.StatusPending)
 
 	h.repo.GetErrs = []error{errors.New("db down")}
-	_, err := h.service.ApplyAccountEvent(context.Background(), reply(events.EventTypes.AccountDebited, payment, models.StepDebit, 1, ""))
+	_, err := h.service.ApplyAccountEvent(context.Background(), reply(events.EventTypes.AccountDebited, payment, models.StepDebit, 100, ""))
 	assert.EqualError(t, err, "db down")
 
 	h.repo.TransitionResults = []tests.TransitionResult{{Err: errors.New("db down")}}
-	_, err = h.service.ApplyAccountEvent(context.Background(), reply(events.EventTypes.AccountDebited, payment, models.StepDebit, 1, ""))
+	_, err = h.service.ApplyAccountEvent(context.Background(), reply(events.EventTypes.AccountDebited, payment, models.StepDebit, 100, ""))
 	assert.EqualError(t, err, "db down")
 }
 
@@ -169,7 +169,7 @@ func TestSubmitSettledCompletes(t *testing.T) {
 	completed := msg.Event.Payload.(events.PaymentCompletedPayload)
 	assert.Equal(t, payment.ID.String(), completed.PaymentID)
 	assert.Equal(t, "pix", completed.PaymentMethod)
-	assert.Equal(t, 42.5, completed.Amount)
+	assert.Equal(t, domain.AmountFromCents(4250), completed.Amount)
 	assert.Equal(t, "completed", completed.Status)
 	assert.Equal(t, "pix_1", completed.ExternalID)
 	assert.Equal(t, now, completed.CompletedAt)
@@ -212,7 +212,7 @@ func TestSubmitRejectedRefunds(t *testing.T) {
 	assert.Equal(t, "trace-4", msg.Event.TraceID)
 	refund := msg.Event.Payload.(events.CreditAccountPayload)
 	assert.Equal(t, payment.AccountID.String(), refund.AccountID)
-	assert.Equal(t, 42.5, refund.Amount)
+	assert.Equal(t, domain.AmountFromCents(4250), refund.Amount)
 	assert.Equal(t, "payment:"+payment.ID.String(), refund.Reference)
 	assert.Equal(t, "payment:"+payment.ID.String()+":refund", refund.IdempotencyKey)
 

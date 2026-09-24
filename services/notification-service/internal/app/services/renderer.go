@@ -5,11 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"math"
 	"path"
 	"strconv"
 	"strings"
 	"text/template"
+
+	"github.com/fintech-bank-platform/pkg/domain"
 )
 
 //go:embed templates/*.tmpl
@@ -60,14 +61,17 @@ func (r *Renderer) Render(kind string, data map[string]string) (Rendered, error)
 	return Rendered{Subject: sections["subject"], Body: sections["body"]}, nil
 }
 
-func FormatBRL(amount float64) string {
-	cents := int64(math.Round(amount * 100))
+func FormatBRL(amount domain.Amount) string {
+	cents := amount.Cents()
 	sign := ""
+	var magnitude uint64
 	if cents < 0 {
 		sign = "-"
-		cents = -cents
+		magnitude = uint64(-(cents + 1)) + 1
+	} else {
+		magnitude = uint64(cents)
 	}
-	whole := strconv.FormatInt(cents/100, 10)
+	whole := strconv.FormatUint(magnitude/100, 10)
 	var grouped strings.Builder
 	for i, digit := range whole {
 		if i > 0 && (len(whole)-i)%3 == 0 {
@@ -75,5 +79,5 @@ func FormatBRL(amount float64) string {
 		}
 		grouped.WriteRune(digit)
 	}
-	return fmt.Sprintf("%sR$ %s,%02d", sign, grouped.String(), cents%100)
+	return fmt.Sprintf("%sR$ %s,%02d", sign, grouped.String(), magnitude%100)
 }

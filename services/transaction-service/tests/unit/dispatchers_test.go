@@ -61,7 +61,7 @@ func TestReplyDispatcherRoutesAccountEvents(t *testing.T) {
 	logs := &bytes.Buffer{}
 	dispatcher := handlers.NewReplyDispatcher(h.service, logger.New(logger.Config{Output: logs}))
 
-	reply := events.NewAccountEvent(events.EventTypes.AccountCredited, events.AccountCreditedPayload{AccountID: tx.AccountID.String(), Amount: 30, BalanceAfter: 130, Reference: tx.ID.String(), IdempotencyKey: models.StepKey(tx.ID, models.StepCredit)}).WithTraceID("trace-7")
+	reply := events.NewAccountEvent(events.EventTypes.AccountCredited, events.AccountCreditedPayload{AccountID: tx.AccountID.String(), Amount: domain.AmountFromCents(3000), BalanceAfter: domain.AmountFromCents(13000), Reference: tx.ID.String(), IdempotencyKey: models.StepKey(tx.ID, models.StepCredit)}).WithTraceID("trace-7")
 	res, err := dispatcher.Dispatch(context.Background(), reply)
 	assert.NoError(t, err)
 	assert.Equal(t, events.EventTypes.TransactionCompleted, res.Messages[0].Event.Type)
@@ -69,7 +69,7 @@ func TestReplyDispatcherRoutesAccountEvents(t *testing.T) {
 	assert.Equal(t, models.StatusCompleted, h.repo.Transactions[tx.ID].Status)
 
 	withdrawal := h.pending(models.TypeWithdrawal, models.StatusPending)
-	rejected := events.NewAccountEvent(events.EventTypes.DebitRejected, events.DebitRejectedPayload{AccountID: withdrawal.AccountID.String(), Amount: 30, Balance: 1, Reason: "insufficient_funds", Reference: withdrawal.ID.String(), IdempotencyKey: models.StepKey(withdrawal.ID, models.StepDebit)})
+	rejected := events.NewAccountEvent(events.EventTypes.DebitRejected, events.DebitRejectedPayload{AccountID: withdrawal.AccountID.String(), Amount: domain.AmountFromCents(3000), Balance: domain.AmountFromCents(100), Reason: "insufficient_funds", Reference: withdrawal.ID.String(), IdempotencyKey: models.StepKey(withdrawal.ID, models.StepDebit)})
 	res, err = dispatcher.Dispatch(context.Background(), rejected)
 	assert.NoError(t, err)
 	assert.Equal(t, "insufficient_funds", res.Messages[0].Event.Payload.(events.TransactionFailedPayload).Reason)
@@ -81,7 +81,7 @@ func TestReplyDispatcherRoutesAccountEvents(t *testing.T) {
 	assert.NotContains(t, logs.String(), "ignored account event")
 
 	unrelated := uuid.New()
-	stray := events.NewAccountEvent(events.EventTypes.AccountDebited, events.AccountDebitedPayload{AccountID: tx.AccountID.String(), Amount: 30, BalanceAfter: 70, Reference: unrelated.String(), IdempotencyKey: models.StepKey(unrelated, models.StepDebit)})
+	stray := events.NewAccountEvent(events.EventTypes.AccountDebited, events.AccountDebitedPayload{AccountID: tx.AccountID.String(), Amount: domain.AmountFromCents(3000), BalanceAfter: domain.AmountFromCents(7000), Reference: unrelated.String(), IdempotencyKey: models.StepKey(unrelated, models.StepDebit)})
 	res, err = dispatcher.Dispatch(context.Background(), stray)
 	assert.NoError(t, err)
 	assert.Empty(t, res.Messages)
@@ -98,9 +98,36 @@ func TestReplyDispatcherRoutesAccountEvents(t *testing.T) {
 
 	logs.Reset()
 	paymentID := uuid.New()
-	foreign := events.NewAccountEvent(events.EventTypes.AccountDebited, events.AccountDebitedPayload{AccountID: tx.AccountID.String(), Amount: 30, BalanceAfter: 70, Reference: "payment:" + paymentID.String(), IdempotencyKey: "payment:" + paymentID.String() + ":debit"})
+	foreign := events.NewAccountEvent(events.EventTypes.AccountDebited, events.AccountDebitedPayload{AccountID: tx.AccountID.String(), Amount: domain.AmountFromCents(3000), BalanceAfter: domain.AmountFromCents(7000), Reference: "payment:" + paymentID.String(), IdempotencyKey: "payment:" + paymentID.String() + ":debit"})
 	res, err = dispatcher.Dispatch(context.Background(), foreign)
 	assert.NoError(t, err)
 	assert.Empty(t, res.Messages)
 	assert.Empty(t, logs.String())
+}
+
+func TestDispatchersDecodeLegacyNumericAmounts(t *testing.T) {
+	h := newHarness()
+	logs := &bytes.Buffer{}
+	commands := handlers.NewCommandDispatcher(h.service, logger.New(logger.Config{Output: logs}))
+
+	cmd, err := events.FromJSON([]byte(`{"type":"transaction.create","payload":{"account_id":"` + uuid.NewString() + `","type":"deposit","amount":100.25,"currency":"BRL","idempotency_key":"legacy-1"}}`))
+	assert.NoError(t, err)
+	res, err := commands.Dispatch(context.Background(), cmd)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(10025), h.repo.Transactions[h.nextID].AmountCents)
+	assert.Equal(t, domain.AmountFromCents(10025), res.Messages[1].Event.Payload.(events.CreditAccountPayload).Amount)
+
+	cmd, err = events.FromJSON([]byte(`{"type":"transaction.create","payload":{"account_id":"` + uuid.NewString() + `","type":"deposit","amount":1.005,"currency":"BRL","idempotency_key":"legacy-2"}}`))
+	assert.NoError(t, err)
+	_, err = commands.Dispatch(context.Background(), cmd)
+	assert.ErrorIs(t, err, processor.ErrBadPayload)
+
+	tx := h.pending(models.TypeDeposit, models.StatusPending)
+	replies := handlers.NewReplyDispatcher(h.service, logger.New(logger.Config{Output: logs}))
+	reply, err := events.FromJSON([]byte(`{"type":"account.credited","payload":{"account_id":"` + tx.AccountID.String() + `","amount":30,"balance_after":130.5,"reference":"` + tx.ID.String() + `","idempotency_key":"` + models.StepKey(tx.ID, models.StepCredit) + `"}}`))
+	assert.NoError(t, err)
+	res, err = replies.Dispatch(context.Background(), reply)
+	assert.NoError(t, err)
+	assert.Equal(t, int64(13050), *h.repo.Transactions[tx.ID].ToBalanceCents)
+	assert.Equal(t, domain.AmountFromCents(13050), res.Messages[0].Event.Payload.(events.TransactionCompletedPayload).BalanceAfter)
 }

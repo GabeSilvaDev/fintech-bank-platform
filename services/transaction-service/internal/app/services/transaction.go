@@ -129,10 +129,9 @@ func (s *TransactionService) record(ctx context.Context, tx *models.Transaction)
 	return s.repo.Create(ctx, tx)
 }
 
-func parseMoney(amount float64, currency, key, description string) (int64, string, error) {
-	cents, err := domain.ToCents(amount)
-	if err != nil {
-		return 0, "", err
+func parseMoney(amount domain.Amount, currency, key, description string) (int64, string, error) {
+	if !amount.IsPositive() {
+		return 0, "", domain.Invalid("invalid_amount", "amount must be greater than zero")
 	}
 	if !strings.EqualFold(currency, models.Currency) {
 		return 0, "", domain.Invalid("unsupported_currency", "only BRL is supported")
@@ -143,7 +142,7 @@ func parseMoney(amount float64, currency, key, description string) (int64, strin
 	if utf8.RuneCountInString(description) > maxDescriptionLen {
 		return 0, "", domain.Invalid("invalid_description", "description must have at most 255 characters")
 	}
-	return cents, key, nil
+	return amount.Cents(), key, nil
 }
 
 func createdEvent(tx *models.Transaction, trace string) *events.Event {
@@ -151,7 +150,7 @@ func createdEvent(tx *models.Transaction, trace string) *events.Event {
 		TransactionID:  tx.ID.String(),
 		Type:           string(tx.Type),
 		AccountID:      tx.AccountID.String(),
-		Amount:         domain.FromCents(tx.AmountCents),
+		Amount:         domain.AmountFromCents(tx.AmountCents),
 		Currency:       tx.Currency,
 		Description:    tx.Description,
 		IdempotencyKey: tx.IdempotencyKey,
@@ -166,7 +165,7 @@ func createdEvent(tx *models.Transaction, trace string) *events.Event {
 func creditCommand(tx *models.Transaction, accountID uuid.UUID, step models.Step, trace string) *events.Event {
 	return events.NewEvent(events.EventTypes.CreditAccount, source, events.CreditAccountPayload{
 		AccountID:      accountID.String(),
-		Amount:         domain.FromCents(tx.AmountCents),
+		Amount:         domain.AmountFromCents(tx.AmountCents),
 		Currency:       tx.Currency,
 		Reference:      tx.ID.String(),
 		IdempotencyKey: models.StepKey(tx.ID, step),
@@ -176,7 +175,7 @@ func creditCommand(tx *models.Transaction, accountID uuid.UUID, step models.Step
 func debitCommand(tx *models.Transaction, accountID uuid.UUID, trace string) *events.Event {
 	return events.NewEvent(events.EventTypes.DebitAccount, source, events.DebitAccountPayload{
 		AccountID:      accountID.String(),
-		Amount:         domain.FromCents(tx.AmountCents),
+		Amount:         domain.AmountFromCents(tx.AmountCents),
 		Currency:       tx.Currency,
 		Reference:      tx.ID.String(),
 		IdempotencyKey: models.StepKey(tx.ID, models.StepDebit),
@@ -187,7 +186,7 @@ type Reply struct {
 	Kind           string
 	Reference      string
 	IdempotencyKey string
-	BalanceAfter   float64
+	BalanceAfter   domain.Amount
 	Reason         string
 	TraceID        string
 }
@@ -229,7 +228,7 @@ func (s *TransactionService) ApplyAccountEvent(ctx context.Context, reply Reply)
 }
 
 func (s *TransactionService) onDebited(ctx context.Context, tx *models.Transaction, reply Reply, now time.Time) (processor.Result, error) {
-	balance := domain.Cents(reply.BalanceAfter)
+	balance := reply.BalanceAfter.Cents()
 	switch tx.Type {
 	case models.TypeWithdrawal:
 		patch := models.Patch{FromBalanceCents: &balance, CompletedAt: &now, UpdatedAt: now}
@@ -250,7 +249,7 @@ func (s *TransactionService) onDebited(ctx context.Context, tx *models.Transacti
 }
 
 func (s *TransactionService) onCredited(ctx context.Context, tx *models.Transaction, reply Reply, now time.Time) (processor.Result, error) {
-	balance := domain.Cents(reply.BalanceAfter)
+	balance := reply.BalanceAfter.Cents()
 	switch tx.Type {
 	case models.TypeDeposit:
 		patch := models.Patch{ToBalanceCents: &balance, CompletedAt: &now, UpdatedAt: now}
@@ -267,9 +266,9 @@ func (s *TransactionService) onCredited(ctx context.Context, tx *models.Transact
 			TransferID:       tx.ID.String(),
 			FromAccountID:    tx.AccountID.String(),
 			ToAccountID:      tx.CounterpartyID.String(),
-			Amount:           domain.FromCents(tx.AmountCents),
+			Amount:           domain.AmountFromCents(tx.AmountCents),
 			Currency:         tx.Currency,
-			FromBalanceAfter: domain.FromCents(cents(tx.FromBalanceCents)),
+			FromBalanceAfter: domain.AmountFromCents(cents(tx.FromBalanceCents)),
 			ToBalanceAfter:   reply.BalanceAfter,
 			CompletedAt:      now,
 		}, reply.TraceID), nil
@@ -305,7 +304,7 @@ func (s *TransactionService) complete(ctx context.Context, tx *models.Transactio
 		TransactionID: tx.ID.String(),
 		AccountID:     tx.AccountID.String(),
 		Type:          string(tx.Type),
-		Amount:        domain.FromCents(tx.AmountCents),
+		Amount:        domain.AmountFromCents(tx.AmountCents),
 		Currency:      tx.Currency,
 		BalanceAfter:  reply.BalanceAfter,
 		Status:        string(models.StatusCompleted),
@@ -325,7 +324,7 @@ func (s *TransactionService) fail(ctx context.Context, tx *models.Transaction, f
 		TransactionID: tx.ID.String(),
 		AccountID:     tx.AccountID.String(),
 		Type:          string(tx.Type),
-		Amount:        domain.FromCents(tx.AmountCents),
+		Amount:        domain.AmountFromCents(tx.AmountCents),
 		Currency:      tx.Currency,
 		Reason:        reply.Reason,
 		FailedAt:      now,
@@ -364,7 +363,7 @@ func transferFailed(tx *models.Transaction, reason string, status models.Transac
 		TransferID:    tx.ID.String(),
 		FromAccountID: tx.AccountID.String(),
 		ToAccountID:   toAccountID,
-		Amount:        domain.FromCents(tx.AmountCents),
+		Amount:        domain.AmountFromCents(tx.AmountCents),
 		Currency:      tx.Currency,
 		Reason:        reason,
 		Status:        string(status),

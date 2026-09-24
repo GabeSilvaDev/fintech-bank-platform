@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/logger"
 	"github.com/fintech-bank-platform/pkg/processor"
@@ -47,7 +48,7 @@ func (p *pipeline) lastCommand(t *testing.T) (*events.Event, string) {
 	return last.Event, last.Key
 }
 
-func replyTo(command *events.Event, kind string, balance float64, reason string) *events.Event {
+func replyTo(command *events.Event, kind string, balance int64, reason string) *events.Event {
 	var reference, key, account string
 	switch payload := command.Payload.(type) {
 	case events.CreditAccountPayload:
@@ -57,9 +58,9 @@ func replyTo(command *events.Event, kind string, balance float64, reason string)
 	}
 	switch kind {
 	case events.EventTypes.AccountCredited:
-		return events.NewAccountEvent(kind, events.AccountCreditedPayload{AccountID: account, BalanceAfter: balance, Reference: reference, IdempotencyKey: key}).WithTraceID(command.TraceID)
+		return events.NewAccountEvent(kind, events.AccountCreditedPayload{AccountID: account, BalanceAfter: domain.AmountFromCents(balance), Reference: reference, IdempotencyKey: key}).WithTraceID(command.TraceID)
 	case events.EventTypes.AccountDebited:
-		return events.NewAccountEvent(kind, events.AccountDebitedPayload{AccountID: account, BalanceAfter: balance, Reference: reference, IdempotencyKey: key}).WithTraceID(command.TraceID)
+		return events.NewAccountEvent(kind, events.AccountDebitedPayload{AccountID: account, BalanceAfter: domain.AmountFromCents(balance), Reference: reference, IdempotencyKey: key}).WithTraceID(command.TraceID)
 	case events.EventTypes.DebitRejected:
 		return events.NewAccountEvent(kind, events.DebitRejectedPayload{AccountID: account, Reason: reason, Reference: reference, IdempotencyKey: key}).WithTraceID(command.TraceID)
 	}
@@ -70,7 +71,7 @@ func TestTransferSagaThroughProcessors(t *testing.T) {
 	p := newPipeline()
 	from, to := uuid.NewString(), uuid.NewString()
 
-	p.send(t, p.commands, events.NewTransactionCommand(events.EventTypes.ProcessTransfer, events.ProcessTransferPayload{FromAccountID: from, ToAccountID: to, Amount: 30, Currency: "BRL", IdempotencyKey: "tr-1"}).WithTraceID("t-1"))
+	p.send(t, p.commands, events.NewTransactionCommand(events.EventTypes.ProcessTransfer, events.ProcessTransferPayload{FromAccountID: from, ToAccountID: to, Amount: domain.AmountFromCents(3000), Currency: "BRL", IdempotencyKey: "tr-1"}).WithTraceID("t-1"))
 	created := p.publisher.ByTopic(events.Topics.TransactionEvents)
 	assert.Len(t, created, 1)
 	assert.Equal(t, events.EventTypes.TransactionCreated, created[0].Event.Type)
@@ -78,32 +79,32 @@ func TestTransferSagaThroughProcessors(t *testing.T) {
 	assert.Equal(t, events.EventTypes.DebitAccount, debit.Type)
 	assert.Equal(t, from, key)
 
-	p.send(t, p.replies, replyTo(debit, events.EventTypes.AccountDebited, 70, ""))
+	p.send(t, p.replies, replyTo(debit, events.EventTypes.AccountDebited, 7000, ""))
 	credit, key := p.lastCommand(t)
 	assert.Equal(t, events.EventTypes.CreditAccount, credit.Type)
 	assert.Equal(t, to, key)
 	assert.Equal(t, "t-1", credit.TraceID)
 
-	p.send(t, p.replies, replyTo(credit, events.EventTypes.AccountCredited, 30, ""))
+	p.send(t, p.replies, replyTo(credit, events.EventTypes.AccountCredited, 3000, ""))
 	results := p.publisher.ByTopic(events.Topics.TransactionEvents)
 	assert.Len(t, results, 2)
 	assert.Equal(t, events.EventTypes.TransferCompleted, results[1].Event.Type)
 	completed := results[1].Event.Payload.(events.TransferCompletedPayload)
-	assert.Equal(t, 70.0, completed.FromBalanceAfter)
-	assert.Equal(t, 30.0, completed.ToBalanceAfter)
+	assert.Equal(t, domain.AmountFromCents(7000), completed.FromBalanceAfter)
+	assert.Equal(t, domain.AmountFromCents(3000), completed.ToBalanceAfter)
 	assert.Equal(t, models.StatusCompleted, p.repo.Transactions[p.repo.Created[0].ID].Status)
 	assert.Empty(t, p.publisher.ByTopic(events.Topics.TransactionDLQ))
 
-	p.send(t, p.commands, events.NewTransactionCommand(events.EventTypes.ProcessTransfer, events.ProcessTransferPayload{FromAccountID: from, ToAccountID: to, Amount: 30, Currency: "BRL", IdempotencyKey: "tr-1"}))
+	p.send(t, p.commands, events.NewTransactionCommand(events.EventTypes.ProcessTransfer, events.ProcessTransferPayload{FromAccountID: from, ToAccountID: to, Amount: domain.AmountFromCents(3000), Currency: "BRL", IdempotencyKey: "tr-1"}))
 	assert.Len(t, p.publisher.ByTopic(events.Topics.TransactionEvents), 2)
 }
 
 func TestTransferCompensationThroughProcessors(t *testing.T) {
 	p := newPipeline()
 	from, to := uuid.NewString(), uuid.NewString()
-	p.send(t, p.commands, events.NewTransactionCommand(events.EventTypes.ProcessTransfer, events.ProcessTransferPayload{FromAccountID: from, ToAccountID: to, Amount: 30, Currency: "BRL", IdempotencyKey: "tr-2"}))
+	p.send(t, p.commands, events.NewTransactionCommand(events.EventTypes.ProcessTransfer, events.ProcessTransferPayload{FromAccountID: from, ToAccountID: to, Amount: domain.AmountFromCents(3000), Currency: "BRL", IdempotencyKey: "tr-2"}))
 	debit, _ := p.lastCommand(t)
-	p.send(t, p.replies, replyTo(debit, events.EventTypes.AccountDebited, 70, ""))
+	p.send(t, p.replies, replyTo(debit, events.EventTypes.AccountDebited, 7000, ""))
 	credit, _ := p.lastCommand(t)
 
 	p.send(t, p.replies, replyTo(credit, events.EventTypes.CreditRejected, 0, "account_not_active"))
@@ -111,7 +112,7 @@ func TestTransferCompensationThroughProcessors(t *testing.T) {
 	assert.Equal(t, from, key)
 	assert.Equal(t, models.StepKey(p.repo.Created[0].ID, models.StepReversal), reversal.Payload.(events.CreditAccountPayload).IdempotencyKey)
 
-	p.send(t, p.replies, replyTo(reversal, events.EventTypes.AccountCredited, 100, ""))
+	p.send(t, p.replies, replyTo(reversal, events.EventTypes.AccountCredited, 10000, ""))
 	results := p.publisher.ByTopic(events.Topics.TransactionEvents)
 	assert.Equal(t, events.EventTypes.TransferFailed, results[len(results)-1].Event.Type)
 	assert.Equal(t, "reversed", results[len(results)-1].Event.Payload.(events.TransferFailedPayload).Status)
@@ -122,7 +123,7 @@ func TestTransferCompensationThroughProcessors(t *testing.T) {
 func TestDepositRejectedAndUnrelatedEvents(t *testing.T) {
 	p := newPipeline()
 	account := uuid.NewString()
-	p.send(t, p.commands, events.NewTransactionCommand(events.EventTypes.CreateTransaction, events.CreateTransactionPayload{AccountID: account, Type: "deposit", Amount: 5, Currency: "BRL", IdempotencyKey: "dep-9"}))
+	p.send(t, p.commands, events.NewTransactionCommand(events.EventTypes.CreateTransaction, events.CreateTransactionPayload{AccountID: account, Type: "deposit", Amount: domain.AmountFromCents(500), Currency: "BRL", IdempotencyKey: "dep-9"}))
 	credit, _ := p.lastCommand(t)
 
 	p.send(t, p.replies, events.NewAccountEvent(events.EventTypes.AccountCreated, events.AccountCreatedPayload{AccountID: account}))

@@ -44,17 +44,17 @@ func TestDispatchUpdateCloseCreditDebit(t *testing.T) {
 	assert.Equal(t, events.EventTypes.AccountUpdated, result.Messages[0].Event.Type)
 	assert.Equal(t, id, result.Messages[0].Key)
 
-	result, err = dispatcher.Dispatch(context.Background(), command(events.EventTypes.CreditAccount, events.CreditAccountPayload{AccountID: id, Amount: 5, Currency: "BRL", IdempotencyKey: "d-1"}))
+	result, err = dispatcher.Dispatch(context.Background(), command(events.EventTypes.CreditAccount, events.CreditAccountPayload{AccountID: id, Amount: domain.AmountFromCents(500), Currency: "BRL", IdempotencyKey: "d-1"}))
 	assert.NoError(t, err)
 	assert.Equal(t, events.EventTypes.AccountCredited, result.Messages[0].Event.Type)
-	assert.Equal(t, 15.0, result.Messages[0].Event.Payload.(events.AccountCreditedPayload).BalanceAfter)
+	assert.Equal(t, domain.AmountFromCents(1500), result.Messages[0].Event.Payload.(events.AccountCreditedPayload).BalanceAfter)
 
-	result, err = dispatcher.Dispatch(context.Background(), command(events.EventTypes.DebitAccount, events.DebitAccountPayload{AccountID: id, Amount: 15, Currency: "BRL", IdempotencyKey: "d-2"}))
+	result, err = dispatcher.Dispatch(context.Background(), command(events.EventTypes.DebitAccount, events.DebitAccountPayload{AccountID: id, Amount: domain.AmountFromCents(1500), Currency: "BRL", IdempotencyKey: "d-2"}))
 	assert.NoError(t, err)
 	assert.Equal(t, events.EventTypes.AccountDebited, result.Messages[0].Event.Type)
-	assert.Equal(t, 0.0, result.Messages[0].Event.Payload.(events.AccountDebitedPayload).BalanceAfter)
+	assert.Equal(t, domain.AmountFromCents(0), result.Messages[0].Event.Payload.(events.AccountDebitedPayload).BalanceAfter)
 
-	result, err = dispatcher.Dispatch(context.Background(), command(events.EventTypes.DebitAccount, events.DebitAccountPayload{AccountID: id, Amount: 1, Currency: "BRL", IdempotencyKey: "d-3"}))
+	result, err = dispatcher.Dispatch(context.Background(), command(events.EventTypes.DebitAccount, events.DebitAccountPayload{AccountID: id, Amount: domain.AmountFromCents(100), Currency: "BRL", IdempotencyKey: "d-3"}))
 	assert.NoError(t, err)
 	assert.Equal(t, events.EventTypes.DebitRejected, result.Messages[0].Event.Type)
 	assert.Equal(t, "insufficient_funds", result.Messages[0].Event.Payload.(events.DebitRejectedPayload).Reason)
@@ -62,7 +62,7 @@ func TestDispatchUpdateCloseCreditDebit(t *testing.T) {
 	blocked := h.activeAccount(0)
 	blocked.Status = models.AccountStatusBlocked
 	h.accounts.Put(blocked)
-	result, err = dispatcher.Dispatch(context.Background(), command(events.EventTypes.CreditAccount, events.CreditAccountPayload{AccountID: blocked.AccountID.String(), Amount: 1, Currency: "BRL", IdempotencyKey: "d-4"}))
+	result, err = dispatcher.Dispatch(context.Background(), command(events.EventTypes.CreditAccount, events.CreditAccountPayload{AccountID: blocked.AccountID.String(), Amount: domain.AmountFromCents(100), Currency: "BRL", IdempotencyKey: "d-4"}))
 	assert.NoError(t, err)
 	assert.Equal(t, events.EventTypes.CreditRejected, result.Messages[0].Event.Type)
 	assert.Equal(t, "account_not_active", result.Messages[0].Event.Payload.(events.CreditRejectedPayload).Reason)
@@ -84,20 +84,20 @@ func TestDispatchPropagatesServiceErrors(t *testing.T) {
 	_, err = dispatcher.Dispatch(context.Background(), command(events.EventTypes.DeleteAccount, events.DeleteAccountPayload{AccountID: "x"}))
 	assert.Equal(t, "invalid_account_id", domain.InvalidCode(err))
 
-	result, err := dispatcher.Dispatch(context.Background(), command(events.EventTypes.CreditAccount, events.CreditAccountPayload{AccountID: missing, Amount: 1, Currency: "BRL", IdempotencyKey: "d-5"}))
+	result, err := dispatcher.Dispatch(context.Background(), command(events.EventTypes.CreditAccount, events.CreditAccountPayload{AccountID: missing, Amount: domain.AmountFromCents(100), Currency: "BRL", IdempotencyKey: "d-5"}))
 	assert.NoError(t, err)
 	assert.Equal(t, events.EventTypes.CreditRejected, result.Messages[0].Event.Type)
 	assert.Equal(t, "account_not_found", result.Messages[0].Event.Payload.(events.CreditRejectedPayload).Reason)
 
-	result, err = dispatcher.Dispatch(context.Background(), command(events.EventTypes.DebitAccount, events.DebitAccountPayload{AccountID: missing, Amount: 1, Currency: "BRL", IdempotencyKey: "d-6"}))
+	result, err = dispatcher.Dispatch(context.Background(), command(events.EventTypes.DebitAccount, events.DebitAccountPayload{AccountID: missing, Amount: domain.AmountFromCents(100), Currency: "BRL", IdempotencyKey: "d-6"}))
 	assert.NoError(t, err)
 	assert.Equal(t, events.EventTypes.DebitRejected, result.Messages[0].Event.Type)
 	assert.Equal(t, "account_not_found", result.Messages[0].Event.Payload.(events.DebitRejectedPayload).Reason)
 
-	_, err = dispatcher.Dispatch(context.Background(), command(events.EventTypes.CreditAccount, events.CreditAccountPayload{AccountID: "x", Amount: 1, Currency: "BRL"}))
+	_, err = dispatcher.Dispatch(context.Background(), command(events.EventTypes.CreditAccount, events.CreditAccountPayload{AccountID: "x", Amount: domain.AmountFromCents(100), Currency: "BRL"}))
 	assert.Equal(t, "invalid_account_id", domain.InvalidCode(err))
 
-	_, err = dispatcher.Dispatch(context.Background(), command(events.EventTypes.DebitAccount, events.DebitAccountPayload{AccountID: "x", Amount: 1, Currency: "BRL"}))
+	_, err = dispatcher.Dispatch(context.Background(), command(events.EventTypes.DebitAccount, events.DebitAccountPayload{AccountID: "x", Amount: domain.AmountFromCents(100), Currency: "BRL"}))
 	assert.Equal(t, "invalid_account_id", domain.InvalidCode(err))
 
 	_, err = dispatcher.Dispatch(context.Background(), command(events.EventTypes.CreateAccount, events.CreateAccountPayload{UserID: "x"}))
@@ -131,4 +131,25 @@ func TestDispatchRejectsMalformedPayloadsForAllCommands(t *testing.T) {
 
 func strPtr(s string) *string {
 	return &s
+}
+
+func TestDispatchDecodesLegacyNumericAmount(t *testing.T) {
+	h := newHarness()
+	dispatcher := handlers.NewDispatcher(h.service)
+	account := h.activeAccount(100)
+
+	cmd, err := events.FromJSON([]byte(`{"type":"account.credit","payload":{"account_id":"` + account.AccountID.String() + `","amount":12.34,"currency":"BRL","idempotency_key":"legacy-1"}}`))
+	assert.NoError(t, err)
+	result, err := dispatcher.Dispatch(context.Background(), cmd)
+
+	assert.NoError(t, err)
+	credited := result.Messages[0].Event.Payload.(events.AccountCreditedPayload)
+	assert.Equal(t, domain.AmountFromCents(1234), credited.Amount)
+	assert.Equal(t, domain.AmountFromCents(1334), credited.BalanceAfter)
+
+	cmd, err = events.FromJSON([]byte(`{"type":"account.credit","payload":{"account_id":"` + account.AccountID.String() + `","amount":1.005,"currency":"BRL","idempotency_key":"legacy-2"}}`))
+	assert.NoError(t, err)
+	_, err = dispatcher.Dispatch(context.Background(), cmd)
+
+	assert.ErrorIs(t, err, processor.ErrBadPayload)
 }

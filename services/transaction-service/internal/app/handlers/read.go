@@ -34,21 +34,21 @@ func NewReadHandler(txns TransactionReader) *ReadHandler {
 }
 
 type transactionResponse struct {
-	TransactionID    string     `json:"transaction_id"`
-	Type             string     `json:"type"`
-	Status           string     `json:"status"`
-	AccountID        string     `json:"account_id"`
-	CounterpartyID   string     `json:"counterparty_id,omitempty"`
-	Amount           float64    `json:"amount"`
-	Currency         string     `json:"currency"`
-	Description      string     `json:"description,omitempty"`
-	IdempotencyKey   string     `json:"idempotency_key"`
-	FailureReason    string     `json:"failure_reason,omitempty"`
-	FromBalanceAfter *float64   `json:"from_balance_after,omitempty"`
-	ToBalanceAfter   *float64   `json:"to_balance_after,omitempty"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
-	CompletedAt      *time.Time `json:"completed_at,omitempty"`
+	TransactionID    string         `json:"transaction_id"`
+	Type             string         `json:"type"`
+	Status           string         `json:"status"`
+	AccountID        string         `json:"account_id"`
+	CounterpartyID   string         `json:"counterparty_id,omitempty"`
+	Amount           domain.Amount  `json:"amount"`
+	Currency         string         `json:"currency"`
+	Description      string         `json:"description,omitempty"`
+	IdempotencyKey   string         `json:"idempotency_key"`
+	FailureReason    string         `json:"failure_reason,omitempty"`
+	FromBalanceAfter *domain.Amount `json:"from_balance_after,omitempty"`
+	ToBalanceAfter   *domain.Amount `json:"to_balance_after,omitempty"`
+	CreatedAt        time.Time      `json:"created_at"`
+	UpdatedAt        time.Time      `json:"updated_at"`
+	CompletedAt      *time.Time     `json:"completed_at,omitempty"`
 }
 
 func (h *ReadHandler) GetTransaction(w http.ResponseWriter, r *http.Request) {
@@ -120,7 +120,7 @@ func baseResponse(tx *models.Transaction) transactionResponse {
 		Type:           string(tx.Type),
 		Status:         string(tx.Status),
 		AccountID:      tx.AccountID.String(),
-		Amount:         domain.FromCents(tx.AmountCents),
+		Amount:         domain.AmountFromCents(tx.AmountCents),
 		Currency:       tx.Currency,
 		Description:    tx.Description,
 		IdempotencyKey: tx.IdempotencyKey,
@@ -143,21 +143,21 @@ func toListResponse(tx *models.Transaction, viewedAccount uuid.UUID) transaction
 	out := baseResponse(tx)
 	if tx.Type == models.TypeTransfer {
 		if viewedAccount == tx.AccountID && tx.FromBalanceCents != nil {
-			value := domain.FromCents(*tx.FromBalanceCents)
+			value := domain.AmountFromCents(*tx.FromBalanceCents)
 			out.FromBalanceAfter = &value
 		}
 		if tx.CounterpartyID != nil && viewedAccount == *tx.CounterpartyID && tx.ToBalanceCents != nil {
-			value := domain.FromCents(*tx.ToBalanceCents)
+			value := domain.AmountFromCents(*tx.ToBalanceCents)
 			out.ToBalanceAfter = &value
 		}
 		return out
 	}
 	if tx.FromBalanceCents != nil {
-		value := domain.FromCents(*tx.FromBalanceCents)
+		value := domain.AmountFromCents(*tx.FromBalanceCents)
 		out.FromBalanceAfter = &value
 	}
 	if tx.ToBalanceCents != nil {
-		value := domain.FromCents(*tx.ToBalanceCents)
+		value := domain.AmountFromCents(*tx.ToBalanceCents)
 		out.ToBalanceAfter = &value
 	}
 	return out

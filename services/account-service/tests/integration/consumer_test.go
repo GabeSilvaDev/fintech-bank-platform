@@ -16,6 +16,7 @@ import (
 	"github.com/fintech-bank-platform/account-service/internal/app/handlers"
 	"github.com/fintech-bank-platform/account-service/internal/app/services"
 	"github.com/fintech-bank-platform/account-service/internal/infrastructure/database"
+	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/logger"
 	"github.com/fintech-bank-platform/pkg/messaging"
@@ -105,10 +106,10 @@ func TestConsumerAppliesCommandsEndToEnd(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "active", string(account.Status))
 
-	credit := events.NewAccountCommand(events.EventTypes.CreditAccount, events.CreditAccountPayload{AccountID: accountID.String(), Amount: 12.5, Currency: "BRL", Reference: "tx-1", IdempotencyKey: "k-1"}).WithTraceID(trace + "-credit")
+	credit := events.NewAccountCommand(events.EventTypes.CreditAccount, events.CreditAccountPayload{AccountID: accountID.String(), Amount: domain.AmountFromCents(1250), Currency: "BRL", Reference: "tx-1", IdempotencyKey: "k-1"}).WithTraceID(trace + "-credit")
 	require.NoError(t, producer.Publish(ctx, commands, accountID.String(), credit))
 	credited := awaitEvent(t, ctx, results, events.EventTypes.AccountCredited, trace+"-credit")
-	require.Equal(t, 12.5, credited.Payload.(map[string]interface{})["balance_after"])
+	require.Equal(t, "12.50", credited.Payload.(map[string]interface{})["balance_after"])
 
 	account, _ = database.NewAccountRepository(session).Get(ctx, accountID)
 	require.Equal(t, int64(1250), account.BalanceCents)

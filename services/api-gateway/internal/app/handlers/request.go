@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/fintech-bank-platform/api-gateway/internal/contracts"
+	"github.com/fintech-bank-platform/pkg/domain"
 	apperrors "github.com/fintech-bank-platform/pkg/errors"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/middleware"
@@ -47,6 +48,15 @@ func validate(dst interface{}) error {
 	}
 
 	return apperrors.UnprocessableEntity("VALIDATION_ERROR", "request validation failed").WithDetails(details)
+}
+
+func amountOf(value float64) (domain.Amount, error) {
+	cents, err := domain.ToCents(value)
+	if err != nil {
+		return 0, apperrors.UnprocessableEntity("VALIDATION_ERROR", "request validation failed").WithDetail("amount", "amount")
+	}
+
+	return domain.AmountFromCents(cents), nil
 }
 
 func validateID(id string) error {

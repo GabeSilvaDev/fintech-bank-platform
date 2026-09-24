@@ -45,11 +45,16 @@ func (h *TransactionHandler) Create(w http.ResponseWriter, r *http.Request) {
 		response.FromError(w, err)
 		return
 	}
+	amount, err := amountOf(req.Amount)
+	if err != nil {
+		response.FromError(w, err)
+		return
+	}
 
 	event := events.NewTransactionCommand(events.EventTypes.CreateTransaction, events.CreateTransactionPayload{
 		AccountID:      req.AccountID,
 		Type:           req.Type,
-		Amount:         req.Amount,
+		Amount:         amount,
 		Currency:       strings.ToUpper(req.Currency),
 		Description:    req.Description,
 		IdempotencyKey: req.IdempotencyKey,
@@ -68,11 +73,16 @@ func (h *TransactionHandler) Transfer(w http.ResponseWriter, r *http.Request) {
 		response.FromError(w, err)
 		return
 	}
+	amount, err := amountOf(req.Amount)
+	if err != nil {
+		response.FromError(w, err)
+		return
+	}
 
 	event := events.NewTransactionCommand(events.EventTypes.ProcessTransfer, events.ProcessTransferPayload{
 		FromAccountID:  req.FromAccountID,
 		ToAccountID:    req.ToAccountID,
-		Amount:         req.Amount,
+		Amount:         amount,
 		Currency:       strings.ToUpper(req.Currency),
 		Description:    req.Description,
 		IdempotencyKey: req.IdempotencyKey,

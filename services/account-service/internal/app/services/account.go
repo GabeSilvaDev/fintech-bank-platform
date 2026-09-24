@@ -325,8 +325,8 @@ func (s *AccountService) applyCredit(ctx context.Context, cmd events.CreditAccou
 		if applied {
 			return CreditResult{Credited: &events.AccountCreditedPayload{
 				AccountID:      accountID.String(),
-				Amount:         domain.FromCents(cents),
-				BalanceAfter:   domain.FromCents(next),
+				Amount:         domain.AmountFromCents(cents),
+				BalanceAfter:   domain.AmountFromCents(next),
 				Reference:      cmd.Reference,
 				IdempotencyKey: cmd.IdempotencyKey,
 				OccurredAt:     now,
@@ -385,8 +385,8 @@ func (s *AccountService) applyDebit(ctx context.Context, cmd events.DebitAccount
 		if applied {
 			return DebitResult{Debited: &events.AccountDebitedPayload{
 				AccountID:      accountID.String(),
-				Amount:         domain.FromCents(cents),
-				BalanceAfter:   domain.FromCents(next),
+				Amount:         domain.AmountFromCents(cents),
+				BalanceAfter:   domain.AmountFromCents(next),
 				Reference:      cmd.Reference,
 				IdempotencyKey: cmd.IdempotencyKey,
 				OccurredAt:     now,
@@ -405,8 +405,8 @@ func (s *AccountService) applyDebit(ctx context.Context, cmd events.DebitAccount
 func creditRejected(cmd events.CreditAccountPayload, cents int64, accountID uuid.UUID, balance int64, reason string) CreditResult {
 	return CreditResult{Rejected: &events.CreditRejectedPayload{
 		AccountID:      accountID.String(),
-		Amount:         domain.FromCents(cents),
-		Balance:        domain.FromCents(balance),
+		Amount:         domain.AmountFromCents(cents),
+		Balance:        domain.AmountFromCents(balance),
 		Reason:         reason,
 		Reference:      cmd.Reference,
 		IdempotencyKey: cmd.IdempotencyKey,
@@ -416,25 +416,24 @@ func creditRejected(cmd events.CreditAccountPayload, cents int64, accountID uuid
 func debitRejected(cmd events.DebitAccountPayload, cents int64, accountID uuid.UUID, balance int64, reason string) DebitResult {
 	return DebitResult{Rejected: &events.DebitRejectedPayload{
 		AccountID:      accountID.String(),
-		Amount:         domain.FromCents(cents),
-		Balance:        domain.FromCents(balance),
+		Amount:         domain.AmountFromCents(cents),
+		Balance:        domain.AmountFromCents(balance),
 		Reason:         reason,
 		Reference:      cmd.Reference,
 		IdempotencyKey: cmd.IdempotencyKey,
 	}}
 }
 
-func parseBalanceCommand(accountID string, amount float64, currency string) (uuid.UUID, int64, error) {
+func parseBalanceCommand(accountID string, amount domain.Amount, currency string) (uuid.UUID, int64, error) {
 	id, err := uuid.Parse(accountID)
 	if err != nil {
 		return uuid.Nil, 0, domain.Invalid("invalid_account_id", "account_id must be a uuid")
 	}
-	cents, err := domain.ToCents(amount)
-	if err != nil {
-		return uuid.Nil, 0, err
+	if !amount.IsPositive() {
+		return uuid.Nil, 0, domain.Invalid("invalid_amount", "amount must be greater than zero")
 	}
 	if !strings.EqualFold(currency, models.Currency) {
 		return uuid.Nil, 0, domain.Invalid("unsupported_currency", "only BRL is supported")
 	}
-	return id, cents, nil
+	return id, amount.Cents(), nil
 }

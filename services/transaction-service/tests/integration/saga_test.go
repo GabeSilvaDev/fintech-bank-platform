@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/logger"
 	"github.com/fintech-bank-platform/pkg/messaging"
@@ -88,14 +89,14 @@ func awaitEvent(t *testing.T, ctx context.Context, reader *kafka.Reader, eventTy
 	return nil
 }
 
-func accountReply(command *events.Event, kind string, balance float64, reason string) *events.Event {
+func accountReply(command *events.Event, kind string, balance int64, reason string) *events.Event {
 	payload := command.Payload.(map[string]interface{})
 	account, reference, key := payload["account_id"].(string), payload["reference"].(string), payload["idempotency_key"].(string)
 	switch kind {
 	case events.EventTypes.AccountDebited:
-		return events.NewAccountEvent(kind, events.AccountDebitedPayload{AccountID: account, BalanceAfter: balance, Reference: reference, IdempotencyKey: key}).WithTraceID(command.TraceID)
+		return events.NewAccountEvent(kind, events.AccountDebitedPayload{AccountID: account, BalanceAfter: domain.AmountFromCents(balance), Reference: reference, IdempotencyKey: key}).WithTraceID(command.TraceID)
 	case events.EventTypes.AccountCredited:
-		return events.NewAccountEvent(kind, events.AccountCreditedPayload{AccountID: account, BalanceAfter: balance, Reference: reference, IdempotencyKey: key}).WithTraceID(command.TraceID)
+		return events.NewAccountEvent(kind, events.AccountCreditedPayload{AccountID: account, BalanceAfter: domain.AmountFromCents(balance), Reference: reference, IdempotencyKey: key}).WithTraceID(command.TraceID)
 	case events.EventTypes.DebitRejected:
 		return events.NewAccountEvent(kind, events.DebitRejectedPayload{AccountID: account, Reason: reason, Reference: reference, IdempotencyKey: key}).WithTraceID(command.TraceID)
 	}
@@ -146,7 +147,7 @@ func TestTransferSagaEndToEnd(t *testing.T) {
 
 	from, to := uuid.NewString(), uuid.NewString()
 	trace := "it-" + uuid.NewString()
-	transfer := events.NewTransactionCommand(events.EventTypes.ProcessTransfer, events.ProcessTransferPayload{FromAccountID: from, ToAccountID: to, Amount: 30, Currency: "BRL", IdempotencyKey: "tr-" + trace}).WithTraceID(trace)
+	transfer := events.NewTransactionCommand(events.EventTypes.ProcessTransfer, events.ProcessTransferPayload{FromAccountID: from, ToAccountID: to, Amount: domain.AmountFromCents(3000), Currency: "BRL", IdempotencyKey: "tr-" + trace}).WithTraceID(trace)
 	require.NoError(t, producer.Publish(ctx, commands, from, transfer))
 
 	created := awaitEvent(t, ctx, results, events.EventTypes.TransactionCreated, trace)
@@ -154,17 +155,17 @@ func TestTransferSagaEndToEnd(t *testing.T) {
 
 	debit := awaitEvent(t, ctx, accountCommands, events.EventTypes.DebitAccount, trace)
 	require.Equal(t, from, debit.Payload.(map[string]interface{})["account_id"])
-	require.NoError(t, producer.Publish(ctx, replies, from, accountReply(debit, events.EventTypes.AccountDebited, 70, "")))
+	require.NoError(t, producer.Publish(ctx, replies, from, accountReply(debit, events.EventTypes.AccountDebited, 7000, "")))
 
 	credit := awaitEvent(t, ctx, accountCommands, events.EventTypes.CreditAccount, trace)
 	require.Equal(t, to, credit.Payload.(map[string]interface{})["account_id"])
 	require.Equal(t, models.StepKey(transferID, models.StepCredit), credit.Payload.(map[string]interface{})["idempotency_key"])
-	require.NoError(t, producer.Publish(ctx, replies, to, accountReply(credit, events.EventTypes.AccountCredited, 30, "")))
+	require.NoError(t, producer.Publish(ctx, replies, to, accountReply(credit, events.EventTypes.AccountCredited, 3000, "")))
 
 	completed := awaitEvent(t, ctx, results, events.EventTypes.TransferCompleted, trace)
 	payload := completed.Payload.(map[string]interface{})
-	require.Equal(t, 70.0, payload["from_balance_after"])
-	require.Equal(t, 30.0, payload["to_balance_after"])
+	require.Equal(t, "70.00", payload["from_balance_after"])
+	require.Equal(t, "30.00", payload["to_balance_after"])
 
 	stored, err := repo.Get(ctx, transferID)
 	require.NoError(t, err)
@@ -173,7 +174,7 @@ func TestTransferSagaEndToEnd(t *testing.T) {
 	require.Equal(t, int64(3000), *stored.ToBalanceCents)
 
 	require.NoError(t, producer.Publish(ctx, commands, from, transfer))
-	deposit := events.NewTransactionCommand(events.EventTypes.CreateTransaction, events.CreateTransactionPayload{AccountID: from, Type: "deposit", Amount: 5, Currency: "BRL", IdempotencyKey: "dep-" + trace}).WithTraceID(trace + "-deposit")
+	deposit := events.NewTransactionCommand(events.EventTypes.CreateTransaction, events.CreateTransactionPayload{AccountID: from, Type: "deposit", Amount: domain.AmountFromCents(500), Currency: "BRL", IdempotencyKey: "dep-" + trace}).WithTraceID(trace + "-deposit")
 	require.NoError(t, producer.Publish(ctx, commands, from, deposit))
 	awaitEvent(t, ctx, results, events.EventTypes.TransactionCreated, trace+"-deposit")
 

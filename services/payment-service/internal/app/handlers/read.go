@@ -42,24 +42,24 @@ type tedResponse struct {
 }
 
 type paymentResponse struct {
-	PaymentID      string       `json:"payment_id"`
-	AccountID      string       `json:"account_id"`
-	PaymentMethod  string       `json:"payment_method"`
-	Status         string       `json:"status"`
-	Amount         float64      `json:"amount"`
-	Currency       string       `json:"currency"`
-	Recipient      string       `json:"recipient"`
-	PixKey         string       `json:"pix_key,omitempty"`
-	BoletoCode     string       `json:"boleto_code,omitempty"`
-	TED            *tedResponse `json:"ted,omitempty"`
-	Description    string       `json:"description,omitempty"`
-	IdempotencyKey string       `json:"idempotency_key"`
-	ExternalID     string       `json:"external_id,omitempty"`
-	FailureReason  string       `json:"failure_reason,omitempty"`
-	BalanceAfter   *float64     `json:"balance_after,omitempty"`
-	CreatedAt      time.Time    `json:"created_at"`
-	UpdatedAt      time.Time    `json:"updated_at"`
-	CompletedAt    *time.Time   `json:"completed_at,omitempty"`
+	PaymentID      string         `json:"payment_id"`
+	AccountID      string         `json:"account_id"`
+	PaymentMethod  string         `json:"payment_method"`
+	Status         string         `json:"status"`
+	Amount         domain.Amount  `json:"amount"`
+	Currency       string         `json:"currency"`
+	Recipient      string         `json:"recipient"`
+	PixKey         string         `json:"pix_key,omitempty"`
+	BoletoCode     string         `json:"boleto_code,omitempty"`
+	TED            *tedResponse   `json:"ted,omitempty"`
+	Description    string         `json:"description,omitempty"`
+	IdempotencyKey string         `json:"idempotency_key"`
+	ExternalID     string         `json:"external_id,omitempty"`
+	FailureReason  string         `json:"failure_reason,omitempty"`
+	BalanceAfter   *domain.Amount `json:"balance_after,omitempty"`
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
+	CompletedAt    *time.Time     `json:"completed_at,omitempty"`
 }
 
 func (h *ReadHandler) GetPayment(w http.ResponseWriter, r *http.Request) {
@@ -131,7 +131,7 @@ func toResponse(payment *models.Payment) paymentResponse {
 		AccountID:      payment.AccountID.String(),
 		PaymentMethod:  string(payment.Method),
 		Status:         string(payment.Status),
-		Amount:         domain.FromCents(payment.AmountCents),
+		Amount:         domain.AmountFromCents(payment.AmountCents),
 		Currency:       payment.Currency,
 		Recipient:      payment.Recipient,
 		PixKey:         payment.PixKey,
@@ -148,7 +148,7 @@ func toResponse(payment *models.Payment) paymentResponse {
 		out.TED = &tedResponse{BankCode: payment.TED.BankCode, Branch: payment.TED.Branch, Account: payment.TED.Account, Document: maskDocument(payment.TED.Document)}
 	}
 	if payment.BalanceAfterCents != nil {
-		balance := domain.FromCents(*payment.BalanceAfterCents)
+		balance := domain.AmountFromCents(*payment.BalanceAfterCents)
 		out.BalanceAfter = &balance
 	}
 	return out
