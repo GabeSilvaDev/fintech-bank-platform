@@ -153,3 +153,31 @@ func TestConfigAuthInvalidValuesFallBack(t *testing.T) {
 	assert.Equal(t, 15*time.Minute, cfg.Auth.TokenTTL)
 	assert.Equal(t, 10, cfg.AuthRateLimit.Requests)
 }
+
+func TestConfigRemembersUnknownAccountsForFiveSecondsByDefault(t *testing.T) {
+	cfg, err := config.New()
+
+	require.NoError(t, err)
+	assert.Equal(t, 5*time.Second, cfg.Auth.OwnerNegativeCacheTTL)
+	assert.Equal(t, 5*time.Second, config.DefaultOwnerNegativeCacheTTL)
+}
+
+func TestConfigReadsTheOwnerNegativeCacheTTL(t *testing.T) {
+	for value, want := range map[string]time.Duration{"2s": 2 * time.Second, "0": 0, "0s": 0, "later": 5 * time.Second} {
+		t.Setenv("OWNER_NEGATIVE_CACHE_TTL", value)
+
+		cfg, err := config.New()
+
+		require.NoError(t, err, value)
+		assert.Equal(t, want, cfg.Auth.OwnerNegativeCacheTTL, value)
+	}
+}
+
+func TestConfigRefusesANegativeOwnerNegativeCacheTTL(t *testing.T) {
+	t.Setenv("OWNER_NEGATIVE_CACHE_TTL", "-1s")
+
+	cfg, err := config.New()
+
+	assert.ErrorIs(t, err, config.ErrNegativeOwnerNegativeCacheTTL)
+	assert.Nil(t, cfg)
+}

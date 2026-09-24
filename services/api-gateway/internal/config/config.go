@@ -23,15 +23,17 @@ type Config struct {
 }
 
 const (
-	minJWTSecretBytes    = 32
-	DevelopmentJWTSecret = "dev-only-jwt-secret-change-me-0123456789"
-	DefaultTokenTTL      = 15 * time.Minute
-	MaxTokenTTL          = 24 * time.Hour
+	minJWTSecretBytes            = 32
+	DevelopmentJWTSecret         = "dev-only-jwt-secret-change-me-0123456789"
+	DefaultTokenTTL              = 15 * time.Minute
+	MaxTokenTTL                  = 24 * time.Hour
+	DefaultOwnerNegativeCacheTTL = 5 * time.Second
 )
 
 var (
-	ErrWeakJWTSecret = errors.New("JWT_SECRET must be set to at least 32 bytes")
-	ErrLongTokenTTL  = errors.New("JWT_TTL must not exceed 24h")
+	ErrWeakJWTSecret                 = errors.New("JWT_SECRET must be set to at least 32 bytes")
+	ErrLongTokenTTL                  = errors.New("JWT_TTL must not exceed 24h")
+	ErrNegativeOwnerNegativeCacheTTL = errors.New("OWNER_NEGATIVE_CACHE_TTL must not be negative")
 )
 
 func New() (*Config, error) {
@@ -129,11 +131,17 @@ func loadAuthConfig() (contracts.AuthConfig, error) {
 		return contracts.AuthConfig{}, ErrLongTokenTTL
 	}
 
+	negativeTTL := env.GetDuration("OWNER_NEGATIVE_CACHE_TTL", DefaultOwnerNegativeCacheTTL)
+	if negativeTTL < 0 {
+		return contracts.AuthConfig{}, ErrNegativeOwnerNegativeCacheTTL
+	}
+
 	return contracts.AuthConfig{
-		JWTSecret:         secret,
-		DevelopmentSecret: secret == DevelopmentJWTSecret,
-		TokenTTL:          ttl,
-		OwnerCacheTTL:     positiveDuration("OWNER_CACHE_TTL", time.Minute),
+		JWTSecret:             secret,
+		DevelopmentSecret:     secret == DevelopmentJWTSecret,
+		TokenTTL:              ttl,
+		OwnerCacheTTL:         positiveDuration("OWNER_CACHE_TTL", time.Minute),
+		OwnerNegativeCacheTTL: negativeTTL,
 	}, nil
 }
 

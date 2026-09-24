@@ -60,7 +60,7 @@ func SetupRouter(router *chi.Mux, cfg *config.Config, deps Dependencies) {
 
 	accountOwners := deps.Owners
 	if accountOwners == nil {
-		accountOwners = owners.NewClient(deps.AccountService, upstreamCallTimeout, cfg.Auth.OwnerCacheTTL)
+		accountOwners = owners.NewClient(deps.AccountService, upstreamCallTimeout, cfg.Auth.OwnerCacheTTL).WithNegativeTTL(cfg.Auth.OwnerNegativeCacheTTL)
 	}
 	guard := handlers.NewAccessGuard(accountOwners)
 	self := guard.RequireSelf("user_id")

@@ -12,9 +12,10 @@ const JWTSecret = "test-only-jwt-secret-0123456789abcdef"
 
 func AuthConfig() contracts.AuthConfig {
 	return contracts.AuthConfig{
-		JWTSecret:     JWTSecret,
-		TokenTTL:      time.Hour,
-		OwnerCacheTTL: time.Minute,
+		JWTSecret:             JWTSecret,
+		TokenTTL:              time.Hour,
+		OwnerCacheTTL:         time.Minute,
+		OwnerNegativeCacheTTL: 5 * time.Second,
 	}
 }
 

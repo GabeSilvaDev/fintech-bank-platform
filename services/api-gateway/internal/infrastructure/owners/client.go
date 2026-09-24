@@ -3,6 +3,7 @@ package owners
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -24,17 +25,26 @@ const (
 
 type entry struct {
 	userID  uuid.UUID
+	missing bool
 	expires time.Time
 }
 
+type call struct {
+	done   chan struct{}
+	userID uuid.UUID
+	err    error
+}
+
 type Client struct {
-	base       *url.URL
-	http       *http.Client
-	ttl        time.Duration
-	now        func() time.Time
-	maxEntries int
-	mu         sync.Mutex
-	cache      map[uuid.UUID]entry
+	base        *url.URL
+	http        *http.Client
+	ttl         time.Duration
+	negativeTTL time.Duration
+	now         func() time.Time
+	maxEntries  int
+	mu          sync.Mutex
+	cache       map[uuid.UUID]entry
+	inflight    map[uuid.UUID]*call
 }
 
 func NewClient(base *url.URL, timeout, ttl time.Duration) *Client {
@@ -51,6 +61,7 @@ func NewClient(base *url.URL, timeout, ttl time.Duration) *Client {
 		now:        time.Now,
 		maxEntries: defaultMaxEntries,
 		cache:      make(map[uuid.UUID]entry),
+		inflight:   make(map[uuid.UUID]*call),
 	}
 }
 
@@ -64,18 +75,52 @@ func (c *Client) WithMaxEntries(maxEntries int) *Client {
 	return c
 }
 
+func (c *Client) WithNegativeTTL(ttl time.Duration) *Client {
+	c.negativeTTL = ttl
+	return c
+}
+
 func (c *Client) Owner(ctx context.Context, accountID uuid.UUID) (uuid.UUID, error) {
-	if userID, ok := c.cached(accountID); ok {
-		return userID, nil
+	c.mu.Lock()
+	now := c.now()
+	if cached, ok := c.cache[accountID]; ok && now.Before(cached.expires) {
+		c.mu.Unlock()
+		if cached.missing {
+			return uuid.Nil, contracts.ErrAccountNotFound
+		}
+		return cached.userID, nil
 	}
+	pending, ok := c.inflight[accountID]
+	if !ok {
+		pending = &call{done: make(chan struct{})}
+		c.inflight[accountID] = pending
+		go c.resolve(context.WithoutCancel(ctx), accountID, pending)
+	}
+	c.mu.Unlock()
 
+	select {
+	case <-pending.done:
+		return pending.userID, pending.err
+	case <-ctx.Done():
+		return uuid.Nil, ctx.Err()
+	}
+}
+
+func (c *Client) resolve(ctx context.Context, accountID uuid.UUID, pending *call) {
 	userID, err := c.fetch(ctx, accountID)
-	if err != nil {
-		return uuid.Nil, err
-	}
 
-	c.store(accountID, userID)
-	return userID, nil
+	c.mu.Lock()
+	switch {
+	case err == nil:
+		c.store(accountID, entry{userID: userID}, c.ttl)
+	case errors.Is(err, contracts.ErrAccountNotFound) && c.negativeTTL > 0:
+		c.store(accountID, entry{missing: true}, c.negativeTTL)
+	}
+	delete(c.inflight, accountID)
+	pending.userID, pending.err = userID, err
+	c.mu.Unlock()
+
+	close(pending.done)
 }
 
 const accountNotFoundCode = "ACCOUNT_NOT_FOUND"
@@ -121,26 +166,13 @@ func (c *Client) fetch(ctx context.Context, accountID uuid.UUID) (uuid.UUID, err
 	return userID, nil
 }
 
-func (c *Client) cached(accountID uuid.UUID) (uuid.UUID, bool) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	cached, ok := c.cache[accountID]
-	if !ok || !c.now().Before(cached.expires) {
-		return uuid.Nil, false
-	}
-	return cached.userID, true
-}
-
-func (c *Client) store(accountID, userID uuid.UUID) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
+func (c *Client) store(accountID uuid.UUID, cached entry, ttl time.Duration) {
 	now := c.now()
 	if _, exists := c.cache[accountID]; !exists && len(c.cache) >= c.maxEntries {
 		c.evict(now)
 	}
-	c.cache[accountID] = entry{userID: userID, expires: now.Add(c.ttl)}
+	cached.expires = now.Add(ttl)
+	c.cache[accountID] = cached
 }
 
 func (c *Client) evict(now time.Time) {
