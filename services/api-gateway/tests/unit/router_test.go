@@ -121,6 +121,60 @@ func TestSetupRouterRateLimitSeparatesBucketsByForwardedForWhenTrusted(t *testin
 	assert.Equal(t, http.StatusOK, rec2.Code)
 }
 
+func TestSetupRouterRateLimitTrustedKeysOnRightmostForwardedForEntry(t *testing.T) {
+	router := chi.NewRouter()
+	cfg := &config.Config{
+		Server:    contracts.ServerConfig{TrustProxyHeaders: true, TrustedProxyHops: 1},
+		CORS:      contracts.CORSConfig{AllowedOrigins: []string{"*"}, AllowedMethods: []string{"GET"}},
+		RateLimit: contracts.RateLimitConfig{Requests: 1, Window: time.Minute},
+	}
+
+	appHttp.SetupRouter(router, cfg, testDependencies())
+
+	req1 := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req1.RemoteAddr = "203.0.113.9:1111"
+	req1.Header.Set("X-Forwarded-For", "10.0.0.1, 198.51.100.7")
+	rec1 := httptest.NewRecorder()
+	router.ServeHTTP(rec1, req1)
+	assert.Equal(t, http.StatusOK, rec1.Code)
+
+	req2 := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req2.RemoteAddr = "203.0.113.9:2222"
+	req2.Header.Set("X-Forwarded-For", "10.0.0.2, 198.51.100.7")
+	rec2 := httptest.NewRecorder()
+	router.ServeHTTP(rec2, req2)
+
+	assert.Equal(t, http.StatusTooManyRequests, rec2.Code)
+}
+
+func TestSetupRouterRateLimitIgnoresTrueClientIPAndXRealIP(t *testing.T) {
+	router := chi.NewRouter()
+	cfg := &config.Config{
+		Server:    contracts.ServerConfig{TrustProxyHeaders: true, TrustedProxyHops: 1},
+		CORS:      contracts.CORSConfig{AllowedOrigins: []string{"*"}, AllowedMethods: []string{"GET"}},
+		RateLimit: contracts.RateLimitConfig{Requests: 1, Window: time.Minute},
+	}
+
+	appHttp.SetupRouter(router, cfg, testDependencies())
+
+	req1 := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req1.RemoteAddr = "203.0.113.10:1111"
+	req1.Header.Set("True-Client-IP", "9.9.9.9")
+	req1.Header.Set("X-Real-IP", "9.9.9.9")
+	rec1 := httptest.NewRecorder()
+	router.ServeHTTP(rec1, req1)
+	assert.Equal(t, http.StatusOK, rec1.Code)
+
+	req2 := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req2.RemoteAddr = "203.0.113.10:2222"
+	req2.Header.Set("True-Client-IP", "8.8.8.8")
+	req2.Header.Set("X-Real-IP", "8.8.8.8")
+	rec2 := httptest.NewRecorder()
+	router.ServeHTTP(rec2, req2)
+
+	assert.Equal(t, http.StatusTooManyRequests, rec2.Code)
+}
+
 func TestSetupRouterHealthEndpoint(t *testing.T) {
 	router := chi.NewRouter()
 	cfg := &config.Config{

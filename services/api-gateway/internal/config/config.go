@@ -46,6 +46,7 @@ func loadServerConfig() contracts.ServerConfig {
 		IdleTimeout:       env.GetDuration("SERVER_IDLE_TIMEOUT", 120*time.Second),
 		ShutdownTimeout:   env.GetDuration("SERVER_SHUTDOWN_TIMEOUT", 10*time.Second),
 		TrustProxyHeaders: env.GetBool("TRUST_PROXY_HEADERS", false),
+		TrustedProxyHops:  env.GetIntMin("TRUSTED_PROXY_HOPS", 1, 1),
 	}
 }
 

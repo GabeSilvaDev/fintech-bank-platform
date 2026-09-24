@@ -67,6 +67,41 @@ func TestConfigServerTrustProxyHeadersFromEnv(t *testing.T) {
 	assert.True(t, cfg.Server.TrustProxyHeaders)
 }
 
+func TestConfigServerTrustedProxyHopsDefault(t *testing.T) {
+	os.Unsetenv("TRUSTED_PROXY_HOPS")
+
+	cfg, _ := config.New()
+
+	assert.Equal(t, 1, cfg.Server.TrustedProxyHops)
+}
+
+func TestConfigServerTrustedProxyHopsFromEnv(t *testing.T) {
+	os.Setenv("TRUSTED_PROXY_HOPS", "3")
+	defer os.Unsetenv("TRUSTED_PROXY_HOPS")
+
+	cfg, _ := config.New()
+
+	assert.Equal(t, 3, cfg.Server.TrustedProxyHops)
+}
+
+func TestConfigServerTrustedProxyHopsZeroFallsBack(t *testing.T) {
+	os.Setenv("TRUSTED_PROXY_HOPS", "0")
+	defer os.Unsetenv("TRUSTED_PROXY_HOPS")
+
+	cfg, _ := config.New()
+
+	assert.Equal(t, 1, cfg.Server.TrustedProxyHops)
+}
+
+func TestConfigServerTrustedProxyHopsNegativeFallsBack(t *testing.T) {
+	os.Setenv("TRUSTED_PROXY_HOPS", "-1")
+	defer os.Unsetenv("TRUSTED_PROXY_HOPS")
+
+	cfg, _ := config.New()
+
+	assert.Equal(t, 1, cfg.Server.TrustedProxyHops)
+}
+
 func TestConfigCORSWithEnvVars(t *testing.T) {
 	os.Setenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:8080")
 	os.Setenv("CORS_ALLOW_CREDENTIALS", "false")

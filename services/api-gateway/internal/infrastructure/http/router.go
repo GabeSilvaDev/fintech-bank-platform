@@ -31,7 +31,13 @@ func SetupRouter(router *chi.Mux, cfg *config.Config, deps Dependencies) {
 	router.Use(tracing.EdgeMiddleware)
 	router.Use(deps.Metrics.Middleware)
 	if cfg.Server.TrustProxyHeaders {
-		router.Use(chiMiddleware.RealIP)
+		hops := cfg.Server.TrustedProxyHops
+		if hops < 1 {
+			hops = 1
+		}
+		router.Use(chiMiddleware.ClientIPFromXFFTrustedProxies(hops))
+	} else {
+		router.Use(chiMiddleware.ClientIPFromRemoteAddr)
 	}
 	router.Use(pkgmw.Logger(deps.Logger))
 	router.Use(pkgmw.Recovery(deps.Logger))

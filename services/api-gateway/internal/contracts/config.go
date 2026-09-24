@@ -10,6 +10,7 @@ type ServerConfig struct {
 	IdleTimeout       time.Duration
 	ShutdownTimeout   time.Duration
 	TrustProxyHeaders bool
+	TrustedProxyHops  int
 }
 
 func (s ServerConfig) Address() string {
