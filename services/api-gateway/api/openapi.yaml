@@ -260,7 +260,7 @@ paths:
       tags: [Transactions]
       operationId: listAccountTransactions
       summary: List the transactions of an account
-      description: Proxied to the transaction service. Newest first.
+      description: Proxied to the transaction service. Newest first. Includes balances as seen from `account_id`.
       parameters:
         - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/LedgerLimit'
@@ -351,7 +351,7 @@ paths:
       tags: [Transactions]
       operationId: getTransaction
       summary: Get a transaction
-      description: Proxied to the transaction service.
+      description: Proxied to the transaction service. Returns no balances.
       parameters:
         - $ref: '#/components/parameters/RequestId'
       responses:
@@ -1229,15 +1229,15 @@ components:
         from_balance_after:
           type: number
           description: |
-            Balance of the debited account after the debit. For withdrawals, present whenever the debit has
-            happened. For transfers, present only when listing the transactions of `account_id` (the sender);
-            never present on the `GET /transactions/{id}` response.
+            Never present on `GET /transactions/{id}`. In a list, balance of the debited account after the
+            debit: for withdrawals, present whenever the debit has happened; for transfers, present only in
+            the list of `account_id` (the sender).
         to_balance_after:
           type: number
           description: |
-            Balance of the credited account after the credit. For deposits, present whenever the credit has
-            happened. For transfers, present only when listing the transactions of `counterparty_id` (the
-            recipient); never present on the `GET /transactions/{id}` response.
+            Never present on `GET /transactions/{id}`. In a list, balance of the credited account after the
+            credit: for deposits, present whenever the credit has happened; for transfers, present only in
+            the list of `counterparty_id` (the recipient).
         created_at:
           type: string
           format: date-time
