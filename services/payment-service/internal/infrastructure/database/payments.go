@@ -25,18 +25,31 @@ const paymentColumns = "payment_id, account_id, method, status, amount_cents, cu
 
 const paymentIDChunkSize = 100
 
+const (
+	openBuckets = "0123456789abcdef"
+	openInsert  = "INSERT INTO open_payments (bucket, payment_id) VALUES (?, ?)"
+	openDelete  = "DELETE FROM open_payments WHERE bucket = ? AND payment_id = ?"
+)
+
+func openBucket(id gocql.UUID) string {
+	return id.String()[:1]
+}
+
 func (r *PaymentRepository) Create(ctx context.Context, p *models.Payment) error {
 	ted := p.TED
 	if ted == nil {
 		ted = &models.TEDDetails{}
 	}
-	return cassandra.MapWriteError(r.session.Batch(gocql.LoggedBatch).WithContext(ctx).
+	batch := r.session.Batch(gocql.LoggedBatch).WithContext(ctx).
 		Query("INSERT INTO payments ("+paymentColumns+") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
 			gocql.UUID(p.ID), gocql.UUID(p.AccountID), string(p.Method), string(p.Status), p.AmountCents, p.Currency, p.Recipient, p.PixKey, p.BoletoCode,
 			ted.BankCode, ted.Branch, ted.Account, ted.Document, p.Description, p.IdempotencyKey, p.ExternalID, p.FailureReason, p.BalanceAfterCents,
 			p.CreatedAt, p.UpdatedAt, p.CompletedAt).
-		Query("INSERT INTO payments_by_account (account_id, created_at, payment_id) VALUES (?, ?, ?)", gocql.UUID(p.AccountID), p.CreatedAt, gocql.UUID(p.ID)).
-		Exec())
+		Query("INSERT INTO payments_by_account (account_id, created_at, payment_id) VALUES (?, ?, ?)", gocql.UUID(p.AccountID), p.CreatedAt, gocql.UUID(p.ID))
+	if !p.Status.Terminal() {
+		batch = batch.Query(openInsert, openBucket(gocql.UUID(p.ID)), gocql.UUID(p.ID))
+	}
+	return cassandra.MapWriteError(batch.Exec())
 }
 
 func (r *PaymentRepository) ReserveKey(ctx context.Context, accountID uuid.UUID, key string, id uuid.UUID) (uuid.UUID, error) {
@@ -72,19 +85,7 @@ func (r *PaymentRepository) ListByAccount(ctx context.Context, accountID uuid.UU
 
 	byID := make(map[gocql.UUID]*models.Payment, len(ids))
 	for start := 0; start < len(ids); start += paymentIDChunkSize {
-		end := start + paymentIDChunkSize
-		if end > len(ids) {
-			end = len(ids)
-		}
-		chunkIter := r.session.Query("SELECT "+paymentColumns+" FROM payments WHERE payment_id IN ?", ids[start:end]).WithContext(ctx).Iter()
-		for {
-			payment, ok := scanPaymentIter(chunkIter)
-			if !ok {
-				break
-			}
-			byID[gocql.UUID(payment.ID)] = payment
-		}
-		if err := chunkIter.Close(); err != nil {
+		if err := r.loadChunk(ctx, idChunk(ids, start), byID); err != nil {
 			return nil, err
 		}
 	}
@@ -96,6 +97,26 @@ func (r *PaymentRepository) ListByAccount(ctx context.Context, accountID uuid.UU
 		}
 	}
 	return payments, nil
+}
+
+func idChunk(ids []gocql.UUID, start int) []gocql.UUID {
+	end := start + paymentIDChunkSize
+	if end > len(ids) {
+		end = len(ids)
+	}
+	return ids[start:end]
+}
+
+func (r *PaymentRepository) loadChunk(ctx context.Context, ids []gocql.UUID, into map[gocql.UUID]*models.Payment) error {
+	iter := r.session.Query("SELECT "+paymentColumns+" FROM payments WHERE payment_id IN ?", ids).WithContext(ctx).Iter()
+	for {
+		payment, ok := scanPaymentIter(iter)
+		if !ok {
+			break
+		}
+		into[gocql.UUID(payment.ID)] = payment
+	}
+	return iter.Close()
 }
 
 func (r *PaymentRepository) Transition(ctx context.Context, id uuid.UUID, from, to models.Status, patch models.Patch) (bool, error) {
@@ -121,6 +142,9 @@ func (r *PaymentRepository) Transition(ctx context.Context, id uuid.UUID, from, 
 
 	applied, err := r.session.Query("UPDATE payments SET "+strings.Join(assignments, ", ")+" WHERE payment_id = ? IF status = ?", values...).
 		WithContext(ctx).MapScanCAS(map[string]interface{}{})
+	if err == nil && applied && to.Terminal() {
+		r.closeOpen(ctx, gocql.UUID(id))
+	}
 	return applied, cassandra.MapWriteError(err)
 }
 
@@ -142,24 +166,76 @@ func (r *PaymentRepository) FindByExternalID(ctx context.Context, externalID str
 }
 
 func (r *PaymentRepository) ListStale(ctx context.Context, before time.Time, maxAge time.Duration, limit int) ([]*models.Payment, error) {
-	iter := r.session.Query("SELECT " + paymentColumns + " FROM payments").WithContext(ctx).PageSize(500).Iter()
+	ids, err := r.openIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	stale := []*models.Payment{}
-	for len(stale) < limit {
-		payment, ok := scanPaymentIter(iter)
-		if !ok {
-			break
+	for start := 0; start < len(ids) && len(stale) < limit; start += paymentIDChunkSize {
+		chunk := idChunk(ids, start)
+		byID := make(map[gocql.UUID]*models.Payment, len(chunk))
+		if err := r.loadChunk(ctx, chunk, byID); err != nil {
+			return nil, err
 		}
-		switch payment.Status {
-		case models.StatusPending, models.StatusDebited, models.StatusSubmitted, models.StatusRefunding:
+		for _, id := range chunk {
+			if len(stale) >= limit {
+				break
+			}
+			payment, ok := byID[id]
+			if !ok {
+				continue
+			}
+			if payment.Status.Terminal() {
+				r.closeOpen(ctx, id)
+				continue
+			}
 			if payment.UpdatedAt.Before(before) && !payment.UpdatedAt.After(payment.CreatedAt.Add(maxAge)) {
 				stale = append(stale, payment)
 			}
 		}
 	}
-	if err := iter.Close(); err != nil {
-		return nil, err
-	}
 	return stale, nil
+}
+
+func (r *PaymentRepository) openIDs(ctx context.Context) ([]gocql.UUID, error) {
+	var ids []gocql.UUID
+	for _, bucket := range openBuckets {
+		iter := r.session.Query("SELECT payment_id FROM open_payments WHERE bucket = ?", string(bucket)).WithContext(ctx).Iter()
+		var id gocql.UUID
+		for iter.Scan(&id) {
+			ids = append(ids, id)
+		}
+		if err := iter.Close(); err != nil {
+			return nil, err
+		}
+	}
+	return ids, nil
+}
+
+func (r *PaymentRepository) closeOpen(ctx context.Context, id gocql.UUID) {
+	_ = r.session.Query(openDelete, openBucket(id), id).WithContext(ctx).Exec()
+}
+
+func (r *PaymentRepository) Reindex(ctx context.Context) (int, error) {
+	iter := r.session.Query("SELECT payment_id, status FROM payments").WithContext(ctx).PageSize(500).Iter()
+	ensured := 0
+	var id gocql.UUID
+	var status string
+	for iter.Scan(&id, &status) {
+		if models.Status(status).Terminal() {
+			continue
+		}
+		if err := r.session.Query(openInsert, openBucket(id), id).WithContext(ctx).Exec(); err != nil {
+			_ = iter.Close()
+			return ensured, err
+		}
+		ensured++
+	}
+	if err := iter.Close(); err != nil {
+		return ensured, err
+	}
+	return ensured, nil
 }
 
 func (r *PaymentRepository) Touch(ctx context.Context, id uuid.UUID, status models.Status, observed, now time.Time) (bool, error) {

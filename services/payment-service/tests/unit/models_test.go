@@ -59,3 +59,12 @@ func TestParseSettlementStatus(t *testing.T) {
 		assert.False(t, ok, bad)
 	}
 }
+
+func TestStatusTerminal(t *testing.T) {
+	for _, status := range []models.Status{models.StatusCompleted, models.StatusFailed, models.StatusRefunded, models.StatusRefundFailed} {
+		assert.True(t, status.Terminal(), status)
+	}
+	for _, status := range []models.Status{models.StatusPending, models.StatusDebited, models.StatusSubmitted, models.StatusRefunding} {
+		assert.False(t, status.Terminal(), status)
+	}
+}

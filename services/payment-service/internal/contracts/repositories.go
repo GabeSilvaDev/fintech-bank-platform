@@ -18,6 +18,7 @@ type PaymentRepository interface {
 	FindByExternalID(ctx context.Context, externalID string) (uuid.UUID, error)
 	ListStale(ctx context.Context, before time.Time, maxAge time.Duration, limit int) ([]*models.Payment, error)
 	Touch(ctx context.Context, id uuid.UUID, status models.Status, observed, now time.Time) (bool, error)
+	Reindex(ctx context.Context) (int, error)
 }
 
 type ProcessedEventStore interface {

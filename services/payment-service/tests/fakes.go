@@ -47,10 +47,14 @@ type FakePaymentRepo struct {
 	FindErr           error
 	StaleErr          error
 	StaleMaxAges      []time.Duration
+	Open              map[uuid.UUID]bool
+	Reindexes         int
+	ReindexErr        error
+	OnReindex         func()
 }
 
 func NewFakePaymentRepo() *FakePaymentRepo {
-	return &FakePaymentRepo{Payments: map[uuid.UUID]*models.Payment{}, Keys: map[string]uuid.UUID{}, External: map[string]uuid.UUID{}}
+	return &FakePaymentRepo{Payments: map[uuid.UUID]*models.Payment{}, Keys: map[string]uuid.UUID{}, External: map[string]uuid.UUID{}, Open: map[uuid.UUID]bool{}}
 }
 
 func KeyOf(accountID uuid.UUID, key string) string {
@@ -60,6 +64,9 @@ func KeyOf(accountID uuid.UUID, key string) string {
 func (f *FakePaymentRepo) Put(payment *models.Payment) {
 	copied := *payment
 	f.Payments[payment.ID] = &copied
+	if !payment.Status.Terminal() {
+		f.Open[payment.ID] = true
+	}
 }
 
 func (f *FakePaymentRepo) Create(_ context.Context, payment *models.Payment) error {
@@ -153,6 +160,9 @@ func (f *FakePaymentRepo) Transition(_ context.Context, id uuid.UUID, from, to m
 	if patch.CompletedAt != nil {
 		payment.CompletedAt = patch.CompletedAt
 	}
+	if to.Terminal() {
+		delete(f.Open, id)
+	}
 	return true, nil
 }
 
@@ -182,18 +192,48 @@ func (f *FakePaymentRepo) ListStale(_ context.Context, before time.Time, maxAge 
 	if f.Err != nil {
 		return nil, f.Err
 	}
+	ids := make([]uuid.UUID, 0, len(f.Open))
+	for id := range f.Open {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i].String() < ids[j].String() })
 	result := []*models.Payment{}
-	for _, payment := range f.Payments {
+	for _, id := range ids {
+		if len(result) >= limit {
+			break
+		}
+		payment, ok := f.Payments[id]
+		if !ok {
+			continue
+		}
+		if payment.Status.Terminal() {
+			delete(f.Open, id)
+			continue
+		}
 		if payment.UpdatedAt.Before(before) {
 			copied := *payment
 			result = append(result, &copied)
 		}
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].ID.String() < result[j].ID.String() })
-	if len(result) > limit {
-		result = result[:limit]
-	}
 	return result, nil
+}
+
+func (f *FakePaymentRepo) Reindex(_ context.Context) (int, error) {
+	f.Reindexes++
+	if f.OnReindex != nil {
+		f.OnReindex()
+	}
+	if f.ReindexErr != nil {
+		return 0, f.ReindexErr
+	}
+	ensured := 0
+	for id, payment := range f.Payments {
+		if !payment.Status.Terminal() {
+			f.Open[id] = true
+			ensured++
+		}
+	}
+	return ensured, nil
 }
 
 func (f *FakePaymentRepo) BindExternalID(_ context.Context, externalID string, id uuid.UUID) error {

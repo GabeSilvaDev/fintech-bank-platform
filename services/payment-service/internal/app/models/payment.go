@@ -28,6 +28,14 @@ const (
 	StatusRefundFailed Status = "refund_failed"
 )
 
+func (s Status) Terminal() bool {
+	switch s {
+	case StatusCompleted, StatusFailed, StatusRefunded, StatusRefundFailed:
+		return true
+	}
+	return false
+}
+
 const Currency = "BRL"
 
 var ErrDuplicateKey = errors.New("duplicate idempotency key")

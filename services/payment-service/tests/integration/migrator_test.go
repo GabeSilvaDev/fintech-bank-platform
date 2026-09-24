@@ -27,7 +27,7 @@ func TestMigratorAppliesOnceAndIsIdempotent(t *testing.T) {
 
 	applied, err := migrator.Up(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, []int{1, 2, 3, 4, 5, 6}, applied)
+	require.Equal(t, []int{1, 2, 3, 4, 5, 6, 7, 8}, applied)
 
 	again, err := migrator.Up(context.Background())
 	require.NoError(t, err)
@@ -35,7 +35,11 @@ func TestMigratorAppliesOnceAndIsIdempotent(t *testing.T) {
 
 	var count int
 	require.NoError(t, session.Query("SELECT count(*) FROM system_schema.tables WHERE keyspace_name = ?", keyspace).Scan(&count))
-	require.Equal(t, 6, count)
+	require.Equal(t, 7, count)
+
+	var gcGrace int
+	require.NoError(t, session.Query("SELECT gc_grace_seconds FROM system_schema.tables WHERE keyspace_name = ? AND table_name = ?", keyspace, "open_payments").Scan(&gcGrace))
+	require.Equal(t, 3600, gcGrace)
 
 	require.NoError(t, database.Ping(session)(context.Background()))
 }
