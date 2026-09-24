@@ -220,3 +220,30 @@ func TestOpenAPIDocumentMakesTheAccountOwnerOptional(t *testing.T) {
 	assert.NotContains(t, doc.Components.Schemas["CreateAccountRequest"].Required, "user_id")
 	assert.Contains(t, doc.Components.Schemas["CreateAccountRequest"].Required, "account_type")
 }
+
+func TestOpenAPIDocumentsTheGatewayRejections(t *testing.T) {
+	var doc openAPISecurityDocument
+	require.NoError(t, yaml.Unmarshal(api.Spec, &doc))
+
+	operation := func(path, method string) openAPIOperation {
+		var op openAPIOperation
+		node := doc.Paths[path][method]
+		require.NoError(t, node.Decode(&op), method+" "+path)
+		return op
+	}
+	reference := func(op openAPIOperation, status string) string {
+		var response struct {
+			Ref string `yaml:"$ref"`
+		}
+		node := op.Responses[status]
+		require.NoError(t, node.Decode(&response), status)
+		return response.Ref
+	}
+
+	for _, path := range []string{"/api/v1/auth/register", "/api/v1/auth/login"} {
+		assert.Equal(t, "#/components/responses/ServiceBusy", reference(operation(path, "post"), "503"), path)
+	}
+	for _, path := range []string{"/api/v1/accounts/{id}", "/api/v1/accounts/{account_id}/transactions", "/api/v1/accounts/{account_id}/payments"} {
+		assert.Contains(t, operation(path, "get").Responses, "422", path)
+	}
+}

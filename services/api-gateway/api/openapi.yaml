@@ -155,6 +155,8 @@ paths:
           $ref: '#/components/responses/TooManyRequests'
         '502':
           $ref: '#/components/responses/UpstreamUnavailable'
+        '503':
+          $ref: '#/components/responses/ServiceBusy'
         default:
           $ref: '#/components/responses/InternalError'
   /api/v1/auth/login:
@@ -190,10 +192,12 @@ paths:
         '401':
           description: |
             The e-mail is not registered or the password does not match (`INVALID_CREDENTIALS`). Both cases answer the
-            same way.
+            same way, with `WWW-Authenticate: Bearer`.
           headers:
             X-Request-ID:
               $ref: '#/components/headers/XRequestID'
+            WWW-Authenticate:
+              $ref: '#/components/headers/WWWAuthenticate'
           content:
             application/json:
               schema:
@@ -225,6 +229,8 @@ paths:
           $ref: '#/components/responses/TooManyRequests'
         '502':
           $ref: '#/components/responses/UpstreamUnavailable'
+        '503':
+          $ref: '#/components/responses/ServiceBusy'
         default:
           $ref: '#/components/responses/InternalError'
   /api/v1/accounts:
@@ -1135,6 +1141,22 @@ components:
             error:
               code: UPSTREAM_UNAVAILABLE
               message: account service is unavailable
+    ServiceBusy:
+      description: |
+        The account service is already hashing as many passwords as it allows at once and could not start this one
+        within a short wait (`SERVICE_BUSY`). Nothing was stored; retry after a short pause.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            success: false
+            error:
+              code: SERVICE_BUSY
+              message: account service is busy, try again shortly
     InternalError:
       description: |
         Unexpected error (`INTERNAL_ERROR`, or a more specific code such as `EVENT_ENCODING_FAILED`). Proxied reads

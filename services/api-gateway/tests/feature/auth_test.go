@@ -154,7 +154,8 @@ func (s *AuthTestSuite) TestRegisterTwiceIsAConflict() {
 	s.Post("/api/v1/auth/register", credentials(email, "password2")).
 		AssertStatus(http.StatusConflict).
 		AssertErrorCode("EMAIL_TAKEN").
-		AssertErrorMessage("e-mail already registered")
+		AssertErrorMessage("e-mail already registered").
+		AssertHeaderMissing("WWW-Authenticate")
 }
 
 func (s *AuthTestSuite) TestLoginWithAWrongPasswordIsUnauthorized() {
@@ -164,10 +165,12 @@ func (s *AuthTestSuite) TestLoginWithAWrongPasswordIsUnauthorized() {
 	s.Post("/api/v1/auth/login", credentials(email, "password2")).
 		AssertUnauthorized().
 		AssertErrorCode("INVALID_CREDENTIALS").
+		AssertHeader("WWW-Authenticate", "Bearer").
 		AssertJsonMissing("data")
 	s.Post("/api/v1/auth/login", credentials(tests.RandomEmail(), "password1")).
 		AssertUnauthorized().
-		AssertErrorCode("INVALID_CREDENTIALS")
+		AssertErrorCode("INVALID_CREDENTIALS").
+		AssertHeader("WWW-Authenticate", "Bearer")
 }
 
 func (s *AuthTestSuite) TestRegisterValidatesWithoutCallingTheAccountService() {

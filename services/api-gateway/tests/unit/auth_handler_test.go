@@ -134,7 +134,34 @@ func TestAuthHandlerRegisterPassesUpstreamErrorsThrough(t *testing.T) {
 
 	assert.Equal(t, http.StatusConflict, rec.Code)
 	assert.JSONEq(t, `{"success":false,"error":{"code":"EMAIL_TAKEN","message":"e-mail already registered"}}`, rec.Body.String())
+	assert.Empty(t, rec.Header().Values("WWW-Authenticate"))
 	assert.Empty(t, tokens.issued)
+}
+
+func TestAuthHandlersAnnounceTheBearerSchemeOnInvalidCredentials(t *testing.T) {
+	identities := &fakeIdentities{err: apperrors.Unauthorized("INVALID_CREDENTIALS", "invalid e-mail or password")}
+	handler := handlers.NewAuthHandler(identities, &fakeTokens{})
+
+	for name, fn := range map[string]http.HandlerFunc{"register": handler.Register, "login": handler.Login} {
+		rec := callAuth(fn, `{"email":"ana@example.com","password":"password1"}`)
+
+		assert.Equal(t, http.StatusUnauthorized, rec.Code, name)
+		assert.Equal(t, []string{"Bearer"}, rec.Header().Values("WWW-Authenticate"), name)
+		assert.Contains(t, rec.Body.String(), "INVALID_CREDENTIALS", name)
+	}
+}
+
+func TestAuthHandlersPassABusyAccountServiceThrough(t *testing.T) {
+	identities := &fakeIdentities{err: apperrors.ServiceUnavailable("SERVICE_BUSY", "account service is busy, try again shortly")}
+	handler := handlers.NewAuthHandler(identities, &fakeTokens{})
+
+	for name, fn := range map[string]http.HandlerFunc{"register": handler.Register, "login": handler.Login} {
+		rec := callAuth(fn, `{"email":"ana@example.com","password":"password1"}`)
+
+		assert.Equal(t, http.StatusServiceUnavailable, rec.Code, name)
+		assert.Contains(t, rec.Body.String(), "SERVICE_BUSY", name)
+		assert.Empty(t, rec.Header().Values("WWW-Authenticate"), name)
+	}
 }
 
 func TestAuthHandlerRegisterFailsWhenTheTokenCannotBeIssued(t *testing.T) {

@@ -49,7 +49,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 	userID, err := h.identities.Register(r.Context(), req.Email, req.Password)
 	if err != nil {
-		response.FromError(w, err)
+		identityFailure(w, err)
 		return
 	}
 
@@ -71,7 +71,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 	userID, err := h.identities.Verify(r.Context(), req.Email, req.Password)
 	if err != nil {
-		response.FromError(w, err)
+		identityFailure(w, err)
 		return
 	}
 
@@ -82,6 +82,13 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response.OK(w, tokenResponse{AccessToken: token, TokenType: bearerTokenType, ExpiresIn: expiresIn})
+}
+
+func identityFailure(w http.ResponseWriter, err error) {
+	if apperrors.GetHTTPStatus(err) == http.StatusUnauthorized {
+		w.Header().Set("WWW-Authenticate", bearerTokenType)
+	}
+	response.FromError(w, err)
 }
 
 func decodeCredentials(r *http.Request, rules func(credentialsRequest) map[string]string) (credentialsRequest, error) {

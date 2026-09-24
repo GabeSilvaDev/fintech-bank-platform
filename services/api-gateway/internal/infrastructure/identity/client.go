@@ -26,7 +26,13 @@ type Client struct {
 func NewClient(base *url.URL, timeout time.Duration) *Client {
 	return &Client{
 		base: base,
-		http: &http.Client{Transport: tracing.Transport(nil), Timeout: timeout},
+		http: &http.Client{
+			Transport: tracing.Transport(nil),
+			Timeout:   timeout,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 	}
 }
 
@@ -69,7 +75,7 @@ func (c *Client) call(ctx context.Context, path string, success int, email, pass
 	if err != nil {
 		return uuid.Nil, unavailable(err)
 	}
-	defer resp.Body.Close()
+	defer drain(resp.Body)
 
 	var payload envelope
 	decodeErr := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(&payload)
@@ -89,8 +95,15 @@ func (c *Client) call(ctx context.Context, path string, success int, email, pass
 		return uuid.Nil, apperrors.UnprocessableEntity("VALIDATION_ERROR", "request validation failed").WithDetails(payload.Error.Details)
 	case http.StatusRequestEntityTooLarge:
 		return uuid.Nil, apperrors.New("PAYLOAD_TOO_LARGE", "request body is too large", http.StatusRequestEntityTooLarge)
+	case http.StatusServiceUnavailable:
+		return uuid.Nil, apperrors.ServiceUnavailable("SERVICE_BUSY", "account service is busy, try again shortly")
 	}
 	return uuid.Nil, unavailable(fmt.Errorf("unexpected identity status %d", resp.StatusCode))
+}
+
+func drain(body io.ReadCloser) {
+	_, _ = io.Copy(io.Discard, io.LimitReader(body, maxResponseBytes))
+	_ = body.Close()
 }
 
 func unavailable(err error) error {

@@ -106,6 +106,8 @@ func TestIdentityClientMapsUpstreamErrors(t *testing.T) {
 		{"email taken", http.StatusConflict, `{"success":false,"error":{"code":"EMAIL_TAKEN","message":"email already registered"}}`, http.StatusConflict, "EMAIL_TAKEN"},
 		{"invalid credentials", http.StatusUnauthorized, `{"success":false,"error":{"code":"INVALID_CREDENTIALS","message":"x"}}`, http.StatusUnauthorized, "INVALID_CREDENTIALS"},
 		{"too large", http.StatusRequestEntityTooLarge, `{"success":false}`, http.StatusRequestEntityTooLarge, "PAYLOAD_TOO_LARGE"},
+		{"busy", http.StatusServiceUnavailable, `{"success":false,"error":{"code":"SERVICE_BUSY","message":"x"}}`, http.StatusServiceUnavailable, "SERVICE_BUSY"},
+		{"redirect", http.StatusTemporaryRedirect, `{"success":true,"data":{"user_id":"` + uuid.NewString() + `"}}`, http.StatusBadGateway, "UPSTREAM_UNAVAILABLE"},
 		{"server error", http.StatusInternalServerError, `{"success":false,"error":{"code":"INTERNAL_ERROR","message":"x"}}`, http.StatusBadGateway, "UPSTREAM_UNAVAILABLE"},
 		{"bad request", http.StatusBadRequest, `{"success":false,"error":{"code":"INVALID_JSON","message":"x"}}`, http.StatusBadGateway, "UPSTREAM_UNAVAILABLE"},
 		{"success without json", http.StatusCreated, `not json`, http.StatusBadGateway, "UPSTREAM_UNAVAILABLE"},
@@ -137,6 +139,36 @@ func TestIdentityClientMessages(t *testing.T) {
 	client, _ = identityServer(t, http.StatusBadGateway, `{}`)
 	_, err = client.Verify(context.Background(), "a@b.co", "password1")
 	assert.Equal(t, "account service is unavailable", assertAppError(t, err, http.StatusBadGateway, "UPSTREAM_UNAVAILABLE").Message)
+}
+
+func TestIdentityClientDoesNotFollowRedirects(t *testing.T) {
+	followed := false
+	mux := http.NewServeMux()
+	mux.HandleFunc("/elsewhere", func(w http.ResponseWriter, _ *http.Request) {
+		followed = true
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"success":true,"data":{"user_id":"` + uuid.NewString() + `"}}`))
+	})
+	mux.HandleFunc("/identities", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/elsewhere", http.StatusTemporaryRedirect)
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+	base, _ := url.Parse(server.URL)
+
+	userID, err := identity.NewClient(base, time.Second).Register(context.Background(), "ana@example.com", "password1")
+
+	assert.Equal(t, uuid.Nil, userID)
+	assertAppError(t, err, http.StatusBadGateway, "UPSTREAM_UNAVAILABLE")
+	assert.False(t, followed)
+}
+
+func TestIdentityClientBusyMessage(t *testing.T) {
+	client, _ := identityServer(t, http.StatusServiceUnavailable, `{}`)
+
+	_, err := client.Verify(context.Background(), "ana@example.com", "password1")
+
+	assert.Equal(t, "account service is busy, try again shortly", assertAppError(t, err, http.StatusServiceUnavailable, "SERVICE_BUSY").Message)
 }
 
 func TestIdentityClientPassesValidationDetailsThrough(t *testing.T) {
