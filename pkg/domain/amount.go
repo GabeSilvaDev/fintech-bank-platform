@@ -9,7 +9,10 @@ import (
 	"strings"
 )
 
-var amountPattern = regexp.MustCompile(`^-?[0-9]{1,15}(\.[0-9]{1,2})?$`)
+var (
+	amountPattern = regexp.MustCompile(`^-?[0-9]{1,17}(\.[0-9]{1,2})?$`)
+	numberPattern = regexp.MustCompile(`^-?[0-9]+(\.[0-9]+)?$`)
+)
 
 type Amount int64
 
@@ -22,32 +25,44 @@ func ParseAmount(s string) (Amount, error) {
 		return 0, Invalid("invalid_amount", "amount must be a decimal number with up to two decimal places")
 	}
 
-	negative := false
-	rest := s
-	if strings.HasPrefix(rest, "-") {
-		negative = true
-		rest = rest[1:]
+	intPart, fracPart, _ := strings.Cut(strings.TrimPrefix(s, "-"), ".")
+	return fromParts(strings.HasPrefix(s, "-"), intPart, fracPart)
+}
+
+func parseNumber(literal string) (Amount, error) {
+	intPart, fracPart, _ := strings.Cut(strings.TrimPrefix(literal, "-"), ".")
+	fracPart = strings.TrimRight(fracPart, "0")
+	if len(fracPart) > 2 {
+		return 0, Invalid("invalid_amount", "amount must have at most two decimal places")
+	}
+	if len(intPart) > 17 {
+		return 0, Invalid("invalid_amount", "amount is out of range")
 	}
 
-	intPart := rest
-	fracPart := ""
-	if idx := strings.IndexByte(rest, '.'); idx >= 0 {
-		intPart = rest[:idx]
-		fracPart = rest[idx+1:]
-	}
+	return fromParts(strings.HasPrefix(literal, "-"), intPart, fracPart)
+}
+
+func fromParts(negative bool, intPart, fracPart string) (Amount, error) {
 	for len(fracPart) < 2 {
 		fracPart += "0"
 	}
 
-	intValue, _ := strconv.ParseInt(intPart, 10, 64)
-	fracValue, _ := strconv.ParseInt(fracPart, 10, 64)
+	intValue, _ := strconv.ParseUint(intPart, 10, 64)
+	fracValue, _ := strconv.ParseUint(fracPart, 10, 64)
+	magnitude := intValue*100 + fracValue
 
-	cents := intValue*100 + fracValue
+	limit := uint64(math.MaxInt64)
 	if negative {
-		cents = -cents
+		limit++
+	}
+	if magnitude > limit {
+		return 0, Invalid("invalid_amount", "amount is out of range")
 	}
 
-	return Amount(cents), nil
+	if negative {
+		return Amount(int64(-magnitude)), nil
+	}
+	return Amount(int64(magnitude)), nil
 }
 
 func (a Amount) Cents() int64 {
@@ -92,6 +107,16 @@ func (a *Amount) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 
+	if numberPattern.Match(data) {
+		parsed, err := parseNumber(string(data))
+		if err != nil {
+			return err
+		}
+
+		*a = parsed
+		return nil
+	}
+
 	var f float64
 	if err := json.Unmarshal(data, &f); err != nil {
 		return Invalid("invalid_amount", "amount must be a string or a number")
@@ -102,7 +127,7 @@ func (a *Amount) UnmarshalJSON(data []byte) error {
 	if math.Abs(scaled-rounded) > 1e-6 {
 		return Invalid("invalid_amount", "amount must have at most two decimal places")
 	}
-	if rounded > 1e15 || rounded < -1e15 {
+	if rounded >= 0x1p63 || rounded < -0x1p63 {
 		return Invalid("invalid_amount", "amount is out of range")
 	}
 

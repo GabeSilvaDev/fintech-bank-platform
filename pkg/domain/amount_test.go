@@ -32,6 +32,9 @@ func TestParseAmountValid(t *testing.T) {
 		{"19.99", 1999},
 		{"999999999999999", 99999999999999900},
 		{"999999999999999.99", 99999999999999999},
+		{"1234567890123456", 123456789012345600},
+		{"92233720368547758.07", math.MaxInt64},
+		{"-92233720368547758.08", math.MinInt64},
 	}
 
 	for _, c := range cases {
@@ -54,7 +57,7 @@ func TestParseAmountInvalid(t *testing.T) {
 		"1.5.5",
 		"abc",
 		"1,50",
-		"1234567890123456",
+		"123456789012345678",
 	}
 
 	for _, c := range cases {
@@ -134,12 +137,71 @@ func TestAmountUnmarshalJSONNumber(t *testing.T) {
 	assert.Equal(t, "invalid_amount", InvalidCode(err))
 
 	err = json.Unmarshal([]byte(`10000000000001`), &a)
-	assert.True(t, IsInvalid(err))
-	assert.Equal(t, "invalid_amount", InvalidCode(err))
+	assert.NoError(t, err)
+	assert.Equal(t, int64(1000000000000100), a.Cents())
+}
 
-	err = json.Unmarshal([]byte(`-10000000000001`), &a)
-	assert.True(t, IsInvalid(err))
-	assert.Equal(t, "invalid_amount", InvalidCode(err))
+func TestParseAmountOutOfRange(t *testing.T) {
+	for _, c := range []string{"92233720368547758.08", "-92233720368547758.09", "99999999999999999.99", "-99999999999999999"} {
+		_, err := ParseAmount(c)
+		assert.EqualError(t, err, "invalid_amount: amount is out of range", c)
+	}
+}
+
+func TestAmountUnmarshalJSONLargeNumbersAreExact(t *testing.T) {
+	cases := map[string]int64{
+		`152626798.92`:          15262679892,
+		`576091627.17`:          57609162717,
+		`9292641860.54`:         929264186054,
+		`-9292641860.54`:        -929264186054,
+		`1.500`:                 150,
+		`1.0`:                   100,
+		`0`:                     0,
+		`92233720368547758.07`:  math.MaxInt64,
+		`-92233720368547758.08`: math.MinInt64,
+	}
+	for literal, want := range cases {
+		var a Amount
+		assert.NoError(t, json.Unmarshal([]byte(literal), &a), literal)
+		assert.Equal(t, want, a.Cents(), literal)
+	}
+}
+
+func TestAmountUnmarshalJSONRejectsBadNumberLiterals(t *testing.T) {
+	cases := map[string]string{
+		`1.505`:                 "invalid_amount: amount must have at most two decimal places",
+		`0.001`:                 "invalid_amount: amount must have at most two decimal places",
+		`92233720368547758.08`:  "invalid_amount: amount is out of range",
+		`-92233720368547758.09`: "invalid_amount: amount is out of range",
+		`100000000000000000`:    "invalid_amount: amount is out of range",
+		`1.5e-3`:                "invalid_amount: amount must have at most two decimal places",
+		`1e17`:                  "invalid_amount: amount is out of range",
+		`-1e17`:                 "invalid_amount: amount is out of range",
+	}
+	for literal, want := range cases {
+		var a Amount
+		assert.EqualError(t, json.Unmarshal([]byte(literal), &a), want, literal)
+	}
+}
+
+func TestAmountUnmarshalJSONExponentNumbers(t *testing.T) {
+	var a Amount
+	assert.NoError(t, json.Unmarshal([]byte(`1e2`), &a))
+	assert.Equal(t, int64(10000), a.Cents())
+
+	assert.NoError(t, json.Unmarshal([]byte(`-1.5E1`), &a))
+	assert.Equal(t, int64(-1500), a.Cents())
+}
+
+func TestAmountExtremesRoundTrip(t *testing.T) {
+	for _, cents := range []int64{math.MaxInt64, math.MinInt64} {
+		data, err := json.Marshal(AmountFromCents(cents))
+		assert.NoError(t, err)
+
+		var decoded Amount
+		assert.NoError(t, json.Unmarshal(data, &decoded), string(data))
+		assert.Equal(t, cents, decoded.Cents())
+	}
 }
 
 func TestAmountUnmarshalJSONNull(t *testing.T) {
