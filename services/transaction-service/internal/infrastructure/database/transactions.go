@@ -25,6 +25,16 @@ const transactionColumns = "transaction_id, type, status, account_id, counterpar
 
 const transactionIDChunkSize = 100
 
+const (
+	openBuckets = "0123456789abcdef"
+	openInsert  = "INSERT INTO open_transactions (bucket, transaction_id) VALUES (?, ?)"
+	openDelete  = "DELETE FROM open_transactions WHERE bucket = ? AND transaction_id = ?"
+)
+
+func openBucket(id gocql.UUID) string {
+	return id.String()[:1]
+}
+
 func (r *TransactionRepository) Create(ctx context.Context, tx *models.Transaction) error {
 	var counterparty *gocql.UUID
 	if tx.CounterpartyID != nil {
@@ -38,6 +48,9 @@ func (r *TransactionRepository) Create(ctx context.Context, tx *models.Transacti
 		Query("INSERT INTO transactions_by_account (account_id, created_at, transaction_id) VALUES (?, ?, ?)", gocql.UUID(tx.AccountID), tx.CreatedAt, gocql.UUID(tx.ID))
 	if counterparty != nil {
 		batch = batch.Query("INSERT INTO transactions_by_account (account_id, created_at, transaction_id) VALUES (?, ?, ?)", *counterparty, tx.CreatedAt, gocql.UUID(tx.ID))
+	}
+	if !tx.Status.Terminal() {
+		batch = batch.Query(openInsert, openBucket(gocql.UUID(tx.ID)), gocql.UUID(tx.ID))
 	}
 	return cassandra.MapWriteError(batch.Exec())
 }
@@ -75,19 +88,7 @@ func (r *TransactionRepository) ListByAccount(ctx context.Context, accountID uui
 
 	byID := make(map[gocql.UUID]*models.Transaction, len(ids))
 	for start := 0; start < len(ids); start += transactionIDChunkSize {
-		end := start + transactionIDChunkSize
-		if end > len(ids) {
-			end = len(ids)
-		}
-		chunkIter := r.session.Query("SELECT "+transactionColumns+" FROM transactions WHERE transaction_id IN ?", ids[start:end]).WithContext(ctx).Iter()
-		for {
-			tx, ok := scanTransactionIter(chunkIter)
-			if !ok {
-				break
-			}
-			byID[gocql.UUID(tx.ID)] = tx
-		}
-		if err := chunkIter.Close(); err != nil {
+		if err := r.loadChunk(ctx, idChunk(ids, start), byID); err != nil {
 			return nil, err
 		}
 	}
@@ -101,25 +102,94 @@ func (r *TransactionRepository) ListByAccount(ctx context.Context, accountID uui
 	return txns, nil
 }
 
-func (r *TransactionRepository) ListStale(ctx context.Context, before time.Time, maxAge time.Duration, limit int) ([]*models.Transaction, error) {
-	iter := r.session.Query("SELECT " + transactionColumns + " FROM transactions").WithContext(ctx).PageSize(500).Iter()
-	stale := []*models.Transaction{}
-	for len(stale) < limit {
+func idChunk(ids []gocql.UUID, start int) []gocql.UUID {
+	end := start + transactionIDChunkSize
+	if end > len(ids) {
+		end = len(ids)
+	}
+	return ids[start:end]
+}
+
+func (r *TransactionRepository) loadChunk(ctx context.Context, ids []gocql.UUID, into map[gocql.UUID]*models.Transaction) error {
+	iter := r.session.Query("SELECT "+transactionColumns+" FROM transactions WHERE transaction_id IN ?", ids).WithContext(ctx).Iter()
+	for {
 		tx, ok := scanTransactionIter(iter)
 		if !ok {
 			break
 		}
-		switch tx.Status {
-		case models.StatusPending, models.StatusDebited, models.StatusReversing:
+		into[gocql.UUID(tx.ID)] = tx
+	}
+	return iter.Close()
+}
+
+func (r *TransactionRepository) ListStale(ctx context.Context, before time.Time, maxAge time.Duration, limit int) ([]*models.Transaction, error) {
+	ids, err := r.openIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	stale := []*models.Transaction{}
+	for start := 0; start < len(ids) && len(stale) < limit; start += transactionIDChunkSize {
+		chunk := idChunk(ids, start)
+		byID := make(map[gocql.UUID]*models.Transaction, len(chunk))
+		if err := r.loadChunk(ctx, chunk, byID); err != nil {
+			return nil, err
+		}
+		for _, id := range chunk {
+			if len(stale) >= limit {
+				break
+			}
+			tx, ok := byID[id]
+			if !ok || tx.Status.Terminal() {
+				r.closeOpen(ctx, id)
+				continue
+			}
 			if tx.UpdatedAt.Before(before) && !tx.UpdatedAt.After(tx.CreatedAt.Add(maxAge)) {
 				stale = append(stale, tx)
 			}
 		}
 	}
-	if err := iter.Close(); err != nil {
-		return nil, err
-	}
 	return stale, nil
+}
+
+func (r *TransactionRepository) openIDs(ctx context.Context) ([]gocql.UUID, error) {
+	var ids []gocql.UUID
+	for _, bucket := range openBuckets {
+		iter := r.session.Query("SELECT transaction_id FROM open_transactions WHERE bucket = ?", string(bucket)).WithContext(ctx).Iter()
+		var id gocql.UUID
+		for iter.Scan(&id) {
+			ids = append(ids, id)
+		}
+		if err := iter.Close(); err != nil {
+			return nil, err
+		}
+	}
+	return ids, nil
+}
+
+func (r *TransactionRepository) closeOpen(ctx context.Context, id gocql.UUID) {
+	_ = r.session.Query(openDelete, openBucket(id), id).WithContext(ctx).Exec()
+}
+
+func (r *TransactionRepository) Reindex(ctx context.Context) (int, error) {
+	iter := r.session.Query("SELECT transaction_id, status FROM transactions").WithContext(ctx).PageSize(500).Iter()
+	ensured := 0
+	var id gocql.UUID
+	var status string
+	for iter.Scan(&id, &status) {
+		if models.TransactionStatus(status).Terminal() {
+			continue
+		}
+		if err := r.session.Query(openInsert, openBucket(id), id).WithContext(ctx).Exec(); err != nil {
+			_ = iter.Close()
+			return ensured, err
+		}
+		ensured++
+	}
+	if err := iter.Close(); err != nil {
+		return ensured, err
+	}
+	return ensured, nil
 }
 
 func (r *TransactionRepository) Transition(ctx context.Context, id uuid.UUID, from, to models.TransactionStatus, patch models.Patch) (bool, error) {
@@ -145,6 +215,9 @@ func (r *TransactionRepository) Transition(ctx context.Context, id uuid.UUID, fr
 
 	applied, err := r.session.Query("UPDATE transactions SET "+strings.Join(assignments, ", ")+" WHERE transaction_id = ? IF status = ?", values...).
 		WithContext(ctx).MapScanCAS(map[string]interface{}{})
+	if err == nil && applied && to.Terminal() {
+		r.closeOpen(ctx, gocql.UUID(id))
+	}
 	return applied, cassandra.MapWriteError(err)
 }
 

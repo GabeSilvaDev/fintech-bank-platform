@@ -44,11 +44,12 @@ type LogConfig struct {
 }
 
 type SweeperConfig struct {
-	Enabled    bool
-	Interval   time.Duration
-	StaleAfter time.Duration
-	MaxAge     time.Duration
-	Batch      int
+	Enabled          bool
+	Interval         time.Duration
+	StaleAfter       time.Duration
+	MaxAge           time.Duration
+	Batch            int
+	FullScanInterval time.Duration
 }
 
 type StartupConfig struct {

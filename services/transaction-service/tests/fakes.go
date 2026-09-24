@@ -45,10 +45,13 @@ type FakeTransactionRepo struct {
 	OnTransition      func()
 	StaleErr          error
 	StaleMaxAges      []time.Duration
+	Open              map[uuid.UUID]bool
+	Reindexes         int
+	ReindexErr        error
 }
 
 func NewFakeTransactionRepo() *FakeTransactionRepo {
-	return &FakeTransactionRepo{Transactions: map[uuid.UUID]*models.Transaction{}, Keys: map[string]uuid.UUID{}}
+	return &FakeTransactionRepo{Transactions: map[uuid.UUID]*models.Transaction{}, Keys: map[string]uuid.UUID{}, Open: map[uuid.UUID]bool{}}
 }
 
 func KeyFor(accountID uuid.UUID, key string) string {
@@ -58,6 +61,9 @@ func KeyFor(accountID uuid.UUID, key string) string {
 func (f *FakeTransactionRepo) Put(tx *models.Transaction) {
 	copied := *tx
 	f.Transactions[tx.ID] = &copied
+	if !tx.Status.Terminal() {
+		f.Open[tx.ID] = true
+	}
 }
 
 func (f *FakeTransactionRepo) Create(_ context.Context, tx *models.Transaction) error {
@@ -155,6 +161,9 @@ func (f *FakeTransactionRepo) Transition(_ context.Context, id uuid.UUID, from, 
 	if patch.CompletedAt != nil {
 		tx.CompletedAt = patch.CompletedAt
 	}
+	if to.Terminal() {
+		delete(f.Open, id)
+	}
 	return true, nil
 }
 
@@ -184,21 +193,42 @@ func (f *FakeTransactionRepo) ListStale(_ context.Context, before time.Time, max
 	if f.Err != nil {
 		return nil, f.Err
 	}
+	ids := make([]uuid.UUID, 0, len(f.Open))
+	for id := range f.Open {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i].String() < ids[j].String() })
 	result := []*models.Transaction{}
-	for _, tx := range f.Transactions {
-		switch tx.Status {
-		case models.StatusPending, models.StatusDebited, models.StatusReversing:
-			if tx.UpdatedAt.Before(before) {
-				copied := *tx
-				result = append(result, &copied)
-			}
+	for _, id := range ids {
+		if len(result) >= limit {
+			break
+		}
+		tx, ok := f.Transactions[id]
+		if !ok || tx.Status.Terminal() {
+			delete(f.Open, id)
+			continue
+		}
+		if tx.UpdatedAt.Before(before) {
+			copied := *tx
+			result = append(result, &copied)
 		}
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].ID.String() < result[j].ID.String() })
-	if len(result) > limit {
-		result = result[:limit]
-	}
 	return result, nil
+}
+
+func (f *FakeTransactionRepo) Reindex(_ context.Context) (int, error) {
+	f.Reindexes++
+	if f.ReindexErr != nil {
+		return 0, f.ReindexErr
+	}
+	ensured := 0
+	for id, tx := range f.Transactions {
+		if !tx.Status.Terminal() {
+			f.Open[id] = true
+			ensured++
+		}
+	}
+	return ensured, nil
 }
 
 type FakeStore struct {

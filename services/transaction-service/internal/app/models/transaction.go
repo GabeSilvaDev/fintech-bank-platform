@@ -27,6 +27,14 @@ const (
 	StatusReversalFailed TransactionStatus = "reversal_failed"
 )
 
+func (s TransactionStatus) Terminal() bool {
+	switch s {
+	case StatusCompleted, StatusFailed, StatusReversed, StatusReversalFailed:
+		return true
+	}
+	return false
+}
+
 const Currency = "BRL"
 
 var ErrDuplicateKey = errors.New("duplicate idempotency key")

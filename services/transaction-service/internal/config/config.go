@@ -21,8 +21,9 @@ type Config struct {
 }
 
 const (
-	defaultSweeperMaxAge = 24 * time.Hour
-	balanceOperationTTL  = 720 * time.Hour
+	defaultSweeperMaxAge           = 24 * time.Hour
+	defaultSweeperFullScanInterval = 24 * time.Hour
+	balanceOperationTTL            = 720 * time.Hour
 )
 
 func New() (*Config, error) {
@@ -67,11 +68,12 @@ func New() (*Config, error) {
 			Pretty: env.GetBool("LOG_PRETTY", false),
 		},
 		Sweeper: contracts.SweeperConfig{
-			Enabled:    env.GetBool("SWEEPER_ENABLED", true),
-			Interval:   positiveDuration(env.GetDuration("SWEEPER_INTERVAL", time.Minute), time.Minute),
-			StaleAfter: positiveDuration(env.GetDuration("SWEEPER_STALE_AFTER", 5*time.Minute), 5*time.Minute),
-			MaxAge:     maxAge,
-			Batch:      env.GetIntMin("SWEEPER_BATCH", 100, 1),
+			Enabled:          env.GetBool("SWEEPER_ENABLED", true),
+			Interval:         positiveDuration(env.GetDuration("SWEEPER_INTERVAL", time.Minute), time.Minute),
+			StaleAfter:       positiveDuration(env.GetDuration("SWEEPER_STALE_AFTER", 5*time.Minute), 5*time.Minute),
+			MaxAge:           maxAge,
+			Batch:            env.GetIntMin("SWEEPER_BATCH", 100, 1),
+			FullScanInterval: nonNegativeDuration(env.GetDuration("SWEEPER_FULL_SCAN_INTERVAL", defaultSweeperFullScanInterval), defaultSweeperFullScanInterval),
 		},
 		Startup: contracts.StartupConfig{
 			Attempts: env.GetIntMin("STARTUP_RETRY_ATTEMPTS", 30, 1),
@@ -83,6 +85,13 @@ func New() (*Config, error) {
 
 func positiveDuration(value, fallback time.Duration) time.Duration {
 	if value <= 0 {
+		return fallback
+	}
+	return value
+}
+
+func nonNegativeDuration(value, fallback time.Duration) time.Duration {
+	if value < 0 {
 		return fallback
 	}
 	return value

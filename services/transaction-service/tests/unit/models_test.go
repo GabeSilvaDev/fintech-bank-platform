@@ -35,3 +35,12 @@ func TestStepKeys(t *testing.T) {
 		assert.False(t, ok, bad)
 	}
 }
+
+func TestTransactionStatusTerminal(t *testing.T) {
+	for _, status := range []models.TransactionStatus{models.StatusCompleted, models.StatusFailed, models.StatusReversed, models.StatusReversalFailed} {
+		assert.True(t, status.Terminal(), status)
+	}
+	for _, status := range []models.TransactionStatus{models.StatusPending, models.StatusDebited, models.StatusReversing} {
+		assert.False(t, status.Terminal(), status)
+	}
+}

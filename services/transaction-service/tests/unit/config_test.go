@@ -34,6 +34,7 @@ func TestConfigDefaults(t *testing.T) {
 	assert.Equal(t, 5*time.Minute, cfg.Sweeper.StaleAfter)
 	assert.Equal(t, 24*time.Hour, cfg.Sweeper.MaxAge)
 	assert.Equal(t, 100, cfg.Sweeper.Batch)
+	assert.Equal(t, 24*time.Hour, cfg.Sweeper.FullScanInterval)
 	assert.Equal(t, 30, cfg.Startup.Attempts)
 	assert.Equal(t, 2*time.Second, cfg.Startup.Delay)
 }
@@ -57,6 +58,7 @@ func TestConfigFromEnv(t *testing.T) {
 	t.Setenv("SWEEPER_STALE_AFTER", "2m")
 	t.Setenv("SWEEPER_MAX_AGE", "12h")
 	t.Setenv("SWEEPER_BATCH", "0")
+	t.Setenv("SWEEPER_FULL_SCAN_INTERVAL", "6h")
 	t.Setenv("STARTUP_RETRY_ATTEMPTS", "5")
 	t.Setenv("STARTUP_RETRY_DELAY", "500ms")
 
@@ -79,6 +81,7 @@ func TestConfigFromEnv(t *testing.T) {
 	assert.Equal(t, 2*time.Minute, cfg.Sweeper.StaleAfter)
 	assert.Equal(t, 12*time.Hour, cfg.Sweeper.MaxAge)
 	assert.Equal(t, 100, cfg.Sweeper.Batch)
+	assert.Equal(t, 6*time.Hour, cfg.Sweeper.FullScanInterval)
 	assert.Equal(t, 5, cfg.Startup.Attempts)
 	assert.Equal(t, 500*time.Millisecond, cfg.Startup.Delay)
 }
@@ -94,6 +97,22 @@ func TestConfigSweeperNonPositiveDurationsFallBackToDefaults(t *testing.T) {
 	assert.Equal(t, time.Minute, cfg.Sweeper.Interval)
 	assert.Equal(t, 5*time.Minute, cfg.Sweeper.StaleAfter)
 	assert.Equal(t, 24*time.Hour, cfg.Sweeper.MaxAge)
+}
+
+func TestConfigSweeperFullScanIntervalZeroDisablesAndNegativeFallsBack(t *testing.T) {
+	t.Setenv("SWEEPER_FULL_SCAN_INTERVAL", "0s")
+
+	cfg, err := config.New()
+
+	assert.NoError(t, err)
+	assert.Equal(t, time.Duration(0), cfg.Sweeper.FullScanInterval)
+
+	t.Setenv("SWEEPER_FULL_SCAN_INTERVAL", "-1h")
+
+	cfg, err = config.New()
+
+	assert.NoError(t, err)
+	assert.Equal(t, 24*time.Hour, cfg.Sweeper.FullScanInterval)
 }
 
 func TestConfigSweeperMaxAgeMustBeShorterThanTheBalanceOperationRetention(t *testing.T) {

@@ -111,14 +111,32 @@ func (s *Sweeper) exhaust(ctx context.Context, tx *models.Transaction, now time.
 func (s *Sweeper) Run(ctx context.Context) {
 	ticker := time.NewTicker(s.cfg.Interval)
 	defer ticker.Stop()
+	var fullScan <-chan time.Time
+	if s.cfg.FullScanInterval > 0 {
+		s.reindex(ctx)
+		fullScanTicker := time.NewTicker(s.cfg.FullScanInterval)
+		defer fullScanTicker.Stop()
+		fullScan = fullScanTicker.C
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-fullScan:
+			s.reindex(ctx)
 		case <-ticker.C:
 			if _, err := s.RunOnce(ctx); err != nil {
 				s.log.Error().Err(err).Msg("reconciliation sweep failed")
 			}
 		}
 	}
+}
+
+func (s *Sweeper) reindex(ctx context.Context) {
+	count, err := s.service.Reindex(ctx)
+	if err != nil {
+		s.log.Error().Err(err).Msg("open index rebuild failed")
+		return
+	}
+	s.log.Info().Int("count", count).Msg("open index rebuilt")
 }

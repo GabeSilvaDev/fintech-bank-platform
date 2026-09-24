@@ -19,6 +19,10 @@ func (s *TransactionService) ListStale(ctx context.Context, before time.Time, ma
 	return s.repo.ListStale(ctx, before, maxAge, limit)
 }
 
+func (s *TransactionService) Reindex(ctx context.Context) (int, error) {
+	return s.repo.Reindex(ctx)
+}
+
 func (s *TransactionService) touch(ctx context.Context, tx *models.Transaction) error {
 	applied, err := s.repo.Touch(ctx, tx.ID, tx.Status, tx.UpdatedAt, s.clock.Now())
 	if err != nil {

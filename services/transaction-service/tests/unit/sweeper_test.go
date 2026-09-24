@@ -15,6 +15,7 @@ import (
 	"github.com/fintech-bank-platform/transaction-service/internal/app/services"
 	"github.com/fintech-bank-platform/transaction-service/internal/contracts"
 	"github.com/fintech-bank-platform/transaction-service/tests"
+	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -475,4 +476,102 @@ func TestSweeperExposesExhaustedCounterAtZeroBeforeAnyRecordIsExhausted(t *testi
 
 	assert.Equal(t, 1, testutil.CollectAndCount(m.Registry(), services.ExhaustedTotalName))
 	assert.Equal(t, float64(0), exhaustedCount(t, m))
+}
+
+func runSweeperFor(t *testing.T, sweeper *services.Sweeper, d time.Duration) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		sweeper.Run(ctx)
+		close(done)
+	}()
+
+	time.Sleep(d)
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Run did not return after cancel")
+	}
+}
+
+func fullScanConfig(interval time.Duration) contracts.SweeperConfig {
+	cfg := sweeperConfig()
+	cfg.Interval = time.Hour
+	cfg.FullScanInterval = interval
+	return cfg
+}
+
+func TestSweeperRunRebuildsTheOpenIndexAtStart(t *testing.T) {
+	h := newHarness()
+	lost := h.pending(models.TypeDeposit, models.StatusPending)
+	delete(h.repo.Open, lost.ID)
+	h.pending(models.TypeDeposit, models.StatusCompleted)
+
+	logs := &bytes.Buffer{}
+	sweeper := services.NewSweeper(h.service, &tests.FakePublisher{}, tests.FakeClock{T: now}, fullScanConfig(time.Hour), logger.New(logger.Config{Output: logs}))
+
+	runSweeperFor(t, sweeper, 20*time.Millisecond)
+
+	assert.Equal(t, 1, h.repo.Reindexes)
+	assert.Equal(t, map[uuid.UUID]bool{lost.ID: true}, h.repo.Open)
+	assert.Contains(t, logs.String(), "open index rebuilt")
+	assert.Contains(t, logs.String(), `"count":1`)
+	assert.Contains(t, logs.String(), `"level":"info"`)
+}
+
+func TestSweeperRunRebuildsTheOpenIndexAgainAfterTheInterval(t *testing.T) {
+	h := newHarness()
+	sweeper := services.NewSweeper(h.service, &tests.FakePublisher{}, tests.FakeClock{T: now}, fullScanConfig(time.Millisecond), logger.New(logger.Config{Output: io.Discard}))
+
+	runSweeperFor(t, sweeper, 30*time.Millisecond)
+
+	assert.GreaterOrEqual(t, h.repo.Reindexes, 2)
+}
+
+func TestSweeperRunNeverRebuildsTheOpenIndexWhenDisabled(t *testing.T) {
+	h := newHarness()
+	logs := &bytes.Buffer{}
+	sweeper := services.NewSweeper(h.service, &tests.FakePublisher{}, tests.FakeClock{T: now}, fullScanConfig(0), logger.New(logger.Config{Output: logs}))
+
+	runSweeperFor(t, sweeper, 20*time.Millisecond)
+
+	assert.Zero(t, h.repo.Reindexes)
+	assert.NotContains(t, logs.String(), "open index")
+}
+
+func TestSweeperRunLogsOpenIndexRebuildFailures(t *testing.T) {
+	h := newHarness()
+	h.repo.ReindexErr = errors.New("cassandra down")
+	logs := &bytes.Buffer{}
+	sweeper := services.NewSweeper(h.service, &tests.FakePublisher{}, tests.FakeClock{T: now}, fullScanConfig(time.Hour), logger.New(logger.Config{Output: logs}))
+
+	runSweeperFor(t, sweeper, 20*time.Millisecond)
+
+	assert.Equal(t, 1, h.repo.Reindexes)
+	assert.Contains(t, logs.String(), "open index rebuild failed")
+	assert.Contains(t, logs.String(), "cassandra down")
+	assert.NotContains(t, logs.String(), "open index rebuilt")
+}
+
+func TestSweeperRunOnceIgnoresAndPrunesSettledRecordsLeftInTheOpenIndex(t *testing.T) {
+	h := newHarness()
+	settled := h.pending(models.TypeDeposit, models.StatusCompleted)
+	settled.UpdatedAt = now.Add(-10 * time.Minute)
+	h.repo.Put(settled)
+	h.repo.Open[settled.ID] = true
+	ghost := uuid.New()
+	h.repo.Open[ghost] = true
+
+	publisher := &tests.FakePublisher{}
+	sweeper := services.NewSweeper(h.service, publisher, tests.FakeClock{T: now}, sweeperConfig(), logger.New(logger.Config{Output: io.Discard}))
+
+	count, err := sweeper.RunOnce(context.Background())
+
+	assert.NoError(t, err)
+	assert.Equal(t, 0, count)
+	assert.Empty(t, publisher.Published)
+	assert.Empty(t, h.repo.Open)
 }
