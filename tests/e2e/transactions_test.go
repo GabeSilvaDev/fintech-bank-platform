@@ -61,6 +61,8 @@ func TestDepositWithdrawalAndTransfer(t *testing.T) {
 	require.Equal(t, "completed", detail["status"])
 	require.Equal(t, "300.00", detail["amount"])
 	require.Equal(t, receiver.accountID, detail["counterparty_id"])
+	require.Equal(t, transferKey, detail["idempotency_key"])
+	require.Equal(t, "e2e transfer", detail["description"])
 	require.NotContains(t, detail, "from_balance_after")
 	require.NotContains(t, detail, "to_balance_after")
 
@@ -68,6 +70,8 @@ func TestDepositWithdrawalAndTransfer(t *testing.T) {
 	require.Equal(t, sent["transaction_id"], receiverDetail["transaction_id"])
 	require.Equal(t, sender.accountID, receiverDetail["account_id"])
 	require.Equal(t, receiver.accountID, receiverDetail["counterparty_id"])
+	require.NotContains(t, receiverDetail, "idempotency_key")
+	require.NotContains(t, receiverDetail, "description")
 
 	withdrawalDetail := byID(t, sender, withdrawal["transaction_id"].(string))
 	require.Equal(t, "completed", withdrawalDetail["status"])
