@@ -118,7 +118,7 @@ curl http://localhost:8081/health
 
 Ou nativo: `make run` (escuta em `SERVER_PORT`, padrão 8080). A configuração vem do ambiente: `SERVER_*` (host, porta, timeouts), `CORS_*`, `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW`, `KAFKA_BROKERS` / `KAFKA_WRITE_TIMEOUT` / `KAFKA_BATCH_TIMEOUT` / `KAFKA_PUBLISH_TIMEOUT` / `KAFKA_MAX_ATTEMPTS` / `KAFKA_BREAKER_*`, `TRUST_PROXY_HEADERS`, `METRICS_ENABLED` / `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_SAMPLER_RATIO` e `LOG_LEVEL` / `LOG_PRETTY`.
 
-O rate limit (`RATE_LIMIT_REQUESTS` por `RATE_LIMIT_WINDOW`) é contado por endereço do cliente. Por padrão (`TRUST_PROXY_HEADERS=false`) esse é o endereço da conexão TCP, e `True-Client-IP`, `X-Real-IP` e `X-Forwarded-For` são ignorados, então um cliente não consegue escolher o próprio balde do rate limit enviando esses headers. Use `TRUST_PROXY_HEADERS=true` só quando o gateway estiver atrás de um proxy que preenche esses headers por conta própria; o endereço do cliente passa então a vir do primeiro deles que estiver presente, nessa ordem (a primeira entrada, no caso do `X-Forwarded-For`).
+O rate limit (`RATE_LIMIT_REQUESTS` por `RATE_LIMIT_WINDOW`) é contado por endereço do cliente. Por padrão (`TRUST_PROXY_HEADERS=false`) esse é o endereço da conexão TCP, e `True-Client-IP`, `X-Real-IP` e `X-Forwarded-For` são ignorados, então um cliente não consegue escolher o próprio balde do rate limit enviando esses headers. Use `TRUST_PROXY_HEADERS=true` só quando o gateway estiver atrás de um proxy que sobrescreve o `X-Forwarded-For` (em vez de só adicionar a ele) e remove qualquer `True-Client-IP` e `X-Real-IP` vindos do cliente antes de repassar a requisição; o endereço do cliente passa então a vir do primeiro desses headers presente, nessa ordem (o `RealIP` do chi confia primeiro no `True-Client-IP`, depois na primeira entrada do `X-Forwarded-For`), então um proxy que só adiciona ao `X-Forwarded-For` ou repassa um `True-Client-IP`/`X-Real-IP` definido pelo cliente deixaria o cliente escolher o próprio balde do rate limit.
 
 A API pública está descrita em OpenAPI 3.1 em `services/api-gateway/api/openapi.yaml`, embutida no binário e servida pelo próprio gateway (`curl http://localhost:8081/api/v1/openapi.yaml`); o CI a valida com o Redocly usando o `redocly.yaml` da raiz.
 
@@ -300,9 +300,9 @@ As leituras são repassadas por proxy ao account service via `ACCOUNT_SERVICE_UR
 | `GET` | `/api/v1/accounts/{account_id}/transactions` | `GET /accounts/{account_id}/transactions?limit=50` → `200` mais recentes primeiro (`limit` 1–200), com os saldos vistos a partir de `account_id` |
 | `GET` | `/api/v1/payments/{id}` | `GET /payments/{id}` → `200` pagamento (`status` pending/debited/submitted/completed/failed/refunding/refunded/refund_failed, `document` da TED mascarado), `404 PAYMENT_NOT_FOUND`, `422` |
 | `GET` | `/api/v1/accounts/{account_id}/payments` | `GET /accounts/{account_id}/payments?limit=50` → `200` mais recentes primeiro (`limit` 1–200), `document` da TED mascarado |
+| `GET` | `/api/v1/users/{user_id}/notifications` | `GET /users/{user_id}/notifications?limit=20` → `200` mais recentes primeiro (`limit` 1–100), `422` |
 
 Os saldos após uma transação só aparecem para a conta a que pertencem. Na lista de transações de uma conta, um depósito traz `to_balance_after` e um saque `from_balance_after` depois que o saldo muda; uma transferência traz `from_balance_after` na lista de quem envia e `to_balance_after` na lista de quem recebe, nunca os dois, então nenhum dos lados vê o saldo do outro. `GET /transactions/{id}` não devolve saldo nenhum. O `document` (CPF ou CNPJ) de um pagamento por TED volta com todos os caracteres, menos os dois últimos, trocados por `*` (`*********25`), tanto na consulta por id quanto nas listas.
-| `GET` | `/api/v1/users/{user_id}/notifications` | `GET /users/{user_id}/notifications?limit=20` → `200` mais recentes primeiro (`limit` 1–100), `422` |
 
 ## Observabilidade
 

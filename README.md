@@ -118,7 +118,7 @@ curl http://localhost:8081/health
 
 Or natively: `make run` (listens on `SERVER_PORT`, default 8080). Configuration is read from the environment: `SERVER_*` (host, port, timeouts), `CORS_*`, `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW`, `KAFKA_BROKERS` / `KAFKA_WRITE_TIMEOUT` / `KAFKA_BATCH_TIMEOUT` / `KAFKA_PUBLISH_TIMEOUT` / `KAFKA_MAX_ATTEMPTS` / `KAFKA_BREAKER_*`, `TRUST_PROXY_HEADERS`, `METRICS_ENABLED` / `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_SAMPLER_RATIO` and `LOG_LEVEL` / `LOG_PRETTY`.
 
-The rate limit (`RATE_LIMIT_REQUESTS` per `RATE_LIMIT_WINDOW`) is counted per client address. By default (`TRUST_PROXY_HEADERS=false`) that is the address of the TCP connection, and `True-Client-IP`, `X-Real-IP` and `X-Forwarded-For` are ignored, so a client can't pick its own rate-limit bucket by sending them. Set `TRUST_PROXY_HEADERS=true` only when the gateway sits behind a proxy that sets those headers itself; the client address is then taken from the first of them present, in that order (the first entry, for `X-Forwarded-For`).
+The rate limit (`RATE_LIMIT_REQUESTS` per `RATE_LIMIT_WINDOW`) is counted per client address. By default (`TRUST_PROXY_HEADERS=false`) that is the address of the TCP connection, and `True-Client-IP`, `X-Real-IP` and `X-Forwarded-For` are ignored, so a client can't pick its own rate-limit bucket by sending them. Set `TRUST_PROXY_HEADERS=true` only when the gateway sits behind a proxy that overwrites `X-Forwarded-For` (rather than appending to it) and strips any client-supplied `True-Client-IP` and `X-Real-IP` before forwarding; the client address is then taken from the first of those headers present, in that order (chi's `RealIP` trusts `True-Client-IP` first, then the leftmost entry of `X-Forwarded-For`), so a proxy that merely appends to `X-Forwarded-For` or passes through client-set `True-Client-IP`/`X-Real-IP` would let a client pick its own rate-limit bucket.
 
 The public API is described in OpenAPI 3.1 in `services/api-gateway/api/openapi.yaml`, embedded in the binary and served by the gateway itself (`curl http://localhost:8081/api/v1/openapi.yaml`); CI lints it with Redocly using the root `redocly.yaml`.
 
@@ -300,9 +300,9 @@ Reads are proxied to the account service via `ACCOUNT_SERVICE_URL`, to the trans
 | `GET` | `/api/v1/accounts/{account_id}/transactions` | `GET /accounts/{account_id}/transactions?limit=50` → `200` newest first (`limit` 1–200), with the balances seen from `account_id` |
 | `GET` | `/api/v1/payments/{id}` | `GET /payments/{id}` → `200` payment (`status` pending/debited/submitted/completed/failed/refunding/refunded/refund_failed, TED `document` masked), `404 PAYMENT_NOT_FOUND`, `422` |
 | `GET` | `/api/v1/accounts/{account_id}/payments` | `GET /accounts/{account_id}/payments?limit=50` → `200` newest first (`limit` 1–200), TED `document` masked |
+| `GET` | `/api/v1/users/{user_id}/notifications` | `GET /users/{user_id}/notifications?limit=20` → `200` newest first (`limit` 1–100), `422` |
 
 Balances after a transaction are only shown to the account they belong to. In an account's transaction list, a deposit carries `to_balance_after` and a withdrawal `from_balance_after` once the balance has moved; a transfer carries `from_balance_after` in the sender's list and `to_balance_after` in the recipient's list, never both, so neither side sees the other's balance. `GET /transactions/{id}` returns no balances at all. A TED payment's `document` (CPF or CNPJ) is returned with every character but the last two replaced by `*` (`*********25`), both by id and in lists.
-| `GET` | `/api/v1/users/{user_id}/notifications` | `GET /users/{user_id}/notifications?limit=20` → `200` newest first (`limit` 1–100), `422` |
 
 ## Observability
 
