@@ -35,6 +35,8 @@ func TestConfigDefaults(t *testing.T) {
 	assert.Equal(t, 2*runtime.GOMAXPROCS(0), cfg.Identity.HashConcurrency)
 	assert.Equal(t, 720*time.Hour, cfg.Session.RefreshTokenTTL)
 	assert.Equal(t, 2160*time.Hour, cfg.Session.FamilyMaxAge)
+	assert.Equal(t, 5, cfg.Lockout.MaxFailures)
+	assert.Equal(t, 15*time.Minute, cfg.Lockout.Window)
 }
 
 func TestConfigFromEnv(t *testing.T) {
@@ -166,5 +168,27 @@ func TestConfigRefreshFamilyMaxAgeInvalidValuesFallBack(t *testing.T) {
 		cfg, _ := config.New()
 
 		assert.Equal(t, 2160*time.Hour, cfg.Session.FamilyMaxAge, value)
+	}
+}
+
+func TestConfigLoginLockoutFromEnv(t *testing.T) {
+	t.Setenv("LOGIN_MAX_FAILURES", "3")
+	t.Setenv("LOGIN_LOCKOUT_WINDOW", "30m")
+
+	cfg, _ := config.New()
+
+	assert.Equal(t, 3, cfg.Lockout.MaxFailures)
+	assert.Equal(t, 30*time.Minute, cfg.Lockout.Window)
+}
+
+func TestConfigLoginLockoutInvalidValuesFallBack(t *testing.T) {
+	for _, value := range []string{"0", "-1", "abc"} {
+		t.Setenv("LOGIN_MAX_FAILURES", value)
+		t.Setenv("LOGIN_LOCKOUT_WINDOW", value)
+
+		cfg, _ := config.New()
+
+		assert.Equal(t, 5, cfg.Lockout.MaxFailures, value)
+		assert.Equal(t, 15*time.Minute, cfg.Lockout.Window, value)
 	}
 }

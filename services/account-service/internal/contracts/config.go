@@ -62,3 +62,8 @@ type SessionConfig struct {
 	RefreshTokenTTL time.Duration
 	FamilyMaxAge    time.Duration
 }
+
+type LockoutConfig struct {
+	MaxFailures int
+	Window      time.Duration
+}

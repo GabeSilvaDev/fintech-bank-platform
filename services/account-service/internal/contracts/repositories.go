@@ -40,6 +40,13 @@ type IdentityRepository interface {
 	GetByEmail(ctx context.Context, email string) (*models.Identity, error)
 }
 
+type LoginFailureRepository interface {
+	Get(ctx context.Context, email string) (*models.LoginFailure, error)
+	Create(ctx context.Context, failure *models.LoginFailure, ttl time.Duration) (bool, error)
+	Replace(ctx context.Context, current, next *models.LoginFailure, ttl time.Duration) (bool, error)
+	Clear(ctx context.Context, email string) error
+}
+
 type RefreshTokenRepository interface {
 	Create(ctx context.Context, token *models.RefreshToken, ttl time.Duration) error
 	Get(ctx context.Context, tokenHash string) (*models.RefreshToken, error)

@@ -10,6 +10,7 @@ import (
 
 	"github.com/fintech-bank-platform/account-service/internal/app/models"
 	"github.com/fintech-bank-platform/account-service/internal/app/services"
+	"github.com/fintech-bank-platform/account-service/internal/contracts"
 	"github.com/fintech-bank-platform/account-service/tests"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -70,7 +71,7 @@ func newGatedService(t *testing.T, capacity int, wait time.Duration) (*services.
 	t.Helper()
 	hasher := &gatedHasher{}
 	repo := tests.NewFakeIdentityRepo()
-	service, err := services.NewIdentityService(repo, hasher, tests.FakeClock{T: now})
+	service, err := services.NewIdentityService(repo, tests.NewFakeLoginFailureRepo(), hasher, tests.FakeClock{T: now}, contracts.LockoutConfig{})
 	require.NoError(t, err)
 	return service.WithHashConcurrency(capacity, wait), hasher, repo
 }
@@ -159,4 +160,26 @@ func TestIdentityServiceKeepsAtLeastOneHashingSlot(t *testing.T) {
 func TestIdentityServiceDefaultHashingCapacity(t *testing.T) {
 	assert.Equal(t, 2*runtime.GOMAXPROCS(0), services.DefaultHashConcurrency())
 	assert.Equal(t, 2*time.Second, services.HashWait)
+}
+
+func TestIdentityServiceDoesNotCountBusyVerifications(t *testing.T) {
+	hasher := &gatedHasher{}
+	repo := tests.NewFakeIdentityRepo()
+	failures := tests.NewFakeLoginFailureRepo()
+	service, err := services.NewIdentityService(repo, failures, hasher, tests.FakeClock{T: now}, contracts.LockoutConfig{MaxFailures: 1, Window: time.Minute})
+	require.NoError(t, err)
+	service.WithHashConcurrency(1, 20*time.Millisecond)
+	repo.Identities["ana@example.com"] = &models.Identity{Email: "ana@example.com", UserID: uuid.New(), PasswordHash: "hashed:correct horse"}
+	failures.Rows["locked@example.com"] = models.LoginFailure{Email: "locked@example.com", Failures: 1, FirstFailure: now}
+	done := occupy(t, service, hasher)
+
+	for _, email := range []string{"ana@example.com", "ghost@example.com", "not-an-email", "locked@example.com"} {
+		_, err := service.Verify(context.Background(), email, "wrong horse")
+		assert.ErrorIs(t, err, services.ErrBusy, email)
+	}
+
+	assert.Empty(t, failures.Writes)
+	assert.Empty(t, failures.Cleared)
+	hasher.open()
+	require.NoError(t, <-done)
 }

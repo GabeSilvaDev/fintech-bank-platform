@@ -3,6 +3,7 @@ package feature
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fintech-bank-platform/account-service/internal/app/models"
 	"github.com/fintech-bank-platform/account-service/tests"
@@ -111,4 +112,61 @@ func (s *IdentitiesAPISuite) TestResponsesNeverExposePasswordOrHash() {
 func (s *IdentitiesAPISuite) TestIdentityRoutesOnlyAcceptPost() {
 	s.Get("/identities").AssertMethodNotAllowed()
 	s.Get("/identities/verify").AssertMethodNotAllowed()
+}
+
+func (s *IdentitiesAPISuite) TestVerifyLocksOutAfterRepeatedFailures() {
+	s.register("ana@example.com", "correct horse").AssertCreated()
+	for i := 0; i < 5; i++ {
+		s.verify("ana@example.com", "wrong horse").AssertUnauthorized().AssertErrorCode("INVALID_CREDENTIALS")
+	}
+
+	s.verify("ANA@example.com", "correct horse").
+		AssertTooManyRequests().
+		AssertErrorCode("TOO_MANY_ATTEMPTS").
+		AssertJsonPath("error.message", "too many failed attempts; try again later").
+		AssertHeader("Retry-After", "900")
+
+	s.Clock.T = s.Clock.T.Add(14*time.Minute + 30*time.Second)
+	s.verify("ana@example.com", "correct horse").AssertTooManyRequests().AssertHeader("Retry-After", "30")
+
+	s.Clock.T = s.Clock.T.Add(30 * time.Second)
+	s.verify("ana@example.com", "correct horse").AssertOk()
+	_, recorded := s.Failures.Row("ana@example.com")
+	s.False(recorded)
+}
+
+func (s *IdentitiesAPISuite) TestVerifyLocksOutUnknownEmailsLikeKnownOnes() {
+	s.register("ana@example.com", "correct horse").AssertCreated()
+	for i := 0; i < 5; i++ {
+		s.verify("ana@example.com", "wrong horse").AssertUnauthorized()
+		s.verify("ghost@example.com", "wrong horse").AssertUnauthorized()
+	}
+
+	known := s.verify("ana@example.com", "correct horse").AssertTooManyRequests().AssertHeader("Retry-After", "900")
+	unknown := s.verify("ghost@example.com", "correct horse").AssertTooManyRequests().AssertHeader("Retry-After", "900")
+
+	s.Equal(known.Body(), unknown.Body())
+}
+
+func (s *IdentitiesAPISuite) TestBusyHashingAsksClientsToRetryAfterOneSecond() {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	s.Verifier.WithHashConcurrency(1, 10*time.Millisecond)
+	s.Hasher.OnHash = func() {
+		entered <- struct{}{}
+		<-release
+	}
+	done := make(chan *tests.TestResponse, 1)
+	go func() { done <- s.register("first@example.com", "correct horse") }()
+	<-entered
+
+	s.verify("ana@example.com", "correct horse").
+		AssertStatus(503).
+		AssertErrorCode("SERVICE_BUSY").
+		AssertHeader("Retry-After", "1")
+	s.register("second@example.com", "correct horse").AssertStatus(503).AssertHeader("Retry-After", "1")
+	s.Empty(s.Failures.Writes)
+
+	close(release)
+	(<-done).AssertCreated()
 }

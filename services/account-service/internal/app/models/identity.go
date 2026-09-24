@@ -12,3 +12,9 @@ type Identity struct {
 	PasswordHash string
 	CreatedAt    time.Time
 }
+
+type LoginFailure struct {
+	Email        string
+	Failures     int
+	FirstFailure time.Time
+}

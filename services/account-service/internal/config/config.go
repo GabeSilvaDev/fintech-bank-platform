@@ -19,6 +19,7 @@ type Config struct {
 	Observability contracts.ObservabilityConfig
 	Identity      contracts.IdentityConfig
 	Session       contracts.SessionConfig
+	Lockout       contracts.LockoutConfig
 }
 
 func New() (*Config, error) {
@@ -68,6 +69,10 @@ func New() (*Config, error) {
 		Session: contracts.SessionConfig{
 			RefreshTokenTTL: positiveDuration(env.GetDuration("REFRESH_TOKEN_TTL", 720*time.Hour), 720*time.Hour),
 			FamilyMaxAge:    positiveDuration(env.GetDuration("REFRESH_FAMILY_MAX_AGE", 2160*time.Hour), 2160*time.Hour),
+		},
+		Lockout: contracts.LockoutConfig{
+			MaxFailures: env.GetIntMin("LOGIN_MAX_FAILURES", 5, 1),
+			Window:      positiveDuration(env.GetDuration("LOGIN_LOCKOUT_WINDOW", 15*time.Minute), 15*time.Minute),
 		},
 	}, nil
 }

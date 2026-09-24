@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
+	"strconv"
 
 	"github.com/fintech-bank-platform/account-service/internal/app/services"
 	"github.com/fintech-bank-platform/pkg/domain"
@@ -49,7 +51,7 @@ func (h *IdentityHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 	userID, err := h.identities.Register(r.Context(), req.Email, req.Password)
 	if err != nil {
-		response.FromError(w, mapIdentityError(err))
+		writeIdentityError(w, err)
 		return
 	}
 
@@ -65,7 +67,7 @@ func (h *IdentityHandler) Verify(w http.ResponseWriter, r *http.Request) {
 
 	userID, err := h.identities.Verify(r.Context(), req.Email, req.Password)
 	if err != nil {
-		response.FromError(w, mapIdentityError(err))
+		writeIdentityError(w, err)
 		return
 	}
 
@@ -99,6 +101,20 @@ func rejectTrailing(decoder *json.Decoder) error {
 		return errTrailingData
 	}
 	return err
+}
+
+func writeIdentityError(w http.ResponseWriter, err error) {
+	var locked *services.ErrTooManyAttempts
+	switch {
+	case errors.As(err, &locked):
+		seconds := max(1, int64(math.Ceil(locked.RetryAfter.Seconds())))
+		w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
+		response.FromError(w, apperrors.TooManyRequests("TOO_MANY_ATTEMPTS", "too many failed attempts; try again later"))
+		return
+	case errors.Is(err, services.ErrBusy):
+		w.Header().Set("Retry-After", "1")
+	}
+	response.FromError(w, mapIdentityError(err))
 }
 
 func mapIdentityError(err error) error {

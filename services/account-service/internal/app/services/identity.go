@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"runtime"
 	"strings"
 	"time"
@@ -21,6 +22,10 @@ const (
 	maxPasswordLength = 72
 	dummyPassword     = "identity-verification-placeholder"
 	HashWait          = 2 * time.Second
+
+	DefaultLoginMaxFailures   = 5
+	DefaultLoginLockoutWindow = 15 * time.Minute
+	failureWriteAttempts      = 3
 )
 
 var (
@@ -28,6 +33,14 @@ var (
 	ErrInvalidCredentials = errors.New("invalid credentials")
 	ErrBusy               = errors.New("too many passwords are being hashed")
 )
+
+type ErrTooManyAttempts struct {
+	RetryAfter time.Duration
+}
+
+func (e *ErrTooManyAttempts) Error() string {
+	return fmt.Sprintf("too many failed attempts, retry after %s", e.RetryAfter)
+}
 
 func DefaultHashConcurrency() int {
 	return 2 * runtime.GOMAXPROCS(0)
@@ -51,20 +64,37 @@ func (h BcryptHasher) Compare(hash, password string) error {
 }
 
 type IdentityService struct {
-	identities contracts.IdentityRepository
-	hasher     contracts.Hasher
-	clock      contracts.Clock
-	dummyHash  string
-	slots      chan struct{}
-	wait       time.Duration
+	identities  contracts.IdentityRepository
+	failures    contracts.LoginFailureRepository
+	hasher      contracts.Hasher
+	clock       contracts.Clock
+	maxFailures int
+	window      time.Duration
+	dummyHash   string
+	slots       chan struct{}
+	wait        time.Duration
 }
 
-func NewIdentityService(identities contracts.IdentityRepository, hasher contracts.Hasher, clock contracts.Clock) (*IdentityService, error) {
+func NewIdentityService(identities contracts.IdentityRepository, failures contracts.LoginFailureRepository, hasher contracts.Hasher, clock contracts.Clock, lockout contracts.LockoutConfig) (*IdentityService, error) {
 	dummyHash, err := hasher.Hash(dummyPassword)
 	if err != nil {
 		return nil, err
 	}
-	service := &IdentityService{identities: identities, hasher: hasher, clock: clock, dummyHash: dummyHash}
+	service := &IdentityService{
+		identities:  identities,
+		failures:    failures,
+		hasher:      hasher,
+		clock:       clock,
+		maxFailures: lockout.MaxFailures,
+		window:      lockout.Window,
+		dummyHash:   dummyHash,
+	}
+	if service.maxFailures < 1 {
+		service.maxFailures = DefaultLoginMaxFailures
+	}
+	if service.window <= 0 {
+		service.window = DefaultLoginLockoutWindow
+	}
 	return service.WithHashConcurrency(DefaultHashConcurrency(), HashWait), nil
 }
 
@@ -104,6 +134,29 @@ func (s *IdentityService) Register(ctx context.Context, email, password string) 
 
 func (s *IdentityService) Verify(ctx context.Context, email, password string) (uuid.UUID, error) {
 	email = normaliseEmail(email)
+	if email == "" {
+		return s.reject(ctx, password)
+	}
+	current := s.loadFailures(ctx, email)
+	if retryAfter, locked := s.lockedFor(current); locked {
+		if _, err := s.matches(ctx, s.dummyHash, password); err != nil {
+			return uuid.Nil, err
+		}
+		return uuid.Nil, &ErrTooManyAttempts{RetryAfter: retryAfter}
+	}
+
+	userID, err := s.verify(ctx, email, password)
+	detached := context.WithoutCancel(ctx)
+	switch {
+	case err == nil && current != nil:
+		_ = s.failures.Clear(detached, email)
+	case errors.Is(err, ErrInvalidCredentials):
+		s.recordFailure(detached, email, current)
+	}
+	return userID, err
+}
+
+func (s *IdentityService) verify(ctx context.Context, email, password string) (uuid.UUID, error) {
 	if validation.ValidateVar(email, "required,email") != nil {
 		return s.reject(ctx, password)
 	}
@@ -122,6 +175,49 @@ func (s *IdentityService) Verify(ctx context.Context, email, password string) (u
 		return uuid.Nil, ErrInvalidCredentials
 	}
 	return identity.UserID, nil
+}
+
+func (s *IdentityService) loadFailures(ctx context.Context, email string) *models.LoginFailure {
+	current, err := s.failures.Get(ctx, email)
+	if err != nil {
+		return nil
+	}
+	return current
+}
+
+func (s *IdentityService) lockedFor(current *models.LoginFailure) (time.Duration, bool) {
+	if current == nil || current.Failures < s.maxFailures {
+		return 0, false
+	}
+	remaining := current.FirstFailure.Add(s.window).Sub(s.clock.Now())
+	if remaining <= 0 {
+		return 0, false
+	}
+	return (remaining + time.Second - 1) / time.Second * time.Second, true
+}
+
+func (s *IdentityService) recordFailure(ctx context.Context, email string, current *models.LoginFailure) {
+	for attempt := 0; attempt < failureWriteAttempts; attempt++ {
+		if attempt > 0 {
+			current = s.loadFailures(ctx, email)
+		}
+		applied, err := s.writeFailure(ctx, email, current)
+		if err != nil || applied {
+			return
+		}
+	}
+}
+
+func (s *IdentityService) writeFailure(ctx context.Context, email string, current *models.LoginFailure) (bool, error) {
+	now := s.clock.Now()
+	if current == nil {
+		return s.failures.Create(ctx, &models.LoginFailure{Email: email, Failures: 1, FirstFailure: now}, s.window)
+	}
+	windowEnd := current.FirstFailure.Add(s.window)
+	if !now.Before(windowEnd) {
+		return s.failures.Replace(ctx, current, &models.LoginFailure{Email: email, Failures: 1, FirstFailure: now}, s.window)
+	}
+	return s.failures.Replace(ctx, current, &models.LoginFailure{Email: email, Failures: current.Failures + 1, FirstFailure: current.FirstFailure}, windowEnd.Sub(now))
 }
 
 func (s *IdentityService) reject(ctx context.Context, password string) (uuid.UUID, error) {

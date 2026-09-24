@@ -8,6 +8,7 @@ import (
 
 	"github.com/fintech-bank-platform/account-service/internal/app/models"
 	"github.com/fintech-bank-platform/account-service/internal/app/services"
+	"github.com/fintech-bank-platform/account-service/internal/contracts"
 	"github.com/fintech-bank-platform/account-service/tests"
 	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/google/uuid"
@@ -17,14 +18,20 @@ import (
 )
 
 type identityHarness struct {
-	repo    *tests.FakeIdentityRepo
-	hasher  *tests.FakeHasher
-	service *services.IdentityService
+	repo     *tests.FakeIdentityRepo
+	failures *tests.FakeLoginFailureRepo
+	hasher   *tests.FakeHasher
+	clock    *tests.FakeClock
+	service  *services.IdentityService
 }
 
 func newIdentityHarness(t *testing.T) *identityHarness {
-	h := &identityHarness{repo: tests.NewFakeIdentityRepo(), hasher: &tests.FakeHasher{}}
-	service, err := services.NewIdentityService(h.repo, h.hasher, tests.FakeClock{T: now})
+	return newLockoutHarness(t, contracts.LockoutConfig{})
+}
+
+func newLockoutHarness(t *testing.T, lockout contracts.LockoutConfig) *identityHarness {
+	h := &identityHarness{repo: tests.NewFakeIdentityRepo(), failures: tests.NewFakeLoginFailureRepo(), hasher: &tests.FakeHasher{}, clock: &tests.FakeClock{T: now}}
+	service, err := services.NewIdentityService(h.repo, h.failures, h.hasher, h.clock, lockout)
 	require.NoError(t, err)
 	h.service = service
 	return h
@@ -37,7 +44,7 @@ func TestNewIdentityServiceHashesDummyPasswordOnce(t *testing.T) {
 }
 
 func TestNewIdentityServiceFailsWhenHasherFails(t *testing.T) {
-	service, err := services.NewIdentityService(tests.NewFakeIdentityRepo(), &tests.FakeHasher{HashErr: errors.New("boom")}, tests.FakeClock{T: now})
+	service, err := services.NewIdentityService(tests.NewFakeIdentityRepo(), tests.NewFakeLoginFailureRepo(), &tests.FakeHasher{HashErr: errors.New("boom")}, tests.FakeClock{T: now}, contracts.LockoutConfig{})
 
 	assert.Nil(t, service)
 	assert.EqualError(t, err, "boom")
@@ -202,7 +209,7 @@ func TestVerifyRejectsPasswordLongerThanBcryptLimit(t *testing.T) {
 }
 
 func TestVerifyWithBcryptRejectsSuffixBeyondSeventyTwoBytes(t *testing.T) {
-	service, err := services.NewIdentityService(tests.NewFakeIdentityRepo(), services.NewBcryptHasher(bcrypt.MinCost), tests.FakeClock{T: now})
+	service, err := services.NewIdentityService(tests.NewFakeIdentityRepo(), tests.NewFakeLoginFailureRepo(), services.NewBcryptHasher(bcrypt.MinCost), tests.FakeClock{T: now}, contracts.LockoutConfig{})
 	require.NoError(t, err)
 	password := strings.Repeat("a", 72)
 	userID, err := service.Register(context.Background(), "ana@example.com", password)

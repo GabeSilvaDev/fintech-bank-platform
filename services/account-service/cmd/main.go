@@ -72,7 +72,13 @@ func main() {
 		services.RandomNumber,
 	)
 
-	identities, err := services.NewIdentityService(database.NewIdentityRepository(session), services.NewBcryptHasher(services.BcryptCost), services.SystemClock{})
+	identities, err := services.NewIdentityService(
+		database.NewIdentityRepository(session),
+		database.NewLoginFailureRepository(session),
+		services.NewBcryptHasher(services.BcryptCost),
+		services.SystemClock{},
+		cfg.Lockout,
+	)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to initialize identity service")
 	}

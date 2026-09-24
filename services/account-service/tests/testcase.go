@@ -26,6 +26,8 @@ type TestCase struct {
 	Service    *services.AccountService
 	Identities *FakeIdentityRepo
 	Hasher     *FakeHasher
+	Failures   *FakeLoginFailureRepo
+	Verifier   *services.IdentityService
 	Tokens     *FakeRefreshTokenRepo
 	Clock      *FakeClock
 	PingErr    error
@@ -39,10 +41,12 @@ func (tc *TestCase) SetupTest() {
 	tc.Service = services.NewAccountService(tc.Accounts, tc.Customers, tc.Operations, FakeClock{T: time.Now().UTC()}, func() string { return "00000001" })
 	tc.Identities = NewFakeIdentityRepo()
 	tc.Hasher = &FakeHasher{}
-	identityService, err := services.NewIdentityService(tc.Identities, tc.Hasher, FakeClock{T: time.Now().UTC()})
-	tc.Require().NoError(err)
-	tc.Tokens = NewFakeRefreshTokenRepo()
+	tc.Failures = NewFakeLoginFailureRepo()
 	tc.Clock = &FakeClock{T: time.Now().UTC()}
+	identityService, err := services.NewIdentityService(tc.Identities, tc.Failures, tc.Hasher, tc.Clock, contracts.LockoutConfig{})
+	tc.Require().NoError(err)
+	tc.Verifier = identityService
+	tc.Tokens = NewFakeRefreshTokenRepo()
 	tc.PingErr = nil
 	tc.headers = map[string]string{}
 

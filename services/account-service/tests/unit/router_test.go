@@ -27,7 +27,7 @@ func testDependencies() appHttp.Dependencies {
 		tests.FakeClock{T: time.Now().UTC()},
 		func() string { return "00000001" },
 	)
-	identities, err := services.NewIdentityService(tests.NewFakeIdentityRepo(), &tests.FakeHasher{}, tests.FakeClock{T: time.Now().UTC()})
+	identities, err := services.NewIdentityService(tests.NewFakeIdentityRepo(), tests.NewFakeLoginFailureRepo(), &tests.FakeHasher{}, tests.FakeClock{T: time.Now().UTC()}, contracts.LockoutConfig{})
 	if err != nil {
 		panic(err)
 	}

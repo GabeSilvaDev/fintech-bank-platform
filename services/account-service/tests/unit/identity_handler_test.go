@@ -3,10 +3,12 @@ package unit
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fintech-bank-platform/account-service/internal/app/handlers"
 	"github.com/fintech-bank-platform/account-service/internal/app/services"
@@ -121,5 +123,40 @@ func TestIdentityHandlersAnswerBusyWhenHashingIsSaturated(t *testing.T) {
 		errorBody := decoded["error"].(map[string]interface{})
 		assert.Equal(t, "SERVICE_BUSY", errorBody["code"])
 		assert.Equal(t, "service is busy, try again shortly", errorBody["message"])
+		assert.Equal(t, "1", rec.Header().Get("Retry-After"))
+	}
+}
+
+func TestIdentityHandlersAnswerTooManyAttemptsWithRetryAfter(t *testing.T) {
+	for _, tc := range []struct {
+		retryAfter time.Duration
+		want       string
+	}{
+		{15 * time.Minute, "900"},
+		{1500 * time.Millisecond, "2"},
+		{time.Second, "1"},
+		{0, "1"},
+	} {
+		router := identityRouter(stubIdentities{err: fmt.Errorf("wrapped: %w", &services.ErrTooManyAttempts{RetryAfter: tc.retryAfter})})
+
+		rec, decoded := post(router, "/identities/verify", `{"email":"ana@example.com","password":"correct horse"}`)
+
+		assert.Equal(t, http.StatusTooManyRequests, rec.Code)
+		errorBody := decoded["error"].(map[string]interface{})
+		assert.Equal(t, "TOO_MANY_ATTEMPTS", errorBody["code"])
+		assert.Equal(t, "too many failed attempts; try again later", errorBody["message"])
+		assert.Equal(t, tc.want, rec.Header().Get("Retry-After"), tc.retryAfter)
+	}
+}
+
+func TestIdentityHandlersOnlySendRetryAfterWhenRetryingHelps(t *testing.T) {
+	for _, err := range []error{services.ErrInvalidCredentials, services.ErrEmailTaken, errors.New("cassandra down")} {
+		router := identityRouter(stubIdentities{err: err})
+
+		for _, path := range []string{"/identities", "/identities/verify"} {
+			rec, _ := post(router, path, `{"email":"ana@example.com","password":"correct horse"}`)
+
+			assert.Empty(t, rec.Header().Get("Retry-After"), err.Error())
+		}
 	}
 }

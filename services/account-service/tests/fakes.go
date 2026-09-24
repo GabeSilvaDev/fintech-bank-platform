@@ -3,6 +3,7 @@ package tests
 import (
 	"context"
 	"errors"
+	"sync"
 	"time"
 
 	"github.com/fintech-bank-platform/account-service/internal/app/models"
@@ -418,9 +419,13 @@ type FakeHasher struct {
 	HashErr     error
 	Hashed      []string
 	Comparisons []Comparison
+	OnHash      func()
 }
 
 func (f *FakeHasher) Hash(password string) (string, error) {
+	if f.OnHash != nil {
+		f.OnHash()
+	}
 	if f.HashErr != nil {
 		return "", f.HashErr
 	}
@@ -551,4 +556,97 @@ func (f *FakeRefreshTokenRepo) ActiveIn(familyID uuid.UUID) []string {
 		}
 	}
 	return active
+}
+
+type FailureWrite struct {
+	Kind    string
+	Current *models.LoginFailure
+	Next    models.LoginFailure
+	TTL     time.Duration
+	Applied bool
+}
+
+type FakeLoginFailureRepo struct {
+	mu          sync.Mutex
+	Rows        map[string]models.LoginFailure
+	Writes      []FailureWrite
+	Cleared     []string
+	GetCalls    int
+	GetErr      error
+	CreateErr   error
+	ReplaceErr  error
+	ClearErr    error
+	BeforeWrite func(rows map[string]models.LoginFailure)
+}
+
+func NewFakeLoginFailureRepo() *FakeLoginFailureRepo {
+	return &FakeLoginFailureRepo{Rows: map[string]models.LoginFailure{}}
+}
+
+func (f *FakeLoginFailureRepo) Get(_ context.Context, email string) (*models.LoginFailure, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.GetCalls++
+	if f.GetErr != nil {
+		return nil, f.GetErr
+	}
+	row, ok := f.Rows[email]
+	if !ok {
+		return nil, domain.ErrNotFound
+	}
+	return &row, nil
+}
+
+func (f *FakeLoginFailureRepo) Create(_ context.Context, failure *models.LoginFailure, ttl time.Duration) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.BeforeWrite != nil {
+		f.BeforeWrite(f.Rows)
+	}
+	if f.CreateErr != nil {
+		return false, f.CreateErr
+	}
+	_, exists := f.Rows[failure.Email]
+	if !exists {
+		f.Rows[failure.Email] = *failure
+	}
+	f.Writes = append(f.Writes, FailureWrite{Kind: "create", Next: *failure, TTL: ttl, Applied: !exists})
+	return !exists, nil
+}
+
+func (f *FakeLoginFailureRepo) Replace(_ context.Context, current, next *models.LoginFailure, ttl time.Duration) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.BeforeWrite != nil {
+		f.BeforeWrite(f.Rows)
+	}
+	if f.ReplaceErr != nil {
+		return false, f.ReplaceErr
+	}
+	row, exists := f.Rows[current.Email]
+	applied := exists && row.Failures == current.Failures && row.FirstFailure.Equal(current.FirstFailure)
+	if applied {
+		f.Rows[current.Email] = *next
+	}
+	copied := *current
+	f.Writes = append(f.Writes, FailureWrite{Kind: "replace", Current: &copied, Next: *next, TTL: ttl, Applied: applied})
+	return applied, nil
+}
+
+func (f *FakeLoginFailureRepo) Clear(_ context.Context, email string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Cleared = append(f.Cleared, email)
+	if f.ClearErr != nil {
+		return f.ClearErr
+	}
+	delete(f.Rows, email)
+	return nil
+}
+
+func (f *FakeLoginFailureRepo) Row(email string) (models.LoginFailure, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	row, ok := f.Rows[email]
+	return row, ok
 }
