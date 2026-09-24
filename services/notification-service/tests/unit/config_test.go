@@ -34,6 +34,7 @@ func TestConfigDefaults(t *testing.T) {
 	assert.Equal(t, "http://localhost:8082", cfg.Directory.URL)
 	assert.Equal(t, 5*time.Minute, cfg.Directory.TTL)
 	assert.Equal(t, 3*time.Second, cfg.Directory.Timeout)
+	assert.Equal(t, 10000, cfg.Directory.MaxEntries)
 	assert.Equal(t, "localhost:1025", cfg.SMTP.Addr)
 	assert.Equal(t, "no-reply@fintech.local", cfg.SMTP.From)
 	assert.Equal(t, 10*time.Second, cfg.SMTP.Timeout)
@@ -53,6 +54,7 @@ func TestConfigFromEnv(t *testing.T) {
 	t.Setenv("ACCOUNT_SERVICE_URL", "http://acc")
 	t.Setenv("ACCOUNT_DIRECTORY_TTL", "1m")
 	t.Setenv("ACCOUNT_DIRECTORY_TIMEOUT", "1s")
+	t.Setenv("ACCOUNT_DIRECTORY_MAX_ENTRIES", "500")
 	t.Setenv("SMTP_ADDR", "m:25")
 	t.Setenv("SMTP_FROM", "a@b.c")
 	t.Setenv("SMTP_TIMEOUT", "2s")
@@ -74,6 +76,7 @@ func TestConfigFromEnv(t *testing.T) {
 	assert.Equal(t, "http://acc", cfg.Directory.URL)
 	assert.Equal(t, time.Minute, cfg.Directory.TTL)
 	assert.Equal(t, time.Second, cfg.Directory.Timeout)
+	assert.Equal(t, 500, cfg.Directory.MaxEntries)
 	assert.Equal(t, "m:25", cfg.SMTP.Addr)
 	assert.Equal(t, "a@b.c", cfg.SMTP.From)
 	assert.Equal(t, 2*time.Second, cfg.SMTP.Timeout)
@@ -92,6 +95,15 @@ func TestConfigStartupInvalidValuesFallBackToDefaults(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 30, cfg.Startup.Attempts)
 	assert.Equal(t, 2*time.Second, cfg.Startup.Delay)
+}
+
+func TestConfigDirectoryMaxEntriesInvalidFallsBackToDefault(t *testing.T) {
+	t.Setenv("ACCOUNT_DIRECTORY_MAX_ENTRIES", "0")
+
+	cfg, err := config.New()
+
+	assert.NoError(t, err)
+	assert.Equal(t, 10000, cfg.Directory.MaxEntries)
 }
 
 func TestConfigObservabilityDefaults(t *testing.T) {

@@ -42,9 +42,10 @@ type RedisConfig struct {
 }
 
 type DirectoryConfig struct {
-	URL     string
-	TTL     time.Duration
-	Timeout time.Duration
+	URL        string
+	TTL        time.Duration
+	Timeout    time.Duration
+	MaxEntries int
 }
 
 type SMTPConfig struct {

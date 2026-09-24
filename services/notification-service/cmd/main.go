@@ -73,7 +73,7 @@ func main() {
 		log.Fatal().Err(err).Msg("Redis connection failed")
 	}
 
-	accountDirectory := directory.NewClient(cfg.Directory.URL, cfg.Directory.Timeout, cfg.Directory.TTL)
+	accountDirectory := directory.NewClient(cfg.Directory.URL, cfg.Directory.Timeout, cfg.Directory.TTL).WithMaxEntries(cfg.Directory.MaxEntries)
 	renderer, err := services.NewRenderer(services.Templates())
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to load templates")

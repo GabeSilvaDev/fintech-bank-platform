@@ -56,9 +56,10 @@ func New() (*Config, error) {
 			DB:       env.GetInt("REDIS_DB", 0),
 		},
 		Directory: contracts.DirectoryConfig{
-			URL:     env.Get("ACCOUNT_SERVICE_URL", "http://localhost:8082"),
-			TTL:     env.GetDuration("ACCOUNT_DIRECTORY_TTL", 5*time.Minute),
-			Timeout: env.GetDuration("ACCOUNT_DIRECTORY_TIMEOUT", 3*time.Second),
+			URL:        env.Get("ACCOUNT_SERVICE_URL", "http://localhost:8082"),
+			TTL:        env.GetDuration("ACCOUNT_DIRECTORY_TTL", 5*time.Minute),
+			Timeout:    env.GetDuration("ACCOUNT_DIRECTORY_TIMEOUT", 3*time.Second),
+			MaxEntries: env.GetIntMin("ACCOUNT_DIRECTORY_MAX_ENTRIES", 10000, 1),
 		},
 		SMTP: contracts.SMTPConfig{
 			Addr:    env.Get("SMTP_ADDR", "localhost:1025"),
