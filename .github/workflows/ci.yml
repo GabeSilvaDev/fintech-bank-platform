@@ -587,6 +587,7 @@ jobs:
     needs: [account-service, transaction-service, payment-service, notification-service, api-gateway]
     env:
       RATE_LIMIT_REQUESTS: "100000"
+      AUTH_RATE_LIMIT_REQUESTS: "100000"
 
     steps:
       - name: Checkout
