@@ -17,7 +17,7 @@
 
 </div>
 
-> **Work in progress.** Infrastructure, shared packages and all five services — the API gateway, the account service, the transaction service, the payment service and the notification service — are in place: commands flow from HTTP to Kafka to Cassandra, deposits, withdrawals and transfers settle as sagas over the account service, PIX, TED and boleto payments settle the same way through a sandbox provider with signed webhooks, and result events turn into e-mail, SMS and push through the notification service, with reads coming back through the gateway. Every service retries its Cassandra or Redis connection at start-up, account credits and debits are idempotent per key, a reconciliation sweeper recovers stuck transactions and payments, and the platform is exercised end to end and under k6 load, on top of its unit, feature and integration tests. Observability is next. See the [roadmap](#roadmap) for what is done and what is planned.
+> **Work in progress.** Infrastructure, shared packages and all five services — the API gateway, the account service, the transaction service, the payment service and the notification service — are in place: commands flow from HTTP to Kafka to Cassandra, deposits, withdrawals and transfers settle as sagas over the account service, PIX, TED and boleto payments settle the same way through a sandbox provider with signed webhooks, and result events turn into e-mail, SMS and push through the notification service, with reads coming back through the gateway. Every service retries its Cassandra or Redis connection at start-up, account credits and debits are idempotent per key, a reconciliation sweeper recovers stuck transactions and payments, and the platform is exercised end to end and under k6 load, on top of its unit, feature and integration tests. Every service exposes Prometheus metrics and OpenTelemetry traces, with a Grafana dashboard, alert rules and Jaeger in an optional compose profile, and the public API is described in OpenAPI. See the [roadmap](#roadmap) for what is done.
 
 ## Architecture
 
@@ -39,17 +39,21 @@ The gateway receives HTTP requests and publishes them as commands on Kafka; each
 
 **Topics** (`pkg/events`): `account.commands`, `transaction.commands`, `payment.commands` for commands; `account.events`, `transaction.events`, `payment.events`, `notification.events` for results; one dead-letter topic per domain. The root compose pre-creates every topic with a `kafka-init` one-shot.
 
+The cross-service design — components, the topics table, sequence diagrams for every saga and for notifications and reconciliation, idempotency layers, failure semantics and observability — is in [`docs/architecture.md`](docs/architecture.md). How to run the checks, write commits and add a service is in [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
 ## What exists today
 
 | Component | Path | State |
 |---|---|---|
-| Infrastructure | `docker-compose.yml` | Kafka 3.7.1 (KRaft), Cassandra 4.1, Redis 7.2, Mailpit, optional Kafka UI and Cassandra Web |
-| Shared packages | `pkg/` | `logger`, `errors`, `response`, `validation`, `events`, `env`, `middleware`, `messaging`, `domain`, `cassandra`, `processor`, `retry` — 100 % test coverage, enforced in CI |
-| API Gateway | `services/api-gateway/` | Chi router with request-id, real-IP, logging, recovery, CORS and rate-limit middleware; `GET /health`; command endpoints publishing to Kafka through a circuit-breaker-guarded producer; typed config from env; unit + feature tests at 100 % coverage, Kafka integration test in CI; read routes proxied to the account service |
+| Infrastructure | `docker-compose.yml` | Kafka 3.7.1 (KRaft), Cassandra 4.1, Redis 7.2, Mailpit, optional Kafka UI and Cassandra Web (profile `ui`), optional Prometheus, Grafana and Jaeger (profile `observability`, configured in `observability/`) |
+| Shared packages | `pkg/` | `logger`, `errors`, `response`, `validation`, `events`, `env`, `middleware`, `messaging`, `domain`, `cassandra`, `processor`, `retry`, `metrics`, `tracing` — 100 % test coverage, enforced in CI |
+| API Gateway | `services/api-gateway/` | Chi router with request-id, tracing, metrics, real-IP, logging, recovery, CORS and rate-limit middleware; `GET /health`; command endpoints publishing to Kafka through a circuit-breaker-guarded producer; typed config from env; OpenAPI 3.1 document served at `GET /api/v1/openapi.yaml` and linted with Redocly in CI; unit + feature tests at 100 % coverage, Kafka integration test in CI; read routes proxied to the domain services |
 | Account Service | `services/account-service/` | Consumes `account.commands`, retries its Cassandra bootstrap, migrations and keyspace session at start-up (`STARTUP_RETRY_*`), persists customers and accounts in Cassandra (`fintech_accounts`), owns balances with compare-and-set credits/debits that require an `idempotency_key` and apply at most once (`balance_operations`, 30-day TTL), publishes results — including `account.credit_rejected` — on `account.events` and failures on `account.dlq`; read API on `:8082`; unit + feature tests at 100 % of `internal/app`, Cassandra and Kafka integration tests in CI |
 | Transaction Service | `services/transaction-service/` | Consumes `transaction.commands` and the account service's replies on `account.events`, retries its Cassandra bootstrap at start-up (`STARTUP_RETRY_*`), records deposits, withdrawals and transfers in Cassandra (`fintech_transactions`), orchestrates each one as a saga over `account.commands` (debit → credit → compensating credit on failure) with per-step idempotency keys, runs a reconciliation sweeper that re-sends the next step of stale non-terminal transactions (`SWEEPER_*`), publishes `transaction.created/completed/failed` and `transaction.transfer_completed/transfer_failed` on `transaction.events`, dead-letters on `transaction.dlq`; read API on `:8083`; unit + feature tests at 100 % of `internal/app`, Cassandra and Kafka integration tests in CI |
 | Payment Service | `services/payment-service/` | Consumes `payment.commands` and the account service's replies on `account.events`, retries its Cassandra bootstrap at start-up (`STARTUP_RETRY_*`), stores PIX, TED and boleto payments in Cassandra (`fintech_payments`), reserves funds with `account.debit`, submits to a sandbox provider — PIX settles at once, TED and boleto settle through a signed webhook — refunds rejections with `account.credit`, runs a reconciliation sweeper that re-sends the next step of stale non-terminal payments (`SWEEPER_*`), publishes `payment.created/processed/completed/failed` on `payment.events`, dead-letters on `payment.dlq`; read API and webhook on `:8084`; unit + feature tests at 100 % of `internal/app`, Cassandra and Kafka integration tests in CI |
 | Notification Service | `services/notification-service/` | Consumes `account.events`, `transaction.events` and `payment.events` and routes the results as Portuguese e-mail, SMS and push, retrying its Redis ping at start-up (`STARTUP_RETRY_*`), looking up the account service's internal owner endpoint for contacts; delivery commands on `notification.events` are sent over SMTP (Mailpit in development) or sandbox SMS/push providers and recorded in a Redis-backed history, dead-lettering on `notification.dlq`; read API on `:8085`; unit + feature tests at 100 % of `internal/app`, Kafka, Redis and Mailpit integration tests in CI |
+
+Every service also serves Prometheus metrics on `GET /metrics` of its HTTP port and propagates OpenTelemetry traces over HTTP and Kafka — see [Observability](#observability).
 
 ### Shared packages
 
@@ -67,6 +71,8 @@ The gateway receives HTTP requests and publishes them as commands on Kafka; each
 | `cassandra` | `Migrator` that runs the keyspace file first, then every other `.cql` file in order over an `Executor` seam, tracking versions in `schema_migrations`; `MapWriteError` maps ambiguous Cassandra failures to `domain.ErrAmbiguousWrite` |
 | `processor` | Idempotent Kafka command processor: dedupes by event id, retries transient errors with backoff, dead-letters the rest, and publishes a dispatcher's reply events |
 | `retry` | `Do(ctx, attempts, delay, fn)` retries `fn` with a fixed delay between attempts until it succeeds, the attempts run out or the context is cancelled; used by the four domain services (account, transaction, payment and notification) to wait for Cassandra or Redis at start-up; the API gateway has nothing to wait for |
+| `metrics` | Per-service Prometheus registry labelled with `service`, Go and process collectors, HTTP middleware (`http_requests_total`, `http_request_duration_seconds`), `/metrics` handler and nil-safe counter, gauge and histogram factories |
+| `tracing` | OpenTelemetry setup with an optional OTLP/HTTP exporter and ratio sampling, HTTP server middleware and client transport, `traceparent` injection and extraction on Kafka headers |
 
 Usage examples live in [`pkg/README.md`](pkg/README.md).
 
@@ -81,6 +87,7 @@ cp .env.example .env
 
 docker compose up -d                  # Kafka + Cassandra + Redis
 docker compose --profile ui up -d     # + Kafka UI (:8080) and Cassandra Web (:3000)
+docker compose --profile observability up -d   # + Prometheus (:9090), Grafana (:3000), Jaeger (:16686)
 docker compose ps                     # wait until everything is healthy (~1–2 min)
 ```
 
@@ -92,6 +99,11 @@ docker compose ps                     # wait until everything is healthy (~1–2
 | Mailpit | `fintech-mailpit` | 1025 SMTP (`MAILPIT_SMTP_PORT`) · 8025 UI (`MAILPIT_UI_PORT`) |
 | Kafka UI *(profile `ui`)* | `fintech-kafka-ui` | 8080 |
 | Cassandra Web *(profile `ui`)* | `fintech-cassandra-web` | 3000 |
+| Prometheus *(profile `observability`)* | `fintech-prometheus` | 9090 (`PROMETHEUS_PORT`) |
+| Grafana *(profile `observability`)* | `fintech-grafana` | 3000 (`GRAFANA_PORT`) |
+| Jaeger *(profile `observability`)* | `fintech-jaeger` | 16686 UI (`JAEGER_UI_PORT`) |
+
+Grafana and Cassandra Web both default to port 3000: set `GRAFANA_PORT` (for example `3001`) in `.env` before enabling both profiles.
 
 Redis backs the notification service's idempotency and history; Mailpit catches its outgoing e-mail, with a web UI at http://localhost:8025.
 
@@ -104,7 +116,9 @@ docker compose up -d                  # hot reload with Air, published on :8081
 curl http://localhost:8081/health
 ```
 
-Or natively: `make run` (listens on `SERVER_PORT`, default 8080). Configuration is read from the environment: `SERVER_*` (host, port, timeouts), `CORS_*`, `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW`, `KAFKA_BROKERS` / `KAFKA_WRITE_TIMEOUT` / `KAFKA_BATCH_TIMEOUT` / `KAFKA_PUBLISH_TIMEOUT` / `KAFKA_MAX_ATTEMPTS` / `KAFKA_BREAKER_*` and `LOG_LEVEL` / `LOG_PRETTY`.
+Or natively: `make run` (listens on `SERVER_PORT`, default 8080). Configuration is read from the environment: `SERVER_*` (host, port, timeouts), `CORS_*`, `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW`, `KAFKA_BROKERS` / `KAFKA_WRITE_TIMEOUT` / `KAFKA_BATCH_TIMEOUT` / `KAFKA_PUBLISH_TIMEOUT` / `KAFKA_MAX_ATTEMPTS` / `KAFKA_BREAKER_*`, `METRICS_ENABLED` / `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_SAMPLER_RATIO` and `LOG_LEVEL` / `LOG_PRETTY`.
+
+The public API is described in OpenAPI 3.1 in `services/api-gateway/api/openapi.yaml`, embedded in the binary and served by the gateway itself (`curl http://localhost:8081/api/v1/openapi.yaml`); CI lints it with Redocly using the root `redocly.yaml`.
 
 ### Account Service
 
@@ -115,7 +129,7 @@ docker compose up -d                  # hot reload with Air, published on :8082
 curl http://localhost:8082/health     # {"success":true,"data":{"status":"healthy","cassandra":"up"}}
 ```
 
-Connecting to Cassandra, applying migrations in `migrations/*.cql` (against `CASSANDRA_KEYSPACE`, default `fintech_accounts`) and opening the keyspace session are retried at boot up to `STARTUP_RETRY_ATTEMPTS` times (default 30), waiting `STARTUP_RETRY_DELAY` between attempts (default `2s`; a non-positive value falls back to the default). Configuration: `SERVER_*`, `KAFKA_BROKERS` / `KAFKA_GROUP_ID` / `KAFKA_*_TIMEOUT` / `KAFKA_MAX_ATTEMPTS`, `CONSUMER_RETRY_BACKOFF` / `CONSUMER_DRAIN_TIMEOUT`, `CASSANDRA_HOSTS` / `CASSANDRA_KEYSPACE` / `CASSANDRA_CONSISTENCY` / `CASSANDRA_*_TIMEOUT` / `CASSANDRA_MIGRATIONS_PATH`, `STARTUP_RETRY_ATTEMPTS` / `STARTUP_RETRY_DELAY`, `LOG_LEVEL` / `LOG_PRETTY`.
+Connecting to Cassandra, applying migrations in `migrations/*.cql` (against `CASSANDRA_KEYSPACE`, default `fintech_accounts`) and opening the keyspace session are retried at boot up to `STARTUP_RETRY_ATTEMPTS` times (default 30), waiting `STARTUP_RETRY_DELAY` between attempts (default `2s`; a non-positive value falls back to the default). Configuration: `SERVER_*`, `KAFKA_BROKERS` / `KAFKA_GROUP_ID` / `KAFKA_*_TIMEOUT` / `KAFKA_MAX_ATTEMPTS`, `CONSUMER_RETRY_BACKOFF` / `CONSUMER_DRAIN_TIMEOUT`, `CASSANDRA_HOSTS` / `CASSANDRA_KEYSPACE` / `CASSANDRA_CONSISTENCY` / `CASSANDRA_*_TIMEOUT` / `CASSANDRA_MIGRATIONS_PATH`, `STARTUP_RETRY_ATTEMPTS` / `STARTUP_RETRY_DELAY`, `METRICS_ENABLED` / `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_SAMPLER_RATIO`, `LOG_LEVEL` / `LOG_PRETTY`.
 
 Commands it handles (topic `account.commands`) and the events it answers with (topic `account.events`):
 
@@ -207,7 +221,7 @@ docker compose up -d                  # hot reload with Air, published on :8085
 curl http://localhost:8085/health     # {"success":true,"data":{"status":"healthy","redis":"up"}}
 ```
 
-The Redis ping is retried at boot up to `STARTUP_RETRY_ATTEMPTS` times (default 30), waiting `STARTUP_RETRY_DELAY` between attempts (default `2s`), before the service gives up and exits. Configuration: `SERVER_*`, `KAFKA_BROKERS` / `KAFKA_GROUP_ID` (default `notification-service`) / `KAFKA_*_TIMEOUT` / `KAFKA_MAX_ATTEMPTS`, `CONSUMER_RETRY_BACKOFF` / `CONSUMER_DRAIN_TIMEOUT`, `REDIS_ADDR` / `REDIS_PASSWORD` / `REDIS_DB`, `ACCOUNT_SERVICE_URL` / `ACCOUNT_DIRECTORY_TTL` (default `5m`) / `ACCOUNT_DIRECTORY_TIMEOUT` (default `3s`), `SMTP_ADDR` / `SMTP_FROM` (default `no-reply@fintech.local`) / `SMTP_TIMEOUT` (default `10s`), `NOTIFICATION_HISTORY_SIZE` (default `100`), `NOTIFICATION_MAX_EVENT_AGE` (default `1h`, `0` disables), `STARTUP_RETRY_ATTEMPTS` / `STARTUP_RETRY_DELAY`, `LOG_LEVEL` / `LOG_PRETTY`.
+The Redis ping is retried at boot up to `STARTUP_RETRY_ATTEMPTS` times (default 30), waiting `STARTUP_RETRY_DELAY` between attempts (default `2s`), before the service gives up and exits. Configuration: `SERVER_*`, `KAFKA_BROKERS` / `KAFKA_GROUP_ID` (default `notification-service`) / `KAFKA_*_TIMEOUT` / `KAFKA_MAX_ATTEMPTS`, `CONSUMER_RETRY_BACKOFF` / `CONSUMER_DRAIN_TIMEOUT`, `REDIS_ADDR` / `REDIS_PASSWORD` / `REDIS_DB`, `ACCOUNT_SERVICE_URL` / `ACCOUNT_DIRECTORY_TTL` (default `5m`) / `ACCOUNT_DIRECTORY_TIMEOUT` (default `3s`), `SMTP_ADDR` / `SMTP_FROM` (default `no-reply@fintech.local`) / `SMTP_TIMEOUT` (default `10s`), `NOTIFICATION_HISTORY_SIZE` (default `100`), `NOTIFICATION_MAX_EVENT_AGE` (default `1h`, `0` disables), `STARTUP_RETRY_ATTEMPTS` / `STARTUP_RETRY_DELAY`, `METRICS_ENABLED` / `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_SAMPLER_RATIO`, `LOG_LEVEL` / `LOG_PRETTY`.
 
 The service runs two kinds of consumer: routing turns domain result events into delivery commands, and delivery sends them and records history.
 
@@ -280,7 +294,51 @@ Reads are proxied to the account service via `ACCOUNT_SERVICE_URL`, to the trans
 | `GET` | `/api/v1/accounts/{account_id}/payments` | `GET /accounts/{account_id}/payments?limit=50` → `200` newest first (`limit` 1–200) |
 | `GET` | `/api/v1/users/{user_id}/notifications` | `GET /users/{user_id}/notifications?limit=20` → `200` newest first (`limit` 1–100), `422` |
 
+## Observability
+
+Every service exposes Prometheus metrics on `GET /metrics` of its own HTTP port (`:8081` for the gateway from the host, `:8082`–`:8085` for the domain services) and propagates OpenTelemetry traces over HTTP and Kafka. All five read the same three variables:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `METRICS_ENABLED` | `true` | `false` leaves `/metrics` unmounted |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | empty | OTLP/HTTP endpoint for spans, such as `http://jaeger:4318`; empty exports nothing but still propagates trace context and logs trace ids |
+| `OTEL_SAMPLER_RATIO` | `1.0` | Root sampling ratio, parent-based; `<= 0` or `> 1` means `1` |
+
+**Metrics**, all labelled with `service`: `http_requests_total{method,route,status}` and `http_request_duration_seconds{method,route}` on every router; `messages_processed_total{type,outcome}` (`ok`, `duplicate`, `dead_lettered`), `message_processing_duration_seconds{type}` and `message_retries_total{type}` from every message processor; `messages_published_total{topic,outcome}` (`ok`, `error`) from every producer; `kafka_consumer_lag{topic,group}` (lag of the latest fetched partition) from every consumer; `circuit_breaker_state` on the gateway (`0` closed, `1` half-open, `2` open); `reconciliation_resent_total{status}` and `reconciliation_exhausted_total` from the transaction and payment sweepers; `notifications_sent_total{channel,outcome}` from notification delivery; plus the Go runtime and process collectors.
+
+**Traces.** Each HTTP request gets a server span named after its route, the gateway's read proxy propagates `traceparent` to the domain services, every Kafka publish injects `traceparent` into the message headers and every consumer continues it in a `process <event type>` span, so one command is one trace across the services it touches. Request and processor log lines carry `otel_trace_id` and `otel_span_id`. The envelope's `trace_id` (the gateway's `X-Request-ID`) is a separate business correlation id.
+
+**Running it.** The root compose's `observability` profile adds Prometheus, Grafana and Jaeger, configured from `observability/`. The simplest way to get everything wired is the stack script, which starts the profile and exports `OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318` to the services (unless already set):
+
+```bash
+STACK_OBSERVABILITY=1 scripts/stack.sh up
+STACK_OBSERVABILITY=1 scripts/stack.sh wait   # also waits for Prometheus, Grafana and Jaeger
+```
+
+Starting services one by one works too: `docker compose --profile observability up -d` at the root, then `OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318 docker compose up -d` in each service directory. Prometheus scrapes the services by their compose hostnames, so they have to run in their compose stacks.
+
+| UI | URL | Notes |
+|---|---|---|
+| Prometheus | http://localhost:9090 (`PROMETHEUS_PORT`) | Five scrape jobs every 15 s, alert rules on the Alerts page |
+| Grafana | http://localhost:3000 (`GRAFANA_PORT`) | Anonymous read-only access; `admin` / `GRAFANA_ADMIN_PASSWORD` (default `admin`) to edit. Home dashboard "Platform overview" (uid `fintech-overview`): health, HTTP rate, 5xx ratio and p95 latency, messages by outcome, dead letters, consumer lag, reconciliation and notifications, with a link to the service's traces |
+| Jaeger | http://localhost:16686 (`JAEGER_UI_PORT`) | `jaegertracing/jaeger:2.20.0`; OTLP on 4317/4318 inside the compose network only |
+
+**Alerts** (`observability/prometheus/alerts.yml`, evaluated by Prometheus, no Alertmanager configured):
+
+| Alert | Fires when | Severity |
+|---|---|---|
+| `ServiceDown` | a scrape target is down for 1 minute | critical |
+| `HighErrorRate` | more than 5 % of a service's requests answer 5xx over 5 minutes, for 5 minutes | warning |
+| `DeadLettersGrowing` | a message processor dead-lettered a message in the last 10 minutes | warning |
+| `ConsumerLagHigh` | a consumer is more than 1000 messages behind for 5 minutes | warning |
+| `ReconciliationExhausted` | a sweeper gave up on a transaction or payment in the last 15 minutes | critical |
+| `CircuitBreakerOpen` | the gateway's circuit breaker is open for 1 minute | critical |
+
+The full metric table, span layout, dashboard panels and the hops that start a new trace (sweeper re-sends, the sandbox webhook, the notification owner lookup) are in [`docs/architecture.md`](docs/architecture.md#observability).
+
 ## Development
+
+[`CONTRIBUTING.md`](CONTRIBUTING.md) has the Docker-only way to run every gate below (a `golang:1.25-alpine` container per module, `gofmt`, `go vet`, coverage and integration tests), the commit style and the checklist for adding a service. With Go installed locally, the Makefiles do the same:
 
 ```bash
 # shared packages
@@ -319,7 +377,7 @@ make test-integration                       # needs KAFKA_BROKERS, REDIS_ADDR, a
 
 ### End-to-end and load tests
 
-`scripts/stack.sh` runs the whole platform out of process, for tests that go through the gateway instead of a single service: `up` starts the root infrastructure (Kafka, Cassandra, Redis, Mailpit, plus the `kafka-init` one-shot) under the `fintech-bank-platform` project name and then every service's own compose stack; `wait` polls the gateway's, every domain service's and Mailpit's health endpoints until they answer or `STACK_TIMEOUT` (default 600s) elapses; `logs` dumps the last 200 lines of every service container; `down` tears everything down. It honours `GATEWAY_URL`, `MAILPIT_URL` (built from `MAILPIT_UI_PORT` if unset) and the root compose's own `REDIS_PORT` / `MAILPIT_SMTP_PORT` / `MAILPIT_UI_PORT`.
+`scripts/stack.sh` runs the whole platform out of process, for tests that go through the gateway instead of a single service: `up` starts the root infrastructure (Kafka, Cassandra, Redis, Mailpit, plus the `kafka-init` one-shot) under the `fintech-bank-platform` project name and then every service's own compose stack; `wait` polls the gateway's, every domain service's and Mailpit's health endpoints until they answer or `STACK_TIMEOUT` (default 600s) elapses; `logs` dumps the last 200 lines of every service container; `down` tears everything down. It loads the root `.env` without overriding variables already set in the environment, and honours `GATEWAY_URL`, `MAILPIT_URL` (built from `MAILPIT_UI_PORT` if unset) and the root compose's own `REDIS_PORT` / `MAILPIT_SMTP_PORT` / `MAILPIT_UI_PORT`. With `STACK_OBSERVABILITY=1`, `up` also starts the `observability` profile and exports `OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318` to the services, and `wait` also polls Prometheus, Grafana and Jaeger (`PROMETHEUS_URL`, `GRAFANA_URL` and `JAEGER_URL`, built from their ports if unset).
 
 ```bash
 scripts/stack.sh up
@@ -337,29 +395,37 @@ scripts/stack.sh down
 
 `tests/load` has k6 scenarios exercising the gateway end to end — commands, reads and a raw deposit-throughput benchmark; see [`tests/load/README.md`](tests/load/README.md) for the scripts, scenarios and how to run them.
 
-CI (`.github/workflows/ci.yml`) runs on every push and pull request as seven jobs — `pkg`, `api-gateway` (with a Kafka service container), `account-service`, `transaction-service` and `payment-service` (with Kafka and Cassandra service containers), `notification-service` (with Kafka, Redis and Mailpit service containers) and `e2e` (with `RATE_LIMIT_REQUESTS` raised, running `scripts/stack.sh up`/`wait`, the `tests/e2e` suite and `scripts/stack.sh down`) — running `gofmt` check and the test suites for `pkg`, `api-gateway`, `account-service`, `transaction-service`, `payment-service` and `notification-service`, failing the build if coverage drops below 100 % (of `internal/app` for the account, transaction, payment and notification services).
+CI (`.github/workflows/ci.yml`) runs on every push and pull request as seven jobs — `pkg`, `api-gateway` (with a Kafka service container, also linting `services/api-gateway/api/openapi.yaml` with `redocly/cli`), `account-service`, `transaction-service` and `payment-service` (with Kafka and Cassandra service containers), `notification-service` (with Kafka, Redis and Mailpit service containers) and `e2e` (with `RATE_LIMIT_REQUESTS` raised, running `scripts/stack.sh up`/`wait`, the `tests/e2e` suite and `scripts/stack.sh down`) — running `gofmt` check and the test suites for `pkg`, `api-gateway`, `account-service`, `transaction-service`, `payment-service` and `notification-service`, failing the build if coverage drops below 100 % (of `internal/app` for the account, transaction, payment and notification services).
 
 ## Project structure
 
 ```
 fintech-bank-platform/
-├── docker-compose.yml         Kafka · Cassandra · Redis (+ ui profile)
+├── docker-compose.yml         Kafka · Cassandra · Redis · Mailpit (+ ui and observability profiles)
 ├── .env.example               every variable the platform reads
-├── .github/workflows/ci.yml   gofmt + tests + coverage gate
+├── .github/workflows/ci.yml   gofmt + tests + coverage gate + OpenAPI lint
+├── CONTRIBUTING.md            prerequisites, checks with Docker, commit style, adding a service
+├── redocly.yaml               OpenAPI lint rules
+├── docs/architecture.md       components, topics, sequence diagrams, idempotency, failures, observability
+├── observability/
+│   ├── prometheus/            prometheus.yml (scrape jobs) · alerts.yml (alert rules)
+│   └── grafana/               provisioning/ (data sources, dashboards) · dashboards/platform-overview.json
 ├── scripts/stack.sh           up/down/wait/logs for the whole stack (used by the e2e job)
 ├── pkg/                       shared Go module
 │   ├── logger/  errors/  response/  validation/  events/
 │   ├── env/  middleware/  messaging/
 │   ├── domain/  cassandra/  processor/  retry/
+│   ├── metrics/  tracing/
 │   ├── Makefile · Dockerfile · docker-compose.yml
 │   └── README.md
 ├── services/
 │   ├── api-gateway/
 │   │   ├── cmd/main.go                    entry point
+│   │   ├── api/openapi.yaml               OpenAPI 3.1 document, embedded and served
 │   │   ├── internal/
 │   │   │   ├── config/                    env → typed Config
 │   │   │   ├── contracts/                 interfaces for config, context and http
-│   │   │   ├── app/handlers/              command endpoints
+│   │   │   ├── app/handlers/              command endpoints, read proxy, OpenAPI handler
 │   │   │   └── infrastructure/
 │   │   │       ├── http/                  server, router, handlers, middleware/
 │   │   │       └── messaging/             kafka producer, circuit breaker
@@ -437,7 +503,7 @@ fintech-bank-platform/
     └── load/                   k6 scenarios (commands, reads, throughput) · README.md
 ```
 
-Each future service follows the same layout: `cmd/`, `internal/{config,contracts,infrastructure,app}` and `tests/`, with `migrations/` (CQL) for the ones that persist to Cassandra.
+Each future service follows the same layout: `cmd/`, `internal/{config,contracts,infrastructure,app}` and `tests/`, with `migrations/` (CQL) for the ones that persist to Cassandra; [`CONTRIBUTING.md`](CONTRIBUTING.md#adding-a-service) lists everything a new service needs.
 
 ## Roadmap
 
@@ -449,7 +515,7 @@ Each future service follows the same layout: `cmd/`, `internal/{config,contracts
 - [x] **Sprint 4 — Payment Service** — PIX, TED and boleto as sagas over the account service, sandbox provider with signed webhooks, refunds, read API proxied by the gateway
 - [x] **Sprint 5 — Notification Service** — e-mail, SMS and push from result events, templates, Redis-backed idempotency and history, proxied by the gateway
 - [x] **Sprint 6** — end-to-end tests, k6 load tests, idempotent balance operations and a reconciliation sweeper for stuck transactions and payments
-- [ ] **Sprint 7** — observability (Prometheus, Jaeger) and docs
+- [x] **Sprint 7** — observability (Prometheus metrics, Grafana dashboard and alerts, OpenTelemetry traces in Jaeger), OpenAPI and architecture docs
 
 ## License
 
