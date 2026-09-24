@@ -141,6 +141,27 @@ func TestListAccountPaymentsPagesWithBeforeCursor(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
+func TestListAccountPaymentsReturnsNextBeforeWhenARecordIsNotYetVisible(t *testing.T) {
+	h := newHarness()
+	account := uuid.New()
+	base := time.Date(2026, 9, 20, 10, 0, 0, 0, time.UTC)
+	payments := make([]*models.Payment, 2)
+	for i := 0; i < 2; i++ {
+		p := &models.Payment{ID: uuid.New(), AccountID: account, Method: models.MethodPix, Status: models.StatusCompleted, AmountCents: int64(1000 + i), Currency: "BRL", Recipient: "Ana", PixKey: "ana@example.com", IdempotencyKey: uuid.NewString(), CreatedAt: base.Add(time.Duration(i) * time.Minute), UpdatedAt: base.Add(time.Duration(i) * time.Minute)}
+		h.repo.Put(p)
+		payments[i] = p
+	}
+	h.repo.Invisible = map[uuid.UUID]bool{payments[0].ID: true}
+
+	rec, body := get(readRouter(h), "/accounts/"+account.String()+"/payments?limit=2")
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	items := body["data"].([]interface{})
+	assert.Len(t, items, 1)
+	assert.Equal(t, payments[1].ID.String(), items[0].(map[string]interface{})["payment_id"])
+	assert.Equal(t, payments[0].CreatedAt.UTC().Format(time.RFC3339Nano), rec.Header().Get("X-Next-Before"))
+}
+
 func TestListAccountPayments(t *testing.T) {
 	h := newHarness()
 	payment := h.stored(models.MethodPix, models.StatusCompleted)

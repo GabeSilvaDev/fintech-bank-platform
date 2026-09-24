@@ -127,6 +127,27 @@ func TestListAccountTransactionsPagesWithBeforeCursor(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
+func TestListAccountTransactionsReturnsNextBeforeWhenARecordIsNotYetVisible(t *testing.T) {
+	h := newHarness()
+	account := uuid.New()
+	base := time.Date(2026, 9, 20, 10, 0, 0, 0, time.UTC)
+	txs := make([]*models.Transaction, 2)
+	for i := 0; i < 2; i++ {
+		tx := &models.Transaction{ID: uuid.New(), Type: models.TypeDeposit, Status: models.StatusCompleted, AccountID: account, AmountCents: int64(1000 + i), Currency: "BRL", IdempotencyKey: uuid.NewString(), CreatedAt: base.Add(time.Duration(i) * time.Minute), UpdatedAt: base.Add(time.Duration(i) * time.Minute)}
+		h.repo.Put(tx)
+		txs[i] = tx
+	}
+	h.repo.Invisible = map[uuid.UUID]bool{txs[0].ID: true}
+
+	rec, body := get(readRouter(h), "/accounts/"+account.String()+"/transactions?limit=2")
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	items := body["data"].([]interface{})
+	assert.Len(t, items, 1)
+	assert.Equal(t, txs[1].ID.String(), items[0].(map[string]interface{})["transaction_id"])
+	assert.Equal(t, txs[0].CreatedAt.UTC().Format(time.RFC3339Nano), rec.Header().Get("X-Next-Before"))
+}
+
 func TestListAccountTransactionsDepositAndWithdrawalKeepOwnBalance(t *testing.T) {
 	h := newHarness()
 	withdrawal := h.pending(models.TypeWithdrawal, models.StatusDebited)

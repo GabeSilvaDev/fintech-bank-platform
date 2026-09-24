@@ -23,7 +23,7 @@ const (
 
 type PaymentReader interface {
 	Get(ctx context.Context, id uuid.UUID) (*models.Payment, error)
-	ListByAccount(ctx context.Context, accountID uuid.UUID, before *time.Time, limit int) ([]*models.Payment, error)
+	ListByAccount(ctx context.Context, accountID uuid.UUID, before *time.Time, limit int) (models.Page, error)
 }
 
 type ReadHandler struct {
@@ -92,16 +92,16 @@ func (h *ReadHandler) ListAccountPayments(w http.ResponseWriter, r *http.Request
 		response.FromError(w, err)
 		return
 	}
-	payments, err := h.payments.ListByAccount(r.Context(), accountID, before, limit)
+	page, err := h.payments.ListByAccount(r.Context(), accountID, before, limit)
 	if err != nil {
 		response.FromError(w, mapReadError(err))
 		return
 	}
-	if len(payments) == limit {
-		w.Header().Set("X-Next-Before", payments[len(payments)-1].CreatedAt.UTC().Format(time.RFC3339Nano))
+	if page.Scanned == limit && page.Last != nil {
+		w.Header().Set("X-Next-Before", page.Last.UTC().Format(time.RFC3339Nano))
 	}
-	items := make([]paymentResponse, 0, len(payments))
-	for _, payment := range payments {
+	items := make([]paymentResponse, 0, len(page.Items))
+	for _, payment := range page.Items {
 		items = append(items, toResponse(payment))
 	}
 	response.OK(w, items)

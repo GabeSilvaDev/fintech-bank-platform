@@ -239,9 +239,9 @@ func TestGetAndListByAccount(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, account, payment.AccountID)
 
-	list, err := h.service.ListByAccount(context.Background(), account, nil, 10)
+	page, err := h.service.ListByAccount(context.Background(), account, nil, 10)
 	assert.NoError(t, err)
-	assert.Len(t, list, 1)
+	assert.Len(t, page.Items, 1)
 }
 
 func TestSystemClock(t *testing.T) {

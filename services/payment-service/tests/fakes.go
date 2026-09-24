@@ -51,6 +51,7 @@ type FakePaymentRepo struct {
 	Reindexes         int
 	ReindexErr        error
 	OnReindex         func()
+	Invisible         map[uuid.UUID]bool
 }
 
 func NewFakePaymentRepo() *FakePaymentRepo {
@@ -114,11 +115,11 @@ func (f *FakePaymentRepo) Get(_ context.Context, id uuid.UUID) (*models.Payment,
 	return &copied, nil
 }
 
-func (f *FakePaymentRepo) ListByAccount(_ context.Context, accountID uuid.UUID, before *time.Time, limit int) ([]*models.Payment, error) {
+func (f *FakePaymentRepo) ListByAccount(_ context.Context, accountID uuid.UUID, before *time.Time, limit int) (models.Page, error) {
 	if f.Err != nil {
-		return nil, f.Err
+		return models.Page{}, f.Err
 	}
-	result := []*models.Payment{}
+	scanned := []*models.Payment{}
 	for _, payment := range f.Payments {
 		if payment.AccountID != accountID {
 			continue
@@ -127,13 +128,22 @@ func (f *FakePaymentRepo) ListByAccount(_ context.Context, accountID uuid.UUID, 
 			continue
 		}
 		copied := *payment
-		result = append(result, &copied)
+		scanned = append(scanned, &copied)
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt.After(result[j].CreatedAt) })
-	if len(result) > limit {
-		result = result[:limit]
+	sort.Slice(scanned, func(i, j int) bool { return scanned[i].CreatedAt.After(scanned[j].CreatedAt) })
+	if len(scanned) > limit {
+		scanned = scanned[:limit]
 	}
-	return result, nil
+	page := models.Page{Items: make([]*models.Payment, 0, len(scanned)), Scanned: len(scanned)}
+	for _, payment := range scanned {
+		last := payment.CreatedAt
+		page.Last = &last
+		if f.Invisible[payment.ID] {
+			continue
+		}
+		page.Items = append(page.Items, payment)
+	}
+	return page, nil
 }
 
 func (f *FakePaymentRepo) Transition(_ context.Context, id uuid.UUID, from, to models.Status, patch models.Patch) (bool, error) {

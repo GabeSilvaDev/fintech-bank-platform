@@ -100,7 +100,7 @@ func (s *TransactionService) Get(ctx context.Context, id uuid.UUID) (*models.Tra
 	return s.repo.Get(ctx, id)
 }
 
-func (s *TransactionService) ListByAccount(ctx context.Context, accountID uuid.UUID, before *time.Time, limit int) ([]*models.Transaction, error) {
+func (s *TransactionService) ListByAccount(ctx context.Context, accountID uuid.UUID, before *time.Time, limit int) (models.Page, error) {
 	return s.repo.ListByAccount(ctx, accountID, before, limit)
 }
 

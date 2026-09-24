@@ -178,9 +178,9 @@ func TestTransferSagaEndToEnd(t *testing.T) {
 	require.NoError(t, producer.Publish(ctx, commands, from, deposit))
 	awaitEvent(t, ctx, results, events.EventTypes.TransactionCreated, trace+"-deposit")
 
-	list, err := repo.ListByAccount(ctx, uuid.MustParse(from), nil, 10)
+	page, err := repo.ListByAccount(ctx, uuid.MustParse(from), nil, 10)
 	require.NoError(t, err)
-	require.Len(t, list, 2)
+	require.Len(t, page.Items, 2)
 
 	cancel()
 	require.NoError(t, <-done)

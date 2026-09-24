@@ -22,7 +22,7 @@ const (
 
 type TransactionReader interface {
 	Get(ctx context.Context, id uuid.UUID) (*models.Transaction, error)
-	ListByAccount(ctx context.Context, accountID uuid.UUID, before *time.Time, limit int) ([]*models.Transaction, error)
+	ListByAccount(ctx context.Context, accountID uuid.UUID, before *time.Time, limit int) (models.Page, error)
 }
 
 type ReadHandler struct {
@@ -81,16 +81,16 @@ func (h *ReadHandler) ListAccountTransactions(w http.ResponseWriter, r *http.Req
 		response.FromError(w, err)
 		return
 	}
-	txns, err := h.txns.ListByAccount(r.Context(), accountID, before, limit)
+	page, err := h.txns.ListByAccount(r.Context(), accountID, before, limit)
 	if err != nil {
 		response.FromError(w, mapReadError(err))
 		return
 	}
-	if len(txns) == limit {
-		w.Header().Set("X-Next-Before", txns[len(txns)-1].CreatedAt.UTC().Format(time.RFC3339Nano))
+	if page.Scanned == limit && page.Last != nil {
+		w.Header().Set("X-Next-Before", page.Last.UTC().Format(time.RFC3339Nano))
 	}
-	items := make([]transactionResponse, 0, len(txns))
-	for _, tx := range txns {
+	items := make([]transactionResponse, 0, len(page.Items))
+	for _, tx := range page.Items {
 		items = append(items, toListResponse(tx, accountID))
 	}
 	response.OK(w, items)

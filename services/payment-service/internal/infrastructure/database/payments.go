@@ -69,29 +69,33 @@ func (r *PaymentRepository) Get(ctx context.Context, id uuid.UUID) (*models.Paym
 	return scanPayment(r.session.Query("SELECT "+paymentColumns+" FROM payments WHERE payment_id = ?", gocql.UUID(id)).WithContext(ctx))
 }
 
-func (r *PaymentRepository) ListByAccount(ctx context.Context, accountID uuid.UUID, before *time.Time, limit int) ([]*models.Payment, error) {
+func (r *PaymentRepository) ListByAccount(ctx context.Context, accountID uuid.UUID, before *time.Time, limit int) (models.Page, error) {
 	var iter *gocql.Iter
 	if before != nil {
-		iter = r.session.Query("SELECT payment_id FROM payments_by_account WHERE account_id = ? AND created_at < ? LIMIT ?", gocql.UUID(accountID), *before, limit).WithContext(ctx).Iter()
+		iter = r.session.Query("SELECT payment_id, created_at FROM payments_by_account WHERE account_id = ? AND created_at < ? LIMIT ?", gocql.UUID(accountID), *before, limit).WithContext(ctx).Iter()
 	} else {
-		iter = r.session.Query("SELECT payment_id FROM payments_by_account WHERE account_id = ? LIMIT ?", gocql.UUID(accountID), limit).WithContext(ctx).Iter()
+		iter = r.session.Query("SELECT payment_id, created_at FROM payments_by_account WHERE account_id = ? LIMIT ?", gocql.UUID(accountID), limit).WithContext(ctx).Iter()
 	}
 	var ids []gocql.UUID
 	var id gocql.UUID
-	for iter.Scan(&id) {
+	var createdAt time.Time
+	var last *time.Time
+	for iter.Scan(&id, &createdAt) {
 		ids = append(ids, id)
+		value := createdAt
+		last = &value
 	}
 	if err := iter.Close(); err != nil {
-		return nil, err
+		return models.Page{}, err
 	}
 	if len(ids) == 0 {
-		return []*models.Payment{}, nil
+		return models.Page{Items: []*models.Payment{}}, nil
 	}
 
 	byID := make(map[gocql.UUID]*models.Payment, len(ids))
 	for start := 0; start < len(ids); start += paymentIDChunkSize {
 		if err := r.loadChunk(ctx, idChunk(ids, start), byID); err != nil {
-			return nil, err
+			return models.Page{}, err
 		}
 	}
 
@@ -101,7 +105,7 @@ func (r *PaymentRepository) ListByAccount(ctx context.Context, accountID uuid.UU
 			payments = append(payments, payment)
 		}
 	}
-	return payments, nil
+	return models.Page{Items: payments, Scanned: len(ids), Last: last}, nil
 }
 
 func idChunk(ids []gocql.UUID, start int) []gocql.UUID {

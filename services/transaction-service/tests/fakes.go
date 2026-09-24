@@ -49,6 +49,7 @@ type FakeTransactionRepo struct {
 	Reindexes         int
 	ReindexErr        error
 	OnReindex         func()
+	Invisible         map[uuid.UUID]bool
 }
 
 func NewFakeTransactionRepo() *FakeTransactionRepo {
@@ -113,11 +114,11 @@ func (f *FakeTransactionRepo) Get(_ context.Context, id uuid.UUID) (*models.Tran
 	return &copied, nil
 }
 
-func (f *FakeTransactionRepo) ListByAccount(_ context.Context, accountID uuid.UUID, before *time.Time, limit int) ([]*models.Transaction, error) {
+func (f *FakeTransactionRepo) ListByAccount(_ context.Context, accountID uuid.UUID, before *time.Time, limit int) (models.Page, error) {
 	if f.Err != nil {
-		return nil, f.Err
+		return models.Page{}, f.Err
 	}
-	result := []*models.Transaction{}
+	scanned := []*models.Transaction{}
 	for _, tx := range f.Transactions {
 		if tx.AccountID != accountID && (tx.CounterpartyID == nil || *tx.CounterpartyID != accountID) {
 			continue
@@ -126,13 +127,22 @@ func (f *FakeTransactionRepo) ListByAccount(_ context.Context, accountID uuid.UU
 			continue
 		}
 		copied := *tx
-		result = append(result, &copied)
+		scanned = append(scanned, &copied)
 	}
-	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt.After(result[j].CreatedAt) })
-	if len(result) > limit {
-		result = result[:limit]
+	sort.Slice(scanned, func(i, j int) bool { return scanned[i].CreatedAt.After(scanned[j].CreatedAt) })
+	if len(scanned) > limit {
+		scanned = scanned[:limit]
 	}
-	return result, nil
+	page := models.Page{Items: make([]*models.Transaction, 0, len(scanned)), Scanned: len(scanned)}
+	for _, tx := range scanned {
+		last := tx.CreatedAt
+		page.Last = &last
+		if f.Invisible[tx.ID] {
+			continue
+		}
+		page.Items = append(page.Items, tx)
+	}
+	return page, nil
 }
 
 func (f *FakeTransactionRepo) Transition(_ context.Context, id uuid.UUID, from, to models.TransactionStatus, patch models.Patch) (bool, error) {

@@ -68,6 +68,12 @@ type Payment struct {
 	CompletedAt       *time.Time
 }
 
+type Page struct {
+	Items   []*Payment
+	Scanned int
+	Last    *time.Time
+}
+
 type Patch struct {
 	ExternalID        *string
 	FailureReason     *string

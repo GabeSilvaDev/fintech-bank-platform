@@ -52,7 +52,7 @@ func (s *PaymentService) Get(ctx context.Context, id uuid.UUID) (*models.Payment
 	return s.repo.Get(ctx, id)
 }
 
-func (s *PaymentService) ListByAccount(ctx context.Context, accountID uuid.UUID, before *time.Time, limit int) ([]*models.Payment, error) {
+func (s *PaymentService) ListByAccount(ctx context.Context, accountID uuid.UUID, before *time.Time, limit int) (models.Page, error) {
 	return s.repo.ListByAccount(ctx, accountID, before, limit)
 }
 

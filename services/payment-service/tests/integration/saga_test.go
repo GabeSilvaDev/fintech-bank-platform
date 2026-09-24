@@ -275,9 +275,9 @@ func TestPaymentsEndToEnd(t *testing.T) {
 	require.Equal(t, "refunded", field(failed, "status"))
 	require.Equal(t, "pix_key_not_found", field(failed, "reason"))
 
-	list, err := repo.ListByAccount(ctx, uuid.MustParse(account), nil, 10)
+	page, err := repo.ListByAccount(ctx, uuid.MustParse(account), nil, 10)
 	require.NoError(t, err)
-	require.Len(t, list, 2)
+	require.Len(t, page.Items, 2)
 
 	cancel()
 	require.NoError(t, <-done)

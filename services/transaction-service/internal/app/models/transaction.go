@@ -57,6 +57,12 @@ type Transaction struct {
 	CompletedAt      *time.Time
 }
 
+type Page struct {
+	Items   []*Transaction
+	Scanned int
+	Last    *time.Time
+}
+
 type Patch struct {
 	FailureReason    *string
 	FromBalanceCents *int64
