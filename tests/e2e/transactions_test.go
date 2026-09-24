@@ -188,6 +188,23 @@ func TestCentsAddUpExactly(t *testing.T) {
 	require.Equal(t, "0.00", balance(t, accountID))
 }
 
+func TestLargeBalancesStayExact(t *testing.T) {
+	t.Parallel()
+	_, accountID := newCustomer(t, "")
+
+	keys := make([]string, 0, 11)
+	for i := 0; i < 10; i++ {
+		keys = append(keys, movement(t, accountID, "deposit", "9999999999999.99"))
+	}
+	keys = append(keys, movement(t, accountID, "deposit", "0.09"))
+
+	for _, k := range keys {
+		tx := transaction(t, accountID, k)
+		require.Equal(t, "completed", tx["status"], "deposit: %v", tx)
+	}
+	require.Equal(t, "99999999999999.99", balance(t, accountID))
+}
+
 func TestNumericAmountsAreStillAccepted(t *testing.T) {
 	t.Parallel()
 	_, accountID := newCustomer(t, "")
