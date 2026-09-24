@@ -128,7 +128,7 @@ func filteredHandle(prefix string, proc *processor.Processor) messaging.Handler 
 }
 
 func runFilteredConsumer(ctx context.Context, addrs []string, topic, groupID string, handle messaging.Handler, done chan<- error) *messaging.Consumer {
-	consumer := messaging.NewConsumer(messaging.ConsumerConfig{Brokers: addrs, GroupID: groupID, Topic: topic})
+	consumer := messaging.NewConsumer(messaging.ConsumerConfig{Brokers: addrs, GroupID: groupID, Topic: topic, StartOffset: kafka.LastOffset})
 	go func() {
 		done <- consumer.Run(ctx, handle)
 	}()
@@ -182,10 +182,10 @@ func TestNotificationPipelineEndToEnd(t *testing.T) {
 	defer cancel()
 
 	done := make(chan error, 4)
-	accountsConsumer := runFilteredConsumer(ctx, addrs, events.Topics.AccountEvents, "it-notif-accounts-"+uuid.NewString(), filteredHandle(prefix, routingProcessor), done)
-	transactionsConsumer := runFilteredConsumer(ctx, addrs, events.Topics.TransactionEvents, "it-notif-transactions-"+uuid.NewString(), filteredHandle(prefix, routingProcessor), done)
-	paymentsConsumer := runFilteredConsumer(ctx, addrs, events.Topics.PaymentEvents, "it-notif-payments-"+uuid.NewString(), filteredHandle(prefix, routingProcessor), done)
-	deliveryConsumer := runFilteredConsumer(ctx, addrs, events.Topics.NotificationEvents, "it-notif-delivery-"+uuid.NewString(), filteredHandle(prefix, deliveryProcessor), done)
+	accountsConsumer := runFilteredConsumer(ctx, addrs, events.Topics.AccountEvents, groupAtTail(t, addrs, events.Topics.AccountEvents), filteredHandle(prefix, routingProcessor), done)
+	transactionsConsumer := runFilteredConsumer(ctx, addrs, events.Topics.TransactionEvents, groupAtTail(t, addrs, events.Topics.TransactionEvents), filteredHandle(prefix, routingProcessor), done)
+	paymentsConsumer := runFilteredConsumer(ctx, addrs, events.Topics.PaymentEvents, groupAtTail(t, addrs, events.Topics.PaymentEvents), filteredHandle(prefix, routingProcessor), done)
+	deliveryConsumer := runFilteredConsumer(ctx, addrs, events.Topics.NotificationEvents, groupAtTail(t, addrs, events.Topics.NotificationEvents), filteredHandle(prefix, deliveryProcessor), done)
 
 	accountTrace := prefix + "-account"
 	accountCreated := events.NewAccountEvent(events.EventTypes.AccountCreated, events.AccountCreatedPayload{

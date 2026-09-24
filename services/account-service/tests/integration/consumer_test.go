@@ -74,7 +74,7 @@ func TestConsumerAppliesCommandsEndToEnd(t *testing.T) {
 	producer := messaging.NewProducer(messaging.ProducerConfig{Brokers: addrs, WriteTimeout: 10 * time.Second, BatchTimeout: 10 * time.Millisecond, PublishTimeout: 20 * time.Second, MaxAttempts: 5})
 	defer producer.Close()
 
-	results := kafka.NewReader(kafka.ReaderConfig{Brokers: addrs, GroupID: "it-results-" + uuid.NewString(), Topic: events.Topics.AccountEvents, StartOffset: kafka.FirstOffset, MinBytes: 1, MaxBytes: 1 << 20})
+	results := kafka.NewReader(kafka.ReaderConfig{Brokers: addrs, GroupID: groupAtTail(t, addrs, events.Topics.AccountEvents), Topic: events.Topics.AccountEvents, StartOffset: kafka.LastOffset, MinBytes: 1, MaxBytes: 1 << 20})
 	defer results.Close()
 
 	service := services.NewAccountService(database.NewAccountRepository(session), database.NewCustomerRepository(session), database.NewBalanceOperationRepository(session), services.SystemClock{}, services.RandomNumber)

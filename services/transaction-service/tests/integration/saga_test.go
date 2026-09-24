@@ -64,8 +64,8 @@ func ensureTopic(t *testing.T, broker, topic string) {
 	}
 }
 
-func newReader(addrs []string, topic string) *kafka.Reader {
-	return kafka.NewReader(kafka.ReaderConfig{Brokers: addrs, GroupID: "it-" + uuid.NewString(), Topic: topic, StartOffset: kafka.FirstOffset, MinBytes: 1, MaxBytes: 1 << 20})
+func newReader(t *testing.T, addrs []string, topic string) *kafka.Reader {
+	return kafka.NewReader(kafka.ReaderConfig{Brokers: addrs, GroupID: groupAtTail(t, addrs, topic), Topic: topic, StartOffset: kafka.LastOffset, MinBytes: 1, MaxBytes: 1 << 20})
 }
 
 func awaitEvent(t *testing.T, ctx context.Context, reader *kafka.Reader, eventType, trace string) *events.Event {
@@ -114,9 +114,9 @@ func TestTransferSagaEndToEnd(t *testing.T) {
 
 	producer := messaging.NewProducer(messaging.ProducerConfig{Brokers: addrs, WriteTimeout: 10 * time.Second, BatchTimeout: 10 * time.Millisecond, PublishTimeout: 20 * time.Second, MaxAttempts: 5})
 	defer producer.Close()
-	accountCommands := newReader(addrs, events.Topics.AccountCommands)
+	accountCommands := newReader(t, addrs, events.Topics.AccountCommands)
 	defer accountCommands.Close()
-	results := newReader(addrs, events.Topics.TransactionEvents)
+	results := newReader(t, addrs, events.Topics.TransactionEvents)
 	defer results.Close()
 
 	repo := database.NewTransactionRepository(session)

@@ -71,11 +71,11 @@ func ensureTopic(t *testing.T, broker, topic string) {
 	}
 }
 
-func newReader(addrs []string, topic string) *kafka.Reader {
-	return kafka.NewReader(kafka.ReaderConfig{Brokers: addrs, GroupID: "it-" + uuid.NewString(), Topic: topic, StartOffset: kafka.FirstOffset, MinBytes: 1, MaxBytes: 1 << 20})
+func newReader(t *testing.T, addrs []string, topic string) *kafka.Reader {
+	return kafka.NewReader(kafka.ReaderConfig{Brokers: addrs, GroupID: groupAtTail(t, addrs, topic), Topic: topic, StartOffset: kafka.LastOffset, MinBytes: 1, MaxBytes: 1 << 20})
 }
 
-func awaitEvent(t *testing.T, ctx context.Context, reader *kafka.Reader, eventType, trace string) *events.Event {
+func awaitEvent(t *testing.T, ctx context.Context, reader *kafka.Reader, eventType, trace string, filters ...func(*events.Event) bool) *events.Event {
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		readCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -86,12 +86,38 @@ func awaitEvent(t *testing.T, ctx context.Context, reader *kafka.Reader, eventTy
 			continue
 		}
 		event, err := events.FromJSON(msg.Value)
-		if err == nil && event.Type == eventType && event.TraceID == trace {
+		if err == nil && event.Type == eventType && event.TraceID == trace && matches(event, filters) {
 			return event
 		}
 	}
 	t.Fatalf("event %s with trace %s not received", eventType, trace)
 	return nil
+}
+
+func matches(event *events.Event, filters []func(*events.Event) bool) bool {
+	for _, filter := range filters {
+		if !filter(event) {
+			return false
+		}
+	}
+	return true
+}
+
+func withField(name, value string) func(*events.Event) bool {
+	return func(event *events.Event) bool {
+		return field(event, name) == value
+	}
+}
+
+func storedIn(ctx context.Context, repo *database.PaymentRepository) func(*events.Event) bool {
+	return func(event *events.Event) bool {
+		id, err := uuid.Parse(field(event, "payment_id"))
+		if err != nil {
+			return false
+		}
+		_, err = repo.Get(ctx, id)
+		return err == nil
+	}
 }
 
 func field(event *events.Event, name string) string {
@@ -125,9 +151,9 @@ func TestPaymentsEndToEnd(t *testing.T) {
 
 	producer := messaging.NewProducer(messaging.ProducerConfig{Brokers: addrs, WriteTimeout: 10 * time.Second, BatchTimeout: 10 * time.Millisecond, PublishTimeout: 20 * time.Second, MaxAttempts: 5})
 	defer producer.Close()
-	accountCommands := newReader(addrs, events.Topics.AccountCommands)
+	accountCommands := newReader(t, addrs, events.Topics.AccountCommands)
 	defer accountCommands.Close()
-	results := newReader(addrs, events.Topics.PaymentEvents)
+	results := newReader(t, addrs, events.Topics.PaymentEvents)
 	defer results.Close()
 
 	calls := make(chan providerCall, 4)
@@ -159,7 +185,7 @@ func TestPaymentsEndToEnd(t *testing.T) {
 	prefix := "it-" + uuid.NewString()
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
 	defer cancel()
-	commandConsumer := messaging.NewConsumer(messaging.ConsumerConfig{Brokers: addrs, GroupID: "it-payments-" + uuid.NewString(), Topic: events.Topics.PaymentCommands})
+	commandConsumer := messaging.NewConsumer(messaging.ConsumerConfig{Brokers: addrs, GroupID: groupAtTail(t, addrs, events.Topics.PaymentCommands), Topic: events.Topics.PaymentCommands, StartOffset: kafka.LastOffset})
 	replyConsumer := messaging.NewConsumer(messaging.ConsumerConfig{Brokers: addrs, GroupID: "it-replies-" + uuid.NewString(), Topic: replies})
 	done := make(chan error, 2)
 	go func() {
@@ -186,13 +212,13 @@ func TestPaymentsEndToEnd(t *testing.T) {
 	}).WithTraceID(tedTrace)
 	require.NoError(t, producer.Publish(ctx, events.Topics.PaymentCommands, account, ted))
 
-	created := awaitEvent(t, ctx, results, events.EventTypes.PaymentCreated, tedTrace)
+	created := awaitEvent(t, ctx, results, events.EventTypes.PaymentCreated, tedTrace, storedIn(ctx, repo))
 	tedID := uuid.MustParse(field(created, "payment_id"))
-	debit := awaitEvent(t, ctx, accountCommands, events.EventTypes.DebitAccount, tedTrace)
+	debit := awaitEvent(t, ctx, accountCommands, events.EventTypes.DebitAccount, tedTrace, withField("idempotency_key", models.StepKey(tedID, models.StepDebit)))
 	require.Equal(t, models.StepKey(tedID, models.StepDebit), field(debit, "idempotency_key"))
 	require.NoError(t, producer.Publish(ctx, replies, account, answer(debit, events.EventTypes.AccountDebited, 9000)))
 
-	processed := awaitEvent(t, ctx, results, events.EventTypes.PaymentProcessed, tedTrace)
+	processed := awaitEvent(t, ctx, results, events.EventTypes.PaymentProcessed, tedTrace, withField("payment_id", tedID.String()))
 	externalID := field(processed, "external_id")
 	require.True(t, strings.HasPrefix(externalID, "ted_"))
 
@@ -215,7 +241,7 @@ func TestPaymentsEndToEnd(t *testing.T) {
 	require.Equal(t, http.StatusAccepted, resp.StatusCode)
 	resp.Body.Close()
 
-	completed := awaitEvent(t, ctx, results, events.EventTypes.PaymentCompleted, tedTrace+"-settle")
+	completed := awaitEvent(t, ctx, results, events.EventTypes.PaymentCompleted, tedTrace+"-settle", withField("payment_id", tedID.String()))
 	require.Equal(t, externalID, field(completed, "external_id"))
 	stored, err := repo.Get(ctx, tedID)
 	require.NoError(t, err)
@@ -235,14 +261,14 @@ func TestPaymentsEndToEnd(t *testing.T) {
 		AccountID: account, PaymentMethod: "pix", Amount: 20, Currency: "BRL", Recipient: "Ana", PixKey: "reject@reject.test", IdempotencyKey: pixTrace,
 	}).WithTraceID(pixTrace)
 	require.NoError(t, producer.Publish(ctx, events.Topics.PaymentCommands, account, pix))
-	pixID := uuid.MustParse(field(awaitEvent(t, ctx, results, events.EventTypes.PaymentCreated, pixTrace), "payment_id"))
-	pixDebit := awaitEvent(t, ctx, accountCommands, events.EventTypes.DebitAccount, pixTrace)
+	pixID := uuid.MustParse(field(awaitEvent(t, ctx, results, events.EventTypes.PaymentCreated, pixTrace, storedIn(ctx, repo)), "payment_id"))
+	pixDebit := awaitEvent(t, ctx, accountCommands, events.EventTypes.DebitAccount, pixTrace, withField("idempotency_key", models.StepKey(pixID, models.StepDebit)))
 	require.NoError(t, producer.Publish(ctx, replies, account, answer(pixDebit, events.EventTypes.AccountDebited, 8980)))
-	refund := awaitEvent(t, ctx, accountCommands, events.EventTypes.CreditAccount, pixTrace)
+	refund := awaitEvent(t, ctx, accountCommands, events.EventTypes.CreditAccount, pixTrace, withField("idempotency_key", models.StepKey(pixID, models.StepRefund)))
 	require.Equal(t, models.StepKey(pixID, models.StepRefund), field(refund, "idempotency_key"))
 	require.NoError(t, producer.Publish(ctx, replies, account, answer(refund, events.EventTypes.AccountCredited, 9000)))
 
-	failed := awaitEvent(t, ctx, results, events.EventTypes.PaymentFailed, pixTrace)
+	failed := awaitEvent(t, ctx, results, events.EventTypes.PaymentFailed, pixTrace, withField("payment_id", pixID.String()))
 	require.Equal(t, "refunded", field(failed, "status"))
 	require.Equal(t, "pix_key_not_found", field(failed, "reason"))
 
