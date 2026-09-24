@@ -2,6 +2,7 @@ package config
 
 import (
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/fintech-bank-platform/api-gateway/internal/contracts"
@@ -21,7 +22,10 @@ type Config struct {
 	AuthRateLimit contracts.RateLimitConfig
 }
 
-const minJWTSecretBytes = 32
+const (
+	minJWTSecretBytes    = 32
+	DevelopmentJWTSecret = "dev-only-jwt-secret-change-me-0123456789"
+)
 
 var ErrWeakJWTSecret = errors.New("JWT_SECRET must be set to at least 32 bytes")
 
@@ -110,15 +114,16 @@ func loadObservabilityConfig() contracts.ObservabilityConfig {
 }
 
 func loadAuthConfig() (contracts.AuthConfig, error) {
-	secret := env.Get("JWT_SECRET", "")
+	secret := strings.TrimSpace(env.Get("JWT_SECRET", ""))
 	if len(secret) < minJWTSecretBytes {
 		return contracts.AuthConfig{}, ErrWeakJWTSecret
 	}
 
 	return contracts.AuthConfig{
-		JWTSecret:     secret,
-		TokenTTL:      positiveDuration("JWT_TTL", time.Hour),
-		OwnerCacheTTL: positiveDuration("OWNER_CACHE_TTL", time.Minute),
+		JWTSecret:         secret,
+		DevelopmentSecret: secret == DevelopmentJWTSecret,
+		TokenTTL:          positiveDuration("JWT_TTL", time.Hour),
+		OwnerCacheTTL:     positiveDuration("OWNER_CACHE_TTL", time.Minute),
 	}, nil
 }
 

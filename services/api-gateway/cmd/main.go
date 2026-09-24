@@ -21,6 +21,9 @@ func main() {
 	}
 
 	log := logger.New(logger.Config{Level: cfg.Log.Level, Pretty: cfg.Log.Pretty})
+	if cfg.Auth.DevelopmentSecret {
+		log.Warn().Msg("JWT_SECRET is the published development value; set a private secret before exposing the gateway")
+	}
 
 	shutdownTracing, err := tracing.Init(context.Background(), tracing.Config{
 		Service:     "api-gateway",

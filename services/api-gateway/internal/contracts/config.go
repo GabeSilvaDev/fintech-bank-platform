@@ -60,7 +60,8 @@ type ObservabilityConfig struct {
 }
 
 type AuthConfig struct {
-	JWTSecret     string
-	TokenTTL      time.Duration
-	OwnerCacheTTL time.Duration
+	JWTSecret         string
+	DevelopmentSecret bool
+	TokenTTL          time.Duration
+	OwnerCacheTTL     time.Duration
 }

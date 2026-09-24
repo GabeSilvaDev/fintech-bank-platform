@@ -33,6 +33,40 @@ func TestConfigRefusesAShortJWTSecret(t *testing.T) {
 	}
 }
 
+func TestConfigMeasuresTheJWTSecretWithoutSurroundingWhitespace(t *testing.T) {
+	for _, secret := range []string{strings.Repeat(" ", 40), " \t" + strings.Repeat("s", 31) + "\n  "} {
+		t.Setenv("JWT_SECRET", secret)
+
+		cfg, err := config.New()
+
+		assert.ErrorIs(t, err, config.ErrWeakJWTSecret, secret)
+		assert.Nil(t, cfg)
+	}
+}
+
+func TestConfigTrimsTheJWTSecret(t *testing.T) {
+	secret := strings.Repeat("s", 32)
+	t.Setenv("JWT_SECRET", "  "+secret+"\n")
+
+	cfg, err := config.New()
+
+	require.NoError(t, err)
+	assert.Equal(t, secret, cfg.Auth.JWTSecret)
+	assert.False(t, cfg.Auth.DevelopmentSecret)
+}
+
+func TestConfigFlagsThePublishedDevelopmentSecret(t *testing.T) {
+	for _, secret := range []string{config.DevelopmentJWTSecret, " " + config.DevelopmentJWTSecret + "\n"} {
+		t.Setenv("JWT_SECRET", secret)
+
+		cfg, err := config.New()
+
+		require.NoError(t, err)
+		assert.True(t, cfg.Auth.DevelopmentSecret, secret)
+		assert.Equal(t, "dev-only-jwt-secret-change-me-0123456789", cfg.Auth.JWTSecret)
+	}
+}
+
 func TestConfigAcceptsAJWTSecretOfThirtyTwoBytes(t *testing.T) {
 	secret := strings.Repeat("s", 32)
 	t.Setenv("JWT_SECRET", secret)
@@ -48,6 +82,7 @@ func TestConfigAuthDefaults(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, tests.JWTSecret, cfg.Auth.JWTSecret)
+	assert.False(t, cfg.Auth.DevelopmentSecret)
 	assert.Equal(t, time.Hour, cfg.Auth.TokenTTL)
 	assert.Equal(t, time.Minute, cfg.Auth.OwnerCacheTTL)
 	assert.Equal(t, 10, cfg.AuthRateLimit.Requests)
