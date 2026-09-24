@@ -159,9 +159,6 @@ func RunWithRestart(ctx context.Context, newConsumer func() *Consumer, handle Ha
 }
 
 func restartDelay(backoff []time.Duration, attempt int) time.Duration {
-	if len(backoff) == 0 {
-		return 0
-	}
 	return backoff[min(attempt, len(backoff)-1)]
 }
 

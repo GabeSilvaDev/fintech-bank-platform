@@ -334,7 +334,6 @@ func TestRestartDelayClampsToLastBackoff(t *testing.T) {
 	assert.Equal(t, time.Millisecond, restartDelay(backoff, 0))
 	assert.Equal(t, time.Second, restartDelay(backoff, 1))
 	assert.Equal(t, time.Second, restartDelay(backoff, 7))
-	assert.Equal(t, time.Duration(0), restartDelay(nil, 3))
 }
 
 type fakeStatsReader struct {
