@@ -12,6 +12,7 @@ import (
 
 	"github.com/fintech-bank-platform/notification-service/internal/app/models"
 	"github.com/fintech-bank-platform/pkg/domain"
+	"github.com/fintech-bank-platform/pkg/tracing"
 	"github.com/google/uuid"
 )
 
@@ -30,7 +31,7 @@ type Client struct {
 }
 
 func NewClient(baseURL string, timeout, ttl time.Duration) *Client {
-	return &Client{baseURL: strings.TrimSuffix(baseURL, "/"), http: &http.Client{Timeout: timeout}, ttl: ttl, now: time.Now, cache: map[uuid.UUID]entry{}}
+	return &Client{baseURL: strings.TrimSuffix(baseURL, "/"), http: &http.Client{Timeout: timeout, Transport: tracing.Transport(nil)}, ttl: ttl, now: time.Now, cache: map[uuid.UUID]entry{}}
 }
 
 func (c *Client) WithClock(now func() time.Time) *Client {

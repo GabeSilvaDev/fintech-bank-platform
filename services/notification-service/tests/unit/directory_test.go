@@ -11,8 +11,13 @@ import (
 
 	"github.com/fintech-bank-platform/notification-service/internal/infrastructure/directory"
 	"github.com/fintech-bank-platform/pkg/domain"
+	"github.com/fintech-bank-platform/pkg/tracing"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 )
 
 func TestDirectoryLookupCachesUntilTTLExpires(t *testing.T) {
@@ -142,4 +147,36 @@ func TestDirectoryLookupRejectsOversizedBodies(t *testing.T) {
 	client := directory.NewClient(server.URL, time.Second, time.Minute)
 	_, err := client.Lookup(context.Background(), accountID)
 	assert.Error(t, err)
+}
+
+func TestDirectoryLookupPropagatesTraceContext(t *testing.T) {
+	previousProvider := otel.GetTracerProvider()
+	previousPropagator := otel.GetTextMapPropagator()
+	provider := sdktrace.NewTracerProvider()
+	otel.SetTracerProvider(provider)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() {
+		_ = provider.Shutdown(context.Background())
+		otel.SetTracerProvider(previousProvider)
+		otel.SetTextMapPropagator(previousPropagator)
+	})
+
+	accountID := uuid.New()
+	var gotTraceParent string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotTraceParent = r.Header.Get("traceparent")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"data": map[string]string{"account_id": accountID.String(), "user_id": uuid.NewString()},
+		})
+	}))
+	defer server.Close()
+
+	ctx, span := tracing.Tracer().Start(context.Background(), "route notification")
+	defer span.End()
+
+	_, err := directory.NewClient(server.URL, time.Second, time.Minute).Lookup(ctx, accountID)
+
+	require.NoError(t, err)
+	require.NotEmpty(t, gotTraceParent)
+	assert.Contains(t, gotTraceParent, span.SpanContext().TraceID().String())
 }
