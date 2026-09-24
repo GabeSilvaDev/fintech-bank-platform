@@ -25,7 +25,8 @@ const (
 
 	DefaultLoginMaxFailures   = 5
 	DefaultLoginLockoutWindow = 15 * time.Minute
-	failureWriteAttempts      = 3
+	reserveAttempts           = 5
+	failureWriteTimeout       = 5 * time.Second
 )
 
 var (
@@ -137,21 +138,19 @@ func (s *IdentityService) Verify(ctx context.Context, email, password string) (u
 	if email == "" {
 		return s.reject(ctx, password)
 	}
-	current := s.loadFailures(ctx, email)
-	if retryAfter, locked := s.lockedFor(current); locked {
-		if _, err := s.matches(ctx, s.dummyHash, password); err != nil {
-			return uuid.Nil, err
-		}
-		return uuid.Nil, &ErrTooManyAttempts{RetryAfter: retryAfter}
+	reservation, err := s.reserve(ctx, email)
+	if err != nil {
+		return uuid.Nil, err
 	}
 
 	userID, err := s.verify(ctx, email, password)
-	detached := context.WithoutCancel(ctx)
+	detached, cancel := context.WithTimeout(context.WithoutCancel(ctx), failureWriteTimeout)
+	defer cancel()
 	switch {
-	case err == nil && current != nil:
+	case err == nil:
 		_ = s.failures.Clear(detached, email)
-	case errors.Is(err, ErrInvalidCredentials):
-		s.recordFailure(detached, email, current)
+	case !errors.Is(err, ErrInvalidCredentials):
+		s.release(detached, reservation)
 	}
 	return userID, err
 }
@@ -177,47 +176,74 @@ func (s *IdentityService) verify(ctx context.Context, email, password string) (u
 	return identity.UserID, nil
 }
 
-func (s *IdentityService) loadFailures(ctx context.Context, email string) *models.LoginFailure {
-	current, err := s.failures.Get(ctx, email)
-	if err != nil {
-		return nil
-	}
-	return current
-}
-
-func (s *IdentityService) lockedFor(current *models.LoginFailure) (time.Duration, bool) {
-	if current == nil || current.Failures < s.maxFailures {
-		return 0, false
-	}
-	remaining := current.FirstFailure.Add(s.window).Sub(s.clock.Now())
-	if remaining <= 0 {
-		return 0, false
-	}
-	return (remaining + time.Second - 1) / time.Second * time.Second, true
-}
-
-func (s *IdentityService) recordFailure(ctx context.Context, email string, current *models.LoginFailure) {
-	for attempt := 0; attempt < failureWriteAttempts; attempt++ {
-		if attempt > 0 {
-			current = s.loadFailures(ctx, email)
+func (s *IdentityService) reserve(ctx context.Context, email string) (*models.LoginFailure, error) {
+	for attempt := 0; attempt < reserveAttempts; attempt++ {
+		current, err := s.failures.Get(ctx, email)
+		if errors.Is(err, domain.ErrNotFound) {
+			current, err = nil, nil
 		}
-		applied, err := s.writeFailure(ctx, email, current)
+		if err != nil {
+			return nil, ErrBusy
+		}
+		now := s.clock.Now()
+		if current != nil && current.Failures >= s.maxFailures && now.Before(current.FirstFailure.Add(s.window)) {
+			return nil, &ErrTooManyAttempts{RetryAfter: ceilSeconds(current.FirstFailure.Add(s.window).Sub(now))}
+		}
+		next, applied, err := s.increment(ctx, email, current, now)
+		if errors.Is(err, domain.ErrAmbiguousWrite) {
+			break
+		}
+		if err != nil {
+			return nil, ErrBusy
+		}
+		if applied {
+			return next, nil
+		}
+	}
+	return nil, &ErrTooManyAttempts{RetryAfter: time.Second}
+}
+
+func (s *IdentityService) increment(ctx context.Context, email string, current *models.LoginFailure, now time.Time) (*models.LoginFailure, bool, error) {
+	if current == nil {
+		next := &models.LoginFailure{Email: email, Failures: 1, FirstFailure: now}
+		applied, err := s.failures.Create(ctx, next, s.window)
+		return next, applied, err
+	}
+	windowEnd := current.FirstFailure.Add(s.window)
+	if !now.Before(windowEnd) {
+		next := &models.LoginFailure{Email: email, Failures: 1, FirstFailure: now}
+		applied, err := s.failures.Replace(ctx, current, next, s.window)
+		return next, applied, err
+	}
+	next := &models.LoginFailure{Email: email, Failures: current.Failures + 1, FirstFailure: current.FirstFailure}
+	applied, err := s.failures.Replace(ctx, current, next, windowEnd.Sub(now))
+	return next, applied, err
+}
+
+func (s *IdentityService) release(ctx context.Context, reservation *models.LoginFailure) {
+	current := reservation
+	for attempt := 0; attempt < reserveAttempts; attempt++ {
+		if attempt > 0 {
+			stored, err := s.failures.Get(ctx, reservation.Email)
+			if err != nil {
+				return
+			}
+			current = stored
+		}
+		remaining := current.FirstFailure.Add(s.window).Sub(s.clock.Now())
+		if current.Failures < 1 || !current.FirstFailure.Equal(reservation.FirstFailure) || remaining <= 0 {
+			return
+		}
+		next := &models.LoginFailure{Email: current.Email, Failures: current.Failures - 1, FirstFailure: current.FirstFailure}
+		applied, err := s.failures.Replace(ctx, current, next, remaining)
 		if err != nil || applied {
 			return
 		}
 	}
 }
 
-func (s *IdentityService) writeFailure(ctx context.Context, email string, current *models.LoginFailure) (bool, error) {
-	now := s.clock.Now()
-	if current == nil {
-		return s.failures.Create(ctx, &models.LoginFailure{Email: email, Failures: 1, FirstFailure: now}, s.window)
-	}
-	windowEnd := current.FirstFailure.Add(s.window)
-	if !now.Before(windowEnd) {
-		return s.failures.Replace(ctx, current, &models.LoginFailure{Email: email, Failures: 1, FirstFailure: now}, s.window)
-	}
-	return s.failures.Replace(ctx, current, &models.LoginFailure{Email: email, Failures: current.Failures + 1, FirstFailure: current.FirstFailure}, windowEnd.Sub(now))
+func ceilSeconds(d time.Duration) time.Duration {
+	return (d + time.Second - 1) / time.Second * time.Second
 }
 
 func (s *IdentityService) reject(ctx context.Context, password string) (uuid.UUID, error) {

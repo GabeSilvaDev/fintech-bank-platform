@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -183,4 +184,67 @@ func TestIdentityLockoutAgainstCassandra(t *testing.T) {
 	require.Equal(t, userID, verified)
 	_, err = failures.Get(ctx, email)
 	require.ErrorIs(t, err, domain.ErrNotFound)
+}
+
+type countingHasher struct {
+	compares atomic.Int32
+}
+
+func (h *countingHasher) Hash(password string) (string, error) {
+	return "hashed:" + password, nil
+}
+
+func (h *countingHasher) Compare(hash, password string) error {
+	h.compares.Add(1)
+	if hash != "hashed:"+password {
+		return errors.New("mismatch")
+	}
+	return nil
+}
+
+func TestConcurrentWrongPasswordsAreBoundedStrictlyAgainstCassandra(t *testing.T) {
+	session, _ := throwawayKeyspace(t)
+	hasher := &countingHasher{}
+	service, err := services.NewIdentityService(database.NewIdentityRepository(session), database.NewLoginFailureRepository(session), hasher, services.SystemClock{}, contracts.LockoutConfig{MaxFailures: 5, Window: time.Hour})
+	require.NoError(t, err)
+	service.WithHashConcurrency(32, 10*time.Second)
+	ctx := context.Background()
+	email := uuid.NewString() + "@example.com"
+	_, err = service.Register(ctx, email, "correct horse")
+	require.NoError(t, err)
+
+	var (
+		wg      sync.WaitGroup
+		invalid atomic.Int32
+		locked  atomic.Int32
+	)
+	start := make(chan struct{})
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := service.Verify(ctx, email, "wrong horse")
+			var tooMany *services.ErrTooManyAttempts
+			switch {
+			case errors.Is(err, services.ErrInvalidCredentials):
+				invalid.Add(1)
+			case errors.As(err, &tooMany):
+				locked.Add(1)
+			default:
+				t.Errorf("unexpected error %v", err)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	require.Equal(t, int32(5), invalid.Load())
+	require.Equal(t, int32(15), locked.Load())
+	require.Equal(t, int32(5), hasher.compares.Load())
+
+	_, err = service.Verify(ctx, email, "correct horse")
+	var tooMany *services.ErrTooManyAttempts
+	require.ErrorAs(t, err, &tooMany)
+	require.Equal(t, int32(5), hasher.compares.Load())
 }

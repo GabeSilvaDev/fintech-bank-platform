@@ -162,24 +162,81 @@ func TestIdentityServiceDefaultHashingCapacity(t *testing.T) {
 	assert.Equal(t, 2*time.Second, services.HashWait)
 }
 
-func TestIdentityServiceDoesNotCountBusyVerifications(t *testing.T) {
+func TestIdentityServiceReleasesTheReservationWhenBusy(t *testing.T) {
 	hasher := &gatedHasher{}
 	repo := tests.NewFakeIdentityRepo()
 	failures := tests.NewFakeLoginFailureRepo()
-	service, err := services.NewIdentityService(repo, failures, hasher, tests.FakeClock{T: now}, contracts.LockoutConfig{MaxFailures: 1, Window: time.Minute})
+	service, err := services.NewIdentityService(repo, failures, hasher, tests.FakeClock{T: now}, contracts.LockoutConfig{MaxFailures: 2, Window: time.Minute})
 	require.NoError(t, err)
 	service.WithHashConcurrency(1, 20*time.Millisecond)
 	repo.Identities["ana@example.com"] = &models.Identity{Email: "ana@example.com", UserID: uuid.New(), PasswordHash: "hashed:correct horse"}
-	failures.Rows["locked@example.com"] = models.LoginFailure{Email: "locked@example.com", Failures: 1, FirstFailure: now}
+	failures.Rows["ana@example.com"] = models.LoginFailure{Email: "ana@example.com", Failures: 1, FirstFailure: now}
+	failures.Rows["locked@example.com"] = models.LoginFailure{Email: "locked@example.com", Failures: 2, FirstFailure: now}
 	done := occupy(t, service, hasher)
+	before := hasher.count()
 
-	for _, email := range []string{"ana@example.com", "ghost@example.com", "not-an-email", "locked@example.com"} {
+	for _, email := range []string{"ana@example.com", "ghost@example.com", "not-an-email"} {
 		_, err := service.Verify(context.Background(), email, "wrong horse")
 		assert.ErrorIs(t, err, services.ErrBusy, email)
 	}
+	_, err = service.Verify(context.Background(), "locked@example.com", "wrong horse")
+	var locked *services.ErrTooManyAttempts
+	assert.ErrorAs(t, err, &locked)
 
-	assert.Empty(t, failures.Writes)
-	assert.Empty(t, failures.Cleared)
+	for email, want := range map[string]int{"ana@example.com": 1, "ghost@example.com": 0, "not-an-email": 0, "locked@example.com": 2} {
+		row, _ := failures.Row(email)
+		assert.Equal(t, want, row.Failures, email)
+	}
+	assert.Equal(t, before, hasher.count())
 	hasher.open()
 	require.NoError(t, <-done)
+}
+
+func TestIdentityServiceBoundsConcurrentWrongAttemptsStrictly(t *testing.T) {
+	hasher := &gatedHasher{}
+	repo := tests.NewFakeIdentityRepo()
+	failures := tests.NewFakeLoginFailureRepo()
+	service, err := services.NewIdentityService(repo, failures, hasher, tests.FakeClock{T: now}, contracts.LockoutConfig{MaxFailures: 5, Window: time.Minute})
+	require.NoError(t, err)
+	service.WithHashConcurrency(32, 5*time.Second)
+	repo.Identities["ana@example.com"] = &models.Identity{Email: "ana@example.com", UserID: uuid.New(), PasswordHash: "hashed:correct horse"}
+	before := hasher.count()
+
+	var (
+		wg      sync.WaitGroup
+		mu      sync.Mutex
+		invalid int
+		locked  int
+	)
+	start := make(chan struct{})
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := service.Verify(context.Background(), "ana@example.com", "wrong horse")
+			var tooMany *services.ErrTooManyAttempts
+			mu.Lock()
+			defer mu.Unlock()
+			switch {
+			case errors.Is(err, services.ErrInvalidCredentials):
+				invalid++
+			case errors.As(err, &tooMany):
+				locked++
+			default:
+				t.Errorf("unexpected error %v", err)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	assert.Equal(t, 5, invalid)
+	assert.Equal(t, 15, locked)
+	assert.Equal(t, 5, hasher.count()-before)
+	row, _ := failures.Row("ana@example.com")
+	assert.Equal(t, 5, row.Failures)
+	_, err = service.Verify(context.Background(), "ana@example.com", "correct horse")
+	var tooMany *services.ErrTooManyAttempts
+	assert.ErrorAs(t, err, &tooMany)
 }

@@ -165,7 +165,8 @@ func (s *IdentitiesAPISuite) TestBusyHashingAsksClientsToRetryAfterOneSecond() {
 		AssertErrorCode("SERVICE_BUSY").
 		AssertHeader("Retry-After", "1")
 	s.register("second@example.com", "correct horse").AssertStatus(503).AssertHeader("Retry-After", "1")
-	s.Empty(s.Failures.Writes)
+	released, _ := s.Failures.Row("ana@example.com")
+	s.Equal(0, released.Failures)
 
 	close(release)
 	(<-done).AssertCreated()

@@ -11,6 +11,7 @@ import (
 	"github.com/fintech-bank-platform/account-service/internal/app/services"
 	"github.com/fintech-bank-platform/account-service/internal/contracts"
 	"github.com/fintech-bank-platform/account-service/tests"
+	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,8 +34,19 @@ func (h *identityHarness) fail(t *testing.T, email string, times int) {
 	}
 }
 
-func (h *identityHarness) dummyHash() string {
-	return "hashed:" + h.hasher.Hashed[0]
+func (h *identityHarness) failureCount(email string) int {
+	row, _ := h.failures.Row(email)
+	return row.Failures
+}
+
+func (h *identityHarness) onWrite(n int, change func(rows map[string]models.LoginFailure)) {
+	writes := 0
+	h.failures.BeforeWrite = func(rows map[string]models.LoginFailure) {
+		writes++
+		if writes == n {
+			change(rows)
+		}
+	}
 }
 
 func tooManyAttempts(t *testing.T, err error) time.Duration {
@@ -44,42 +56,39 @@ func tooManyAttempts(t *testing.T, err error) time.Duration {
 	return locked.RetryAfter
 }
 
+func bump(email string) func(rows map[string]models.LoginFailure) {
+	return func(rows map[string]models.LoginFailure) {
+		row := rows[email]
+		row.Failures++
+		rows[email] = row
+	}
+}
+
 func TestLockoutDefaultsToFiveFailuresInFifteenMinutes(t *testing.T) {
 	h := newIdentityHarness(t)
 	h.known(t, "ana@example.com", "correct horse")
 
-	h.fail(t, "ana@example.com", 4)
-	_, err := h.service.Verify(context.Background(), "ana@example.com", "wrong horse")
-	require.ErrorIs(t, err, services.ErrInvalidCredentials)
+	h.fail(t, "ana@example.com", 5)
+	_, err := h.service.Verify(context.Background(), "ana@example.com", "correct horse")
 
-	_, err = h.service.Verify(context.Background(), "ana@example.com", "correct horse")
 	assert.Equal(t, 15*time.Minute, tooManyAttempts(t, err))
 	assert.Equal(t, 15*time.Minute, h.failures.Writes[0].TTL)
-	assert.Equal(t, services.DefaultLoginMaxFailures, 5)
-	assert.Equal(t, services.DefaultLoginLockoutWindow, 15*time.Minute)
+	assert.Equal(t, 5, services.DefaultLoginMaxFailures)
+	assert.Equal(t, 15*time.Minute, services.DefaultLoginLockoutWindow)
 }
 
-func TestLockoutStartsExactlyAtTheMaximum(t *testing.T) {
+func TestLockoutReservesTheAttemptBeforeComparing(t *testing.T) {
 	h := newLockoutHarness(t, lockout)
 	h.known(t, "ana@example.com", "correct horse")
+	h.hasher.Comparisons = nil
+	h.failures.BeforeWrite = func(map[string]models.LoginFailure) {
+		assert.Empty(t, h.hasher.Comparisons)
+	}
 
-	h.fail(t, "ana@example.com", 2)
-	_, err := h.service.Verify(context.Background(), "ana@example.com", "wrong horse")
-	require.ErrorIs(t, err, services.ErrInvalidCredentials)
-	row, _ := h.failures.Row("ana@example.com")
-	assert.Equal(t, 3, row.Failures)
+	h.fail(t, "ana@example.com", 1)
 
-	_, err = h.service.Verify(context.Background(), "ana@example.com", "wrong horse")
-	assert.Equal(t, 10*time.Minute, tooManyAttempts(t, err))
-	row, _ = h.failures.Row("ana@example.com")
-	assert.Equal(t, 3, row.Failures)
-
-	other := newLockoutHarness(t, lockout)
-	otherID := other.known(t, "ana@example.com", "correct horse")
-	other.fail(t, "ana@example.com", 2)
-	verified, err := other.service.Verify(context.Background(), "ana@example.com", "correct horse")
-	require.NoError(t, err)
-	assert.Equal(t, otherID, verified)
+	require.Len(t, h.failures.Writes, 1)
+	assert.Len(t, h.hasher.Comparisons, 1)
 }
 
 func TestLockoutRecordsTheFirstFailureAndIncrementsWithinTheWindow(t *testing.T) {
@@ -104,7 +113,28 @@ func TestLockoutRecordsTheFirstFailureAndIncrementsWithinTheWindow(t *testing.T)
 	assert.Equal(t, 10*time.Minute-90*time.Second-500*time.Millisecond, second.TTL)
 }
 
-func TestLockoutRejectsTheRightPasswordWithoutLookingItUp(t *testing.T) {
+func TestLockoutAllowsExactlyTheMaximumOfWrongAttempts(t *testing.T) {
+	h := newLockoutHarness(t, lockout)
+	h.known(t, "ana@example.com", "correct horse")
+
+	h.fail(t, "ana@example.com", 3)
+	assert.Len(t, h.hasher.Comparisons, 3)
+	_, err := h.service.Verify(context.Background(), "ana@example.com", "wrong horse")
+
+	assert.Equal(t, 10*time.Minute, tooManyAttempts(t, err))
+	assert.Len(t, h.hasher.Comparisons, 3)
+	assert.Equal(t, 3, h.failureCount("ana@example.com"))
+	assert.Len(t, h.failures.Writes, 3)
+
+	other := newLockoutHarness(t, lockout)
+	otherID := other.known(t, "ana@example.com", "correct horse")
+	other.fail(t, "ana@example.com", 2)
+	verified, err := other.service.Verify(context.Background(), "ana@example.com", "correct horse")
+	require.NoError(t, err)
+	assert.Equal(t, otherID, verified)
+}
+
+func TestLockoutRejectsTheRightPasswordWithoutComparingOrLookingItUp(t *testing.T) {
 	h := newLockoutHarness(t, lockout)
 	h.known(t, "ana@example.com", "correct horse")
 	h.fail(t, "ana@example.com", 3)
@@ -116,7 +146,7 @@ func TestLockoutRejectsTheRightPasswordWithoutLookingItUp(t *testing.T) {
 
 	tooManyAttempts(t, err)
 	assert.Equal(t, uuid.Nil, verified)
-	assert.Equal(t, []tests.Comparison{{Hash: h.dummyHash(), Password: "correct horse"}}, h.hasher.Comparisons)
+	assert.Empty(t, h.hasher.Comparisons)
 	assert.Len(t, h.failures.Writes, writes)
 	assert.Empty(t, h.failures.Cleared)
 }
@@ -128,9 +158,7 @@ func TestLockoutCountsUnknownEmailsAndLocksThemTheSameWay(t *testing.T) {
 
 	known.fail(t, "ana@example.com", 3)
 	unknown.fail(t, "ghost@example.com", 3)
-	row, ok := unknown.failures.Row("ghost@example.com")
-	require.True(t, ok)
-	assert.Equal(t, 3, row.Failures)
+	assert.Equal(t, 3, unknown.failureCount("ghost@example.com"))
 
 	known.hasher.Comparisons = nil
 	unknown.hasher.Comparisons = nil
@@ -139,8 +167,8 @@ func TestLockoutCountsUnknownEmailsAndLocksThemTheSameWay(t *testing.T) {
 
 	assert.Equal(t, tooManyAttempts(t, knownErr), tooManyAttempts(t, unknownErr))
 	assert.Equal(t, knownErr.Error(), unknownErr.Error())
-	assert.Equal(t, []tests.Comparison{{Hash: known.dummyHash(), Password: "correct horse"}}, known.hasher.Comparisons)
-	assert.Equal(t, []tests.Comparison{{Hash: unknown.dummyHash(), Password: "correct horse"}}, unknown.hasher.Comparisons)
+	assert.Empty(t, known.hasher.Comparisons)
+	assert.Empty(t, unknown.hasher.Comparisons)
 	assert.Equal(t, known.failures.GetCalls, unknown.failures.GetCalls)
 }
 
@@ -154,9 +182,7 @@ func TestLockoutCountsUnusableEmailsUnderTheirNormalisedForm(t *testing.T) {
 	_, err := h.service.Verify(context.Background(), "not-an-email", "correct horse")
 
 	tooManyAttempts(t, err)
-	row, ok := h.failures.Row("not-an-email")
-	require.True(t, ok)
-	assert.Equal(t, 3, row.Failures)
+	assert.Equal(t, 3, h.failureCount("not-an-email"))
 }
 
 func TestLockoutSkipsEmptyEmails(t *testing.T) {
@@ -181,8 +207,7 @@ func TestLockoutCountsPasswordsBeyondTheBcryptLimit(t *testing.T) {
 	_, err := h.service.Verify(context.Background(), "ana@example.com", long)
 
 	require.ErrorIs(t, err, services.ErrInvalidCredentials)
-	row, _ := h.failures.Row("ana@example.com")
-	assert.Equal(t, 1, row.Failures)
+	assert.Equal(t, 1, h.failureCount("ana@example.com"))
 }
 
 func TestLockoutEndsWithTheWindow(t *testing.T) {
@@ -198,6 +223,8 @@ func TestLockoutEndsWithTheWindow(t *testing.T) {
 	verified, err := h.service.Verify(context.Background(), "ana@example.com", "correct horse")
 	require.NoError(t, err)
 	assert.Equal(t, userID, verified)
+	_, recorded := h.failures.Row("ana@example.com")
+	assert.False(t, recorded)
 }
 
 func TestLockoutRestartsTheCountOnceTheWindowHasEnded(t *testing.T) {
@@ -216,8 +243,7 @@ func TestLockoutRestartsTheCountOnceTheWindowHasEnded(t *testing.T) {
 	assert.Equal(t, models.LoginFailure{Email: "ana@example.com", Failures: 1, FirstFailure: later}, last.Next)
 	assert.Equal(t, 10*time.Minute, last.TTL)
 	h.fail(t, "ana@example.com", 1)
-	row, _ := h.failures.Row("ana@example.com")
-	assert.Equal(t, 2, row.Failures)
+	assert.Equal(t, 2, h.failureCount("ana@example.com"))
 }
 
 func TestLockoutRoundsRetryAfterUpToWholeSeconds(t *testing.T) {
@@ -240,7 +266,7 @@ func TestLockoutRoundsRetryAfterUpToWholeSeconds(t *testing.T) {
 	}
 }
 
-func TestLockoutResetsAfterASuccessfulLogin(t *testing.T) {
+func TestLockoutClearsTheCountAfterASuccessfulLogin(t *testing.T) {
 	h := newLockoutHarness(t, lockout)
 	userID := h.known(t, "ana@example.com", "correct horse")
 	h.fail(t, "ana@example.com", 2)
@@ -252,75 +278,90 @@ func TestLockoutResetsAfterASuccessfulLogin(t *testing.T) {
 	assert.Equal(t, []string{"ana@example.com"}, h.failures.Cleared)
 	_, ok := h.failures.Row("ana@example.com")
 	assert.False(t, ok)
-	h.fail(t, "ana@example.com", 2)
+	h.fail(t, "ana@example.com", 3)
 	_, err = h.service.Verify(context.Background(), "ana@example.com", "correct horse")
-	assert.NoError(t, err)
+	tooManyAttempts(t, err)
 }
 
-func TestLockoutDoesNotClearWhenNothingWasRecorded(t *testing.T) {
+func TestLockoutClearsFailuresRecordedConcurrentlyWithASuccess(t *testing.T) {
 	h := newLockoutHarness(t, lockout)
 	h.known(t, "ana@example.com", "correct horse")
+	h.onWrite(1, func(rows map[string]models.LoginFailure) {
+		rows["ana@example.com"] = models.LoginFailure{Email: "ana@example.com", Failures: 2, FirstFailure: now}
+	})
 
 	_, err := h.service.Verify(context.Background(), "ana@example.com", "correct horse")
 
 	require.NoError(t, err)
-	assert.Empty(t, h.failures.Cleared)
+	_, ok := h.failures.Row("ana@example.com")
+	assert.False(t, ok)
 }
 
-func TestLockoutIgnoresFailureStoreErrors(t *testing.T) {
+func TestLockoutFailsClosedWhenTheFailureStoreFails(t *testing.T) {
 	storeErr := errors.New("cassandra down")
-	for name, broken := range map[string]func(*tests.FakeLoginFailureRepo){
-		"get":     func(f *tests.FakeLoginFailureRepo) { f.GetErr = storeErr },
-		"create":  func(f *tests.FakeLoginFailureRepo) { f.CreateErr = storeErr },
-		"replace": func(f *tests.FakeLoginFailureRepo) { f.ReplaceErr = storeErr },
-		"clear":   func(f *tests.FakeLoginFailureRepo) { f.ClearErr = storeErr },
+	for name, tc := range map[string]struct {
+		seeded bool
+		broken func(*tests.FakeLoginFailureRepo)
+	}{
+		"get":     {seeded: true, broken: func(f *tests.FakeLoginFailureRepo) { f.GetErr = storeErr }},
+		"create":  {seeded: false, broken: func(f *tests.FakeLoginFailureRepo) { f.CreateErr = storeErr }},
+		"replace": {seeded: true, broken: func(f *tests.FakeLoginFailureRepo) { f.ReplaceErr = storeErr }},
 	} {
 		h := newLockoutHarness(t, lockout)
-		userID := h.known(t, "ana@example.com", "correct horse")
-		h.fail(t, "ana@example.com", 1)
-		broken(h.failures)
-
-		_, err := h.service.Verify(context.Background(), "ana@example.com", "wrong horse")
-		assert.ErrorIs(t, err, services.ErrInvalidCredentials, name)
-		_, err = h.service.Verify(context.Background(), "ghost@example.com", "wrong horse")
-		assert.ErrorIs(t, err, services.ErrInvalidCredentials, name)
+		h.known(t, "ana@example.com", "correct horse")
+		if tc.seeded {
+			h.failures.Rows["ana@example.com"] = models.LoginFailure{Email: "ana@example.com", Failures: 1, FirstFailure: now}
+		}
+		tc.broken(h.failures)
 
 		verified, err := h.service.Verify(context.Background(), "ana@example.com", "correct horse")
-		assert.NoError(t, err, name)
-		assert.Equal(t, userID, verified, name)
+
+		assert.ErrorIs(t, err, services.ErrBusy, name)
+		assert.Equal(t, uuid.Nil, verified, name)
+		assert.Empty(t, h.hasher.Comparisons, name)
 	}
+}
+
+func TestLockoutTreatsAmbiguousWritesAsContention(t *testing.T) {
+	h := newLockoutHarness(t, lockout)
+	h.failures.CreateErr = domain.ErrAmbiguousWrite
+
+	_, err := h.service.Verify(context.Background(), "ghost@example.com", "correct horse")
+
+	assert.Equal(t, time.Second, tooManyAttempts(t, err))
+	assert.Empty(t, h.hasher.Comparisons)
+}
+
+func TestLockoutIgnoresAFailedClear(t *testing.T) {
+	h := newLockoutHarness(t, lockout)
+	userID := h.known(t, "ana@example.com", "correct horse")
+	h.failures.ClearErr = errors.New("cassandra down")
+
+	verified, err := h.service.Verify(context.Background(), "ana@example.com", "correct horse")
+
+	require.NoError(t, err)
+	assert.Equal(t, userID, verified)
 }
 
 func TestLockoutRetriesALostRace(t *testing.T) {
 	h := newLockoutHarness(t, lockout)
 	h.known(t, "ana@example.com", "correct horse")
 	h.fail(t, "ana@example.com", 1)
-	raced := false
-	h.failures.BeforeWrite = func(rows map[string]models.LoginFailure) {
-		if !raced {
-			raced = true
-			row := rows["ana@example.com"]
-			row.Failures++
-			rows["ana@example.com"] = row
-		}
-	}
+	h.onWrite(1, bump("ana@example.com"))
 
 	h.fail(t, "ana@example.com", 1)
 
 	require.Len(t, h.failures.Writes, 3)
 	assert.False(t, h.failures.Writes[1].Applied)
 	assert.True(t, h.failures.Writes[2].Applied)
-	row, _ := h.failures.Row("ana@example.com")
-	assert.Equal(t, 3, row.Failures)
+	assert.Equal(t, 3, h.failureCount("ana@example.com"))
 }
 
 func TestLockoutRetriesACreateThatLostTheRace(t *testing.T) {
 	h := newLockoutHarness(t, lockout)
-	h.failures.BeforeWrite = func(rows map[string]models.LoginFailure) {
-		if _, ok := rows["ghost@example.com"]; !ok {
-			rows["ghost@example.com"] = models.LoginFailure{Email: "ghost@example.com", Failures: 1, FirstFailure: now}
-		}
-	}
+	h.onWrite(1, func(rows map[string]models.LoginFailure) {
+		rows["ghost@example.com"] = models.LoginFailure{Email: "ghost@example.com", Failures: 1, FirstFailure: now}
+	})
 
 	h.fail(t, "ghost@example.com", 1)
 
@@ -329,41 +370,109 @@ func TestLockoutRetriesACreateThatLostTheRace(t *testing.T) {
 	assert.False(t, h.failures.Writes[0].Applied)
 	assert.Equal(t, "replace", h.failures.Writes[1].Kind)
 	assert.True(t, h.failures.Writes[1].Applied)
-	row, _ := h.failures.Row("ghost@example.com")
-	assert.Equal(t, 2, row.Failures)
+	assert.Equal(t, 2, h.failureCount("ghost@example.com"))
 }
 
-func TestLockoutGivesUpAfterThreeLostRaces(t *testing.T) {
+func TestLockoutGivesUpAfterFiveLostRacesWithoutComparing(t *testing.T) {
 	h := newLockoutHarness(t, lockout)
-	h.known(t, "ana@example.com", "correct horse")
-	h.fail(t, "ana@example.com", 1)
+	h.failures.Rows["ana@example.com"] = models.LoginFailure{Email: "ana@example.com", Failures: 1, FirstFailure: now}
 	h.failures.BeforeWrite = func(rows map[string]models.LoginFailure) {
 		row := rows["ana@example.com"]
 		row.FirstFailure = row.FirstFailure.Add(time.Millisecond)
 		rows["ana@example.com"] = row
 	}
-	gets := h.failures.GetCalls
+	h.hasher.Comparisons = nil
 
-	_, err := h.service.Verify(context.Background(), "ana@example.com", "wrong horse")
+	_, err := h.service.Verify(context.Background(), "ana@example.com", "correct horse")
 
-	assert.ErrorIs(t, err, services.ErrInvalidCredentials)
-	require.Len(t, h.failures.Writes, 4)
-	for _, write := range h.failures.Writes[1:] {
+	assert.Equal(t, time.Second, tooManyAttempts(t, err))
+	require.Len(t, h.failures.Writes, 5)
+	for _, write := range h.failures.Writes {
 		assert.False(t, write.Applied)
 	}
-	assert.Equal(t, gets+3, h.failures.GetCalls)
-	row, _ := h.failures.Row("ana@example.com")
-	assert.Equal(t, 1, row.Failures)
+	assert.Equal(t, 5, h.failures.GetCalls)
+	assert.Empty(t, h.hasher.Comparisons)
+	assert.Equal(t, 1, h.failureCount("ana@example.com"))
 }
 
-func TestLockoutDoesNotCountRepositoryErrors(t *testing.T) {
+func TestLockoutReleasesTheReservationWhenTheLookupFails(t *testing.T) {
 	h := newLockoutHarness(t, lockout)
+	h.fail(t, "ana@example.com", 1)
 	h.repo.GetErr = errors.New("cassandra down")
 
 	_, err := h.service.Verify(context.Background(), "ana@example.com", "wrong horse")
 
 	assert.EqualError(t, err, "cassandra down")
-	assert.Empty(t, h.failures.Writes)
+	assert.Equal(t, 1, h.failureCount("ana@example.com"))
+	last := h.failures.Writes[len(h.failures.Writes)-1]
+	assert.Equal(t, models.LoginFailure{Email: "ana@example.com", Failures: 2, FirstFailure: now}, *last.Current)
+	assert.Equal(t, models.LoginFailure{Email: "ana@example.com", Failures: 1, FirstFailure: now}, last.Next)
+	assert.Equal(t, 10*time.Minute, last.TTL)
+}
+
+func TestLockoutReleaseRetriesALostRace(t *testing.T) {
+	h := newLockoutHarness(t, lockout)
+	h.repo.GetErr = errors.New("cassandra down")
+	h.onWrite(2, bump("ana@example.com"))
+
+	_, err := h.service.Verify(context.Background(), "ana@example.com", "wrong horse")
+
+	assert.EqualError(t, err, "cassandra down")
+	require.Len(t, h.failures.Writes, 3)
+	assert.False(t, h.failures.Writes[1].Applied)
+	assert.True(t, h.failures.Writes[2].Applied)
+	assert.Equal(t, 1, h.failureCount("ana@example.com"))
+}
+
+func TestLockoutReleaseGivesUpSafely(t *testing.T) {
+	later := now.Add(time.Minute)
+	for name, tc := range map[string]struct {
+		change func(h *identityHarness, rows map[string]models.LoginFailure)
+		want   models.LoginFailure
+	}{
+		"reread fails": {
+			change: func(h *identityHarness, rows map[string]models.LoginFailure) {
+				bump("ana@example.com")(rows)
+				h.failures.GetErr = errors.New("cassandra down")
+			},
+			want: models.LoginFailure{Email: "ana@example.com", Failures: 2, FirstFailure: now},
+		},
+		"window restarted": {
+			change: func(_ *identityHarness, rows map[string]models.LoginFailure) {
+				rows["ana@example.com"] = models.LoginFailure{Email: "ana@example.com", Failures: 1, FirstFailure: later}
+			},
+			want: models.LoginFailure{Email: "ana@example.com", Failures: 1, FirstFailure: later},
+		},
+		"window over": {
+			change: func(h *identityHarness, rows map[string]models.LoginFailure) {
+				bump("ana@example.com")(rows)
+				h.clock.T = now.Add(10 * time.Minute)
+			},
+			want: models.LoginFailure{Email: "ana@example.com", Failures: 2, FirstFailure: now},
+		},
+		"already released": {
+			change: func(_ *identityHarness, rows map[string]models.LoginFailure) {
+				rows["ana@example.com"] = models.LoginFailure{Email: "ana@example.com", Failures: 0, FirstFailure: now}
+			},
+			want: models.LoginFailure{Email: "ana@example.com", Failures: 0, FirstFailure: now},
+		},
+		"write fails": {
+			change: func(h *identityHarness, _ map[string]models.LoginFailure) {
+				h.failures.ReplaceErr = errors.New("cassandra down")
+			},
+			want: models.LoginFailure{Email: "ana@example.com", Failures: 1, FirstFailure: now},
+		},
+	} {
+		h := newLockoutHarness(t, lockout)
+		h.repo.GetErr = errors.New("identity store down")
+		h.onWrite(2, func(rows map[string]models.LoginFailure) { tc.change(h, rows) })
+
+		_, err := h.service.Verify(context.Background(), "ana@example.com", "wrong horse")
+
+		assert.EqualError(t, err, "identity store down", name)
+		row, _ := h.failures.Row("ana@example.com")
+		assert.Equal(t, tc.want, row, name)
+	}
 }
 
 func TestTooManyAttemptsErrorMentionsTheWait(t *testing.T) {
