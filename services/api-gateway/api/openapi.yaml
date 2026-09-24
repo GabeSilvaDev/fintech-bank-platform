@@ -660,8 +660,11 @@ components:
         type: string
     XNextBefore:
       description: |
-        Present only when the page is full (as many rows as `limit`). RFC 3339 timestamp, with nanoseconds, of the
-        last row's `created_at`; pass it as `before` to fetch the next, older page. Absent on the last page.
+        Present whenever the page is full (as many rows as `limit`), including a last page that happens to be
+        full, whose next request then answers an empty list. RFC 3339 timestamp, with nanoseconds, of the last
+        row's `created_at`; pass it as `before` to fetch the next, older page. The cursor keeps only a
+        timestamp, and Cassandra keeps `created_at` to the millisecond, so a row created in the same
+        millisecond as the page's last row but left off that page is skipped by the next one.
       schema:
         type: string
         format: date-time
