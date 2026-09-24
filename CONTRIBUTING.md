@@ -18,7 +18,7 @@ docker compose --profile observability up -d  # optional: Prometheus, Grafana, J
 
 ```
 docker-compose.yml     root infrastructure (profiles: ui, observability)
-.env.example           root variables (ports, rate limit, observability)
+.env.example           root variables (ports, rate limits, JWT secret, observability)
 observability/         Prometheus scrape jobs and alert rules, Grafana provisioning and dashboard
 scripts/stack.sh       up/down/wait/logs for the whole platform
 redocly.yaml           OpenAPI lint rules
@@ -108,10 +108,11 @@ The Kafka integration tests of the account, transaction, payment and notificatio
 
 ### End-to-end tests
 
-`scripts/stack.sh` starts the root infrastructure and every service's compose stack. The suite exceeds the gateway's default rate limit, so raise `RATE_LIMIT_REQUESTS` when starting it; add `STACK_OBSERVABILITY=1` to get Prometheus, Grafana and Jaeger with traces exported.
+`scripts/stack.sh` starts the root infrastructure and every service's compose stack. The suite exceeds the gateway's default rate limit and registers a user for every customer it creates, far more than the 10 a minute the auth limit allows, so raise both `RATE_LIMIT_REQUESTS` and `AUTH_RATE_LIMIT_REQUESTS` before starting it (without them, `scripts/stack.sh up` leaves the auth limit at 10 a minute and the suite runs into `429 RATE_LIMIT_EXCEEDED`); add `STACK_OBSERVABILITY=1` to get Prometheus, Grafana and Jaeger with traces exported.
 
 ```bash
-RATE_LIMIT_REQUESTS=100000 scripts/stack.sh up
+export RATE_LIMIT_REQUESTS=100000 AUTH_RATE_LIMIT_REQUESTS=100000
+scripts/stack.sh up
 scripts/stack.sh wait
 docker run --rm --network host \
   -v "$PWD":/src -v fintech-go-mod:/go/pkg/mod -v fintech-go-build:/root/.cache/go-build \
@@ -125,7 +126,7 @@ Without `E2E_REQUIRED=1` the suite skips itself when the gateway is not healthy.
 
 ### Load tests
 
-k6 scenarios live in `tests/load`; they also need a raised rate limit. See [`tests/load/README.md`](tests/load/README.md) for the scripts, scenarios and the pinned `grafana/k6` image.
+k6 scenarios live in `tests/load`; they register users too, so they need both rate limits raised. See [`tests/load/README.md`](tests/load/README.md) for the scripts, scenarios and the pinned `grafana/k6` image.
 
 ### OpenAPI
 
@@ -176,4 +177,4 @@ Keep a commit to one module or concern, and keep the coverage gate green in each
 
 ## Secrets
 
-Never commit secrets. `.env` files are git-ignored; commit only `.env.example` files, with empty values or values that are safe for local development. The values that exist today — `PAYMENT_WEBHOOK_SECRET=dev-webhook-secret` and `GRAFANA_ADMIN_PASSWORD=admin` — are development defaults only and must be replaced anywhere else. When you add a variable, add it to the relevant `.env.example` and document it in the README.
+Never commit secrets. `.env` files are git-ignored; commit only `.env.example` files, with empty values or values that are safe for local development. The values that exist today — `PAYMENT_WEBHOOK_SECRET=dev-webhook-secret`, `JWT_SECRET=dev-only-jwt-secret-change-me-0123456789` and `GRAFANA_ADMIN_PASSWORD=admin` — are development defaults only and must be replaced anywhere else; the gateway refuses to start with a `JWT_SECRET` shorter than 32 bytes. When you add a variable, add it to the relevant `.env.example` and document it in the README.

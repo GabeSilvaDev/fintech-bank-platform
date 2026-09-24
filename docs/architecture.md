@@ -1,6 +1,6 @@
 # Architecture
 
-This document is the cross-service view of the platform: which component owns what, which topics connect them, how the sagas and the notification pipeline run, where idempotency is enforced, what happens on failure and how the whole thing is observed. Each service's own configuration and endpoints are described in the [README](../README.md); the shared packages are documented in [`pkg/README.md`](../pkg/README.md).
+This document is the cross-service view of the platform: which component owns what, which topics connect them, how requests are authenticated, how the sagas and the notification pipeline run, where idempotency is enforced, what happens on failure, what the security model assumes and how the whole thing is observed. Each service's own configuration and endpoints are described in the [README](../README.md); the shared packages are documented in [`pkg/README.md`](../pkg/README.md).
 
 ## Components
 
@@ -9,6 +9,7 @@ flowchart LR
     C[Client] -->|HTTP| GW[api-gateway]
     GW -->|account.commands<br/>transaction.commands<br/>payment.commands| K[(Kafka)]
     GW -->|read proxy| A & T & P & N
+    GW -->|identities, owner lookup| A
     K --> A[account-service]
     K --> T[transaction-service]
     K --> P[payment-service]
@@ -28,8 +29,8 @@ flowchart LR
 
 | Component | Port (container / published) | Responsibility | State |
 |---|---|---|---|
-| `api-gateway` | 8080 / 8081 | Validates HTTP writes and publishes them as commands (`202` with `command_id` and `trace_id`); proxies reads to the domain services; serves the OpenAPI document at `GET /api/v1/openapi.yaml`; guards the Kafka producer with a circuit breaker; CORS and a per-client rate limit keyed on the connection address, or with `TRUST_PROXY_HEADERS=true` on the `TRUSTED_PROXY_HOPS`-th `X-Forwarded-For` entry counting from the right (`X-Real-IP` and `True-Client-IP` are never read) | none |
-| `account-service` | 8082 / 8082 | Customers and accounts; the only owner of balances — credits and debits are compare-and-set updates applied at most once per idempotency key; internal owner endpoint for the notification service | `fintech_accounts`: `accounts`, `customers`, lookup tables, `balance_operations`, `processed_events` |
+| `api-gateway` | 8080 / 8081 | Registers and logs users in through the account service and issues HS256 JWT access tokens; authenticates every other `/api/v1` request and lets it through only for the caller's own accounts and user id (see [Security](#security)); validates HTTP writes and publishes them as commands (`202` with `command_id` and `trace_id`); proxies reads to the domain services; serves the OpenAPI document at `GET /api/v1/openapi.yaml`; guards the Kafka producer with a circuit breaker; CORS and a per-client rate limit keyed on the connection address, or with `TRUST_PROXY_HEADERS=true` on the `TRUSTED_PROXY_HOPS`-th `X-Forwarded-For` entry counting from the right (`X-Real-IP` and `True-Client-IP` are never read), plus a separate limit on `/api/v1/auth/*` | In memory: account owners for `OWNER_CACHE_TTL`, at most 10,000 |
+| `account-service` | 8082 / 8082 | Customers and accounts; the only owner of balances — credits and debits are compare-and-set updates applied at most once per idempotency key; e-mail/password identities (bcrypt) behind internal `POST /identities` and `POST /identities/verify` for the gateway; internal owner endpoint for the gateway and the notification service | `fintech_accounts`: `accounts`, `customers`, lookup tables, `identities_by_email`, `balance_operations`, `processed_events` |
 | `transaction-service` | 8083 / 8083 | Deposits, withdrawals and transfers as sagas over `account.commands`, compensation of rejected transfer credits, reconciliation sweeper, per-account statements | `fintech_transactions`: `transactions`, `transactions_by_account`, `transactions_by_account_key`, `open_transactions`, `processed_events` (the older `transactions_by_key` is no longer used) |
 | `payment-service` | 8084 / 8084 | PIX, TED and boleto as sagas: debit, submission to the sandbox provider, settlement (at once or by signed webhook), refund on rejection, reconciliation sweeper, per-account statements | `fintech_payments`: `payments`, `payments_by_account`, `payments_by_key`, `payments_by_external_id`, `open_payments`, `processed_events` |
 | `notification-service` | 8085 / 8085 | Routes result events into e-mail, SMS and push commands and delivers them; per-user history | Redis (`maxmemory 256mb`, `noeviction`): processed markers and `notification:history:<user id>`; in memory: owner contacts, bounded by `ACCOUNT_DIRECTORY_MAX_ENTRIES` |
@@ -38,7 +39,7 @@ flowchart LR
 
 Commands and results travel as the `pkg/events` envelope: `id`, `type`, `version`, `source`, `timestamp`, `trace_id`, `metadata`, `payload`. The envelope's `trace_id` is the gateway's `X-Request-ID`, copied from each command to the events it causes; it is a business correlation id, separate from the OpenTelemetry trace id carried in the Kafka `traceparent` header (see [Traces](#traces)).
 
-Money in every payload is a `pkg/domain` `Amount`: an int64 number of cents that marshals as a decimal string with two decimal places (`"1234.50"`) and unmarshals from such a string or from a JSON number, which is how events written by earlier releases carry it. `events.FromJSON` decodes the envelope with `UseNumber`, so a numeric payload field reaches `Amount` as its original literal text, and a plain decimal literal is converted to cents exactly at any size instead of passing through a `float64`; it also rejects anything after the envelope's JSON value, and such a message is dead-lettered as `invalid_event`. That covers `amount`, `balance` and `balance_after` in the account, transaction and payment payloads. A payload whose amount has more than two decimal places or does not fit in int64 cents fails to decode and is dead-lettered at once as `bad_payload`. The same cents are stored in Cassandra `bigint` columns and come back as the same strings from the read APIs (`balance`, `amount`, `balance_after`, `from_balance_after`, `to_balance_after`). At the edge the gateway accepts `amount` as a string or a number, reads a number from its literal text, answers a malformed or over-precise one with `422 amount: amount`, and bounds it to more than zero (`gt`) and at most `9999999999999.99` (`lte`); a boleto's encoded amount is compared in cents. Since older consumers cannot decode string amounts, every service has to run a release that reads `Amount` before any of them publishes one; this release is the first that reads both forms and also publishes strings, so it goes out as a single coordinated deploy (stop every old instance, start this release everywhere, then let traffic in).
+Money in every payload is a `pkg/domain` `Amount`: an int64 number of cents that marshals as a decimal string with two decimal places (`"1234.50"`) and unmarshals from such a string or from a JSON number, which is how events written by earlier releases carry it. `events.FromJSON` decodes the envelope with `UseNumber`, so a numeric payload field reaches `Amount` as its original literal text, and a plain decimal literal is converted to cents exactly at any size instead of passing through a `float64`; it also rejects anything after the envelope's JSON value, and such a message is dead-lettered as `invalid_event`. That covers `amount`, `balance` and `balance_after` in the account, transaction and payment payloads. A payload whose amount has more than two decimal places or does not fit in int64 cents fails to decode and is dead-lettered at once as `bad_payload`. The same cents are stored in Cassandra `bigint` columns and come back as the same strings from the read APIs (`balance`, `amount`, `balance_after`, `from_balance_after`, `to_balance_after`). At the edge the gateway accepts `amount` as a string or a number, reads a number from its literal text, answers a malformed or over-precise one with `422 amount: amount`, and bounds it to more than zero (`gt`) and at most `9999999999999.99` (`lte`); a boleto's encoded amount is compared in cents. Since older consumers cannot decode string amounts, every service has to run a release that reads `Amount` before any of them publishes one; Sprint 9 was the first release that reads both forms and also publishes strings, so upgrading from an earlier release is a single coordinated deploy (stop every old instance, start the new release everywhere, then let traffic in).
 
 An account statement (`GET /accounts/{account_id}/transactions` or `/payments`) reads the newest ids from `transactions_by_account` or `payments_by_account` and then fetches the records with `IN` queries of at most 100 ids each, so a page of up to 200 items costs at most three Cassandra queries; the page keeps the index's newest-first order and skips an id whose record is missing. `before` (RFC 3339, exclusive) adds `created_at < before` to the index query, and a full page answers an `X-Next-Before` header with the last row's `created_at` (RFC 3339 with nanoseconds) to pass as the next page's `before`; the gateway forwards both and exposes the header through CORS (`CORS_EXPOSED_HEADERS`, default `Link,X-Next-Before`). The cursor carries only a timestamp, which Cassandra keeps to the millisecond, so a row created in the same millisecond as a page's last row but left off that page is skipped by the next one.
 
@@ -65,6 +66,53 @@ The transaction and payment services each run two processors over one `processed
 ## Flows
 
 In the diagrams, an arrow between two services is a message published on Kafka and consumed by the other side; its label names the topic and the event type. "LWT" is a Cassandra lightweight transaction.
+
+### Authentication and ownership
+
+Every flow below starts with a request that has already been through these checks. Registration is shown; login is the same exchange with `POST /identities/verify`, answered `200` with the user id or `401 INVALID_CREDENTIALS`. Here the arrows between the gateway and the account service are synchronous HTTP calls.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant GW as api-gateway
+    participant AS as account-service
+    participant S as domain service or Kafka
+    C->>GW: POST /api/v1/auth/register (email, password)
+    GW->>GW: auth rate limit per client, validate e-mail and password
+    GW->>AS: POST /identities (email, password)
+    AS->>AS: trim and lower-case e-mail, bcrypt hash (cost 12)
+    AS->>AS: INSERT INTO identities_by_email IF NOT EXISTS
+    alt e-mail already registered
+        AS-->>GW: 409 EMAIL_TAKEN
+        GW-->>C: 409 EMAIL_TAKEN
+    else created
+        AS-->>GW: 201 user_id
+        GW->>GW: sign HS256 JWT with JWT_SECRET (sub, iss, iat, exp, jti)
+        GW-->>C: 201 user_id, access_token, token_type Bearer, expires_in
+    end
+    C->>GW: GET /api/v1/accounts/id/transactions (Authorization Bearer token)
+    GW->>GW: verify HS256 signature, iss fintech-gateway, exp (30 s leeway)
+    alt token missing or refused
+        GW-->>C: 401 UNAUTHORIZED, WWW-Authenticate Bearer
+    else token valid, caller is sub
+        GW->>AS: GET /accounts/id/owner (skipped while cached for OWNER_CACHE_TTL)
+        alt account unknown
+            AS-->>GW: 404 ACCOUNT_NOT_FOUND
+            GW-->>C: 404 ACCOUNT_NOT_FOUND
+        else owned by another user
+            AS-->>GW: 200 user_id
+            GW-->>C: 403 FORBIDDEN
+        else owned by the caller
+            AS-->>GW: 200 user_id
+            GW->>S: proxy the read without Authorization, or publish the command
+            S-->>GW: read response, or publish acknowledged
+            GW-->>C: 200 read, or 202 command_id
+        end
+    end
+```
+
+`/users/{user_id}/…` routes compare the path with `sub` and need no lookup; `GET /transactions/{id}` and `GET /payments/{id}` proxy first and release the record only when its account (or, for a transfer, the counterparty) belongs to the caller. The full route table is in the README's [Authentication and authorization](../README.md#authentication-and-authorization).
 
 ### Deposit
 
@@ -283,8 +331,20 @@ The sandbox provider deduplicates submissions by payment id; a real provider mus
 - **Redelivery instead of dead-letter.** A cancelled context or a failure of the processed-events store returns the error to the consumer, which does not commit, so the message is processed again after the restart.
 - **`ambiguous_write`.** A Cassandra write timeout or unavailable error, an unknown LWT outcome, a client-side timeout or a cancelled write context may or may not have applied, so it is never retried automatically. In the account service the balance operation stays `pending` and every re-send of that key gets `ambiguous_write` again until the sweeper reaches `SWEEPER_MAX_AGE` and raises `reconciliation_exhausted`; the record then needs manual resolution well within the 30-day TTL (check the balance and the `balance_operations` row before replaying anything).
 - **Notifications.** The processed marker is written before the send, so a crash mid-delivery drops that notification (at most once), while an in-process retry after an ambiguous provider error can repeat one. Redis runs with `maxmemory 256mb` and `noeviction`, so a marker is never evicted to make room (an evicted marker would let a redelivered event notify again); when Redis is full, writes fail instead: a marker write is retried with the backoff and then returned to the consumer uncommitted, so the event is processed again once there is room, and a failed history write is logged and dropped. Size `maxmemory` for the notification volume, since markers live 7 days. Routing skips source events older than `NOTIFICATION_MAX_EVENT_AGE`; delivery commands have no age check.
-- **Gateway.** When the broker is unreachable or the circuit breaker is open, writes answer `503 PUBLISH_FAILED`; a down upstream answers `502 UPSTREAM_UNAVAILABLE` on reads.
+- **Gateway.** When the broker is unreachable or the circuit breaker is open, writes answer `503 PUBLISH_FAILED`; a down upstream answers `502 UPSTREAM_UNAVAILABLE` on reads, and so does a failed owner lookup on any account-scoped route and a failed identity call on registration or login. `401`, `403` and `404 ACCOUNT_NOT_FOUND` are answered before anything is published, so a refused command never reaches Kafka.
 - **HTTP panics.** Every router mounts `pkg/middleware.Recovery(log)`: a panicking handler is logged at error level as `handler panicked` (panic value, stack, request id, method, path, `otel_trace_id` and `otel_span_id` when present) and answered with the JSON error envelope, `500 INTERNAL_ERROR`, unless it had already written a response. `http.ErrAbortHandler` is re-raised so the server aborts the connection as usual.
+
+## Security
+
+**Identities.** The account service owns them: `identities_by_email` (migration 008) keys a user by the trimmed, lower-cased e-mail and keeps a random user id and a bcrypt hash (cost 12) of a password of 8 to 72 bytes. Registration is an `IF NOT EXISTS` insert, so an e-mail is registered once. Verification gives the same `401 INVALID_CREDENTIALS` for an unknown e-mail, a wrong password, an invalid e-mail and a password over 72 bytes, and runs a bcrypt comparison against a fixed dummy hash when there is no identity, so neither the answer nor its timing tells whether an e-mail is registered. Both endpoints are internal: the gateway doesn't proxy them.
+
+**Tokens.** The gateway signs HS256 JWTs with `JWT_SECRET` (`sub` user id, `iss` `fintech-gateway`, `iat`, `exp` after `JWT_TTL`, default `1h`, and a random `jti`) and verifies them with the algorithm pinned to HS256, the issuer checked, `exp` required and 30 s of leeway. The secret must be at least 32 bytes or the gateway refuses to start; the value shipped in `services/api-gateway/docker-compose.yml` and `.env.example` is public and only for development, so any real deployment sets its own random secret. There are no refresh tokens and no revocation list: a client logs in again when its token expires, and a leaked token stays valid until its `exp`, so keep `JWT_TTL` short. The `jti` is not tracked. Changing `JWT_SECRET` invalidates every token at once.
+
+**Authentication and authorization.** Every `/api/v1` route except `/auth/register`, `/auth/login` and `/openapi.yaml` requires `Authorization: Bearer`, answering `401 UNAUTHORIZED` with `WWW-Authenticate: Bearer` otherwise; `/health` and `/metrics` sit outside `/api/v1` and are not authenticated. Ownership is enforced in the gateway only: a path `user_id` must equal `sub`, and an account named in a path or a command body (`account_id`, or `from_account_id` for a transfer) must belong to `sub`, as told by the account service's `GET /accounts/{id}/owner` and cached for `OWNER_CACHE_TTL`. `POST /accounts` takes the user id from the token. Violations answer `403 FORBIDDEN`, unknown accounts `404 ACCOUNT_NOT_FOUND`. The gateway drops `Authorization` from proxied reads.
+
+**Brute force.** `/auth/register` and `/auth/login` share a limiter of `AUTH_RATE_LIMIT_REQUESTS` (default 10) per `AUTH_RATE_LIMIT_WINDOW` (default `1m`) per client address, IPv6 counted by /64, on top of the general limit. It is keyed by address, not by account, so it slows one client down but doesn't lock an account against guesses spread over many addresses.
+
+**Trust boundary.** The domain services trust the gateway: there is no service-to-service authentication, and their HTTP APIs — reads, `GET /accounts/{id}/owner`, `POST /identities` and `POST /identities/verify` — answer anyone who reaches them. Their ports are published by the compose files only for development; in any other deployment only the gateway (and the payment service's signed webhook) may be reachable from outside. Kafka is unauthenticated too, so whoever can publish a command bypasses the gateway's checks.
 
 ## Observability
 
@@ -314,14 +374,14 @@ All series carry a `service` label (`api-gateway`, `account-service`, `transacti
 | `reconciliation_exhausted_total` | counter | — | same sweepers |
 | `notifications_sent_total` | counter | `channel`, `outcome` (`ok`, `error`) | `notification-service` delivery |
 
-A result publish that fails still counts the processed message as `ok`; the failure shows up as `messages_published_total{outcome="error"}` and as a `publish_failed` dead letter. The gateway's `/metrics` sits behind the same middleware chain as the API, including the per-IP rate limit.
+A result publish that fails still counts the processed message as `ok`; the failure shows up as `messages_published_total{outcome="error"}` and as a `publish_failed` dead letter. The gateway's `/metrics` sits behind the same middleware chain as the API, including the per-IP rate limit, but not behind authentication.
 
 ### Traces
 
 `tracing.Init` installs the W3C `traceparent`/`tracestate` and `baggage` propagators. The spans a request produces:
 
 - **HTTP server** — `tracing.Middleware` on every domain service router continues an incoming `traceparent` and names the span after the route (`POST /api/v1/transactions`). The gateway uses `tracing.EdgeMiddleware` instead: it starts a new root span, records a client's `traceparent` only as a span link, and strips `traceparent`, `tracestate` and `baggage` from the request so none of them reaches the services. Neither traces `/health` or `/metrics`. A method outside the nine standard ones is recorded as `_OTHER` (span name `HTTP`), with the raw value in `http.request.method_original`.
-- **HTTP client** — the gateway's read proxy uses `tracing.Transport`, so proxied reads continue into the domain service's server span.
+- **HTTP client** — the gateway's read proxy, identity client and owner lookup use `tracing.Transport`, so proxied reads, registrations, logins and owner lookups continue into the domain service's server span.
 - **Kafka publish** — `Producer.Publish` starts a `publish <topic>` producer span and injects `traceparent` into the message headers, next to the `event_type` and `trace_id` headers.
 - **Kafka consume** — the consumer hands the handler a context extracted from those headers, and `Processor.Process` runs in a `process <event type>` consumer span; the store, the dispatcher and every publish use that span's context, so results and dead letters stay on the same trace. Events labelled `unknown` (see the metrics table) get `process unknown`, with their own type in `messaging.message.type_original`.
 

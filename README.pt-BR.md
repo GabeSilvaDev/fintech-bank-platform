@@ -17,7 +17,7 @@
 
 </div>
 
-> **Em desenvolvimento.** Infraestrutura, pacotes compartilhados e os cinco serviços — o API Gateway, o Account Service, o Transaction Service, o Payment Service e o Notification Service — estão prontos: os comandos fluem do HTTP para o Kafka e para o Cassandra, depósitos, saques e transferências se resolvem como sagas sobre o account service, pagamentos por PIX, TED e boleto se resolvem da mesma forma através de um provedor sandbox com webhooks assinados, e os eventos de resultado viram e-mail, SMS e push através do notification service, com as leituras voltando pelo gateway. O dinheiro é exato: os valores trafegam como strings decimais pela API e pelos eventos e são tratados como centavos inteiros dentro de cada serviço. Cada serviço tenta reconectar ao Cassandra ou ao Redis no boot, os créditos e débitos de conta são idempotentes por chave, um sweeper de reconciliação recupera transações e pagamentos presos a partir de um índice dos que estão em aberto, os extratos das contas são paginados com um cursor `before`, e a plataforma é testada de ponta a ponta e sob carga com k6, além dos testes unitários, de feature e de integração. Todo serviço expõe métricas Prometheus e traces OpenTelemetry, com um dashboard do Grafana, regras de alerta e o Jaeger num profile opcional do compose, e a API pública está descrita em OpenAPI. Veja o [roadmap](#roadmap) para o que está feito.
+> **Em desenvolvimento.** Infraestrutura, pacotes compartilhados e os cinco serviços — o API Gateway, o Account Service, o Transaction Service, o Payment Service e o Notification Service — estão prontos: os comandos fluem do HTTP para o Kafka e para o Cassandra, depósitos, saques e transferências se resolvem como sagas sobre o account service, pagamentos por PIX, TED e boleto se resolvem da mesma forma através de um provedor sandbox com webhooks assinados, e os eventos de resultado viram e-mail, SMS e push através do notification service, com as leituras voltando pelo gateway. Os clientes se cadastram e entram com e-mail e senha, e o gateway emite tokens de acesso JWT e deixa cada usuário chegar só às próprias contas, extratos, transações, pagamentos e notificações. O dinheiro é exato: os valores trafegam como strings decimais pela API e pelos eventos e são tratados como centavos inteiros dentro de cada serviço. Cada serviço tenta reconectar ao Cassandra ou ao Redis no boot, os créditos e débitos de conta são idempotentes por chave, um sweeper de reconciliação recupera transações e pagamentos presos a partir de um índice dos que estão em aberto, os extratos das contas são paginados com um cursor `before`, e a plataforma é testada de ponta a ponta e sob carga com k6, além dos testes unitários, de feature e de integração. Todo serviço expõe métricas Prometheus e traces OpenTelemetry, com um dashboard do Grafana, regras de alerta e o Jaeger num profile opcional do compose, e a API pública está descrita em OpenAPI. Veja o [roadmap](#roadmap) para o que está feito.
 
 ## Arquitetura
 
@@ -39,7 +39,7 @@ O gateway recebe requisições HTTP e publica-as como comandos no Kafka; cada se
 
 **Tópicos** (`pkg/events`): `account.commands`, `transaction.commands`, `payment.commands` para comandos; `account.events`, `transaction.events`, `payment.events`, `notification.events` para resultados; um tópico de dead-letter por domínio. O compose raiz pré-cria todos os tópicos com um one-shot `kafka-init`.
 
-O desenho entre serviços — componentes, a tabela de tópicos, diagramas de sequência de cada saga, das notificações e da reconciliação, camadas de idempotência, semântica de falhas e observabilidade — está em [`docs/architecture.md`](docs/architecture.md) (em inglês). Como rodar as checagens, escrever commits e adicionar um serviço está em [`CONTRIBUTING.md`](CONTRIBUTING.md) (em inglês).
+O desenho entre serviços — componentes, a tabela de tópicos, diagramas de sequência da autenticação, de cada saga, das notificações e da reconciliação, camadas de idempotência, semântica de falhas, segurança e observabilidade — está em [`docs/architecture.md`](docs/architecture.md) (em inglês). Como rodar as checagens, escrever commits e adicionar um serviço está em [`CONTRIBUTING.md`](CONTRIBUTING.md) (em inglês).
 
 ## O que existe hoje
 
@@ -47,8 +47,8 @@ O desenho entre serviços — componentes, a tabela de tópicos, diagramas de se
 |---|---|---|
 | Infraestrutura | `docker-compose.yml` | Kafka 3.7.1 (KRaft), Cassandra 4.1, Redis 7.2, Mailpit, Kafka UI e Cassandra Web opcionais (profile `ui`), Prometheus, Grafana e Jaeger opcionais (profile `observability`, configurados em `observability/`) |
 | Pacotes compartilhados | `pkg/` | `logger`, `errors`, `response`, `validation`, `events`, `env`, `middleware`, `messaging`, `domain`, `cassandra`, `processor`, `retry`, `metrics`, `tracing` — 100 % de cobertura, exigida no CI |
-| API Gateway | `services/api-gateway/` | Router Chi com middlewares de request-id, tracing, métricas, IP do cliente (o endereço da conexão, ou um salto confiável do `X-Forwarded-For` com `TRUST_PROXY_HEADERS=true`), logging, recovery, CORS e rate limit; `GET /health`; endpoints de comando publicando no Kafka através de um producer protegido por circuit breaker; config tipada a partir do ambiente; documento OpenAPI 3.1 servido em `GET /api/v1/openapi.yaml` e validado com Redocly no CI; testes unitários + de feature com 100 % de cobertura, teste de integração com Kafka no CI; rotas de leitura repassadas por proxy aos serviços de domínio |
-| Account Service | `services/account-service/` | Consome `account.commands`, tenta reconectar ao Cassandra, aplicar as migrations e abrir a sessão do keyspace no boot (`STARTUP_RETRY_*`), persiste clientes e contas no Cassandra (`fintech_accounts`), controla os saldos com créditos/débitos em compare-and-set que exigem `idempotency_key` e são aplicados no máximo uma vez (`balance_operations`, TTL de 30 dias), publica resultados — incluindo `account.credit_rejected` — em `account.events` e falhas em `account.dlq`; API de leitura na `:8082`; testes unitários + de feature com 100 % de `internal/app`, testes de integração com Cassandra e Kafka no CI |
+| API Gateway | `services/api-gateway/` | Router Chi com middlewares de request-id, tracing, métricas, IP do cliente (o endereço da conexão, ou um salto confiável do `X-Forwarded-For` com `TRUST_PROXY_HEADERS=true`), logging, recovery, CORS e rate limit; `GET /health`; cadastro e login (`POST /api/v1/auth/register`, `/auth/login`, com rate limit próprio) emitindo tokens de acesso JWT HS256, autenticação bearer em todas as outras rotas de `/api/v1` e acesso restrito ao titular, conferido no endpoint de titular do account service (veja [Autenticação e autorização](#autenticação-e-autorização)); endpoints de comando publicando no Kafka através de um producer protegido por circuit breaker; config tipada a partir do ambiente; documento OpenAPI 3.1 servido em `GET /api/v1/openapi.yaml` e validado com Redocly no CI; testes unitários + de feature com 100 % de cobertura, teste de integração com Kafka no CI; rotas de leitura repassadas por proxy aos serviços de domínio |
+| Account Service | `services/account-service/` | Consome `account.commands`, tenta reconectar ao Cassandra, aplicar as migrations e abrir a sessão do keyspace no boot (`STARTUP_RETRY_*`), persiste clientes e contas no Cassandra (`fintech_accounts`), controla os saldos com créditos/débitos em compare-and-set que exigem `idempotency_key` e são aplicados no máximo uma vez (`balance_operations`, TTL de 30 dias), publica resultados — incluindo `account.credit_rejected` — em `account.events` e falhas em `account.dlq`; guarda as identidades de e-mail e senha (`identities_by_email`, bcrypt) atrás de endpoints internos que o gateway chama no cadastro e no login; API de leitura na `:8082`; testes unitários + de feature com 100 % de `internal/app`, testes de integração com Cassandra e Kafka no CI |
 | Transaction Service | `services/transaction-service/` | Consome `transaction.commands` e as respostas do account service em `account.events`, tenta reconectar ao Cassandra no boot (`STARTUP_RETRY_*`), registra depósitos, saques e transferências no Cassandra (`fintech_transactions`), orquestra cada um como uma saga sobre `account.commands` (débito → crédito → crédito compensatório em caso de falha) com chaves de idempotência por etapa, roda um sweeper de reconciliação que lê um índice das transações em aberto (`open_transactions`) e reenvia a próxima etapa das que estão paradas (`SWEEPER_*`), publica `transaction.created/completed/failed` e `transaction.transfer_completed/transfer_failed` em `transaction.events`, envia para dead-letter em `transaction.dlq`; API de leitura, com extratos paginados por `before`, na `:8083`; testes unitários + de feature com 100 % de `internal/app`, testes de integração com Cassandra e Kafka no CI |
 | Payment Service | `services/payment-service/` | Consome `payment.commands` e as respostas do account service em `account.events`, tenta reconectar ao Cassandra no boot (`STARTUP_RETRY_*`), guarda pagamentos por PIX, TED e boleto no Cassandra (`fintech_payments`), reserva os fundos com `account.debit`, submete a um provedor sandbox — PIX se resolve na hora, TED e boleto se resolvem por um webhook assinado — estorna rejeições com `account.credit`, roda um sweeper de reconciliação que lê um índice dos pagamentos em aberto (`open_payments`) e reenvia a próxima etapa dos que estão parados (`SWEEPER_*`), publica `payment.created/processed/completed/failed` em `payment.events`, envia para dead-letter em `payment.dlq`; API de leitura, com extratos paginados por `before`, e webhook na `:8084`; testes unitários + de feature com 100 % de `internal/app`, testes de integração com Cassandra e Kafka no CI |
 | Notification Service | `services/notification-service/` | Consome `account.events`, `transaction.events` e `payment.events` e transforma os resultados em e-mail, SMS e push em português, tentando reconectar ao Redis no boot (`STARTUP_RETRY_*`), buscando os contatos no endpoint interno de titular do account service; os comandos de entrega em `notification.events` são enviados por SMTP (Mailpit em desenvolvimento) ou por provedores sandbox de SMS/push, registrados num histórico apoiado em Redis, e enviados para dead-letter em `notification.dlq`; API de leitura na `:8085`; testes unitários + de feature com 100 % de `internal/app`, testes de integração com Kafka, Redis e Mailpit no CI |
@@ -116,7 +116,14 @@ docker compose up -d                  # hot reload com Air, publicado em :8081
 curl http://localhost:8081/health
 ```
 
-Ou nativo: `make run` (escuta em `SERVER_PORT`, padrão 8080). A configuração vem do ambiente: `SERVER_*` (host, porta, timeouts), `CORS_*` (`CORS_EXPOSED_HEADERS` tem padrão `Link,X-Next-Before`), `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW`, `KAFKA_BROKERS` / `KAFKA_WRITE_TIMEOUT` / `KAFKA_BATCH_TIMEOUT` / `KAFKA_PUBLISH_TIMEOUT` / `KAFKA_MAX_ATTEMPTS` / `KAFKA_BREAKER_*`, `TRUST_PROXY_HEADERS` / `TRUSTED_PROXY_HOPS`, `METRICS_ENABLED` / `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_SAMPLER_RATIO` e `LOG_LEVEL` / `LOG_PRETTY`.
+Ou nativo: `make run` (escuta em `SERVER_PORT`, padrão 8080). A configuração vem do ambiente: `SERVER_*` (host, porta, timeouts), `CORS_*` (`CORS_EXPOSED_HEADERS` tem padrão `Link,X-Next-Before`), `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW`, `KAFKA_BROKERS` / `KAFKA_WRITE_TIMEOUT` / `KAFKA_BATCH_TIMEOUT` / `KAFKA_PUBLISH_TIMEOUT` / `KAFKA_MAX_ATTEMPTS` / `KAFKA_BREAKER_*`, `TRUST_PROXY_HEADERS` / `TRUSTED_PROXY_HOPS`, `JWT_SECRET` / `JWT_TTL`, `AUTH_RATE_LIMIT_REQUESTS` / `AUTH_RATE_LIMIT_WINDOW`, `OWNER_CACHE_TTL`, `METRICS_ENABLED` / `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_SAMPLER_RATIO` e `LOG_LEVEL` / `LOG_PRETTY`.
+
+| Variável | Padrão | Efeito |
+|---|---|---|
+| `JWT_SECRET` | nenhum (variável obrigatória) | Chave HMAC que assina e verifica os tokens de acesso; o gateway se recusa a subir quando ela não está definida ou tem menos de 32 bytes. O valor `dev-only-jwt-secret-change-me-0123456789` do `docker-compose.yml` e do `.env.example` é público e serve só para desenvolvimento local: em qualquer outro lugar, defina um segredo aleatório de pelo menos 32 bytes |
+| `JWT_TTL` | `1h` | Validade de um token de acesso (`expires_in` em segundos); um valor não positivo cai para o padrão |
+| `AUTH_RATE_LIMIT_REQUESTS` / `AUTH_RATE_LIMIT_WINDOW` | `10` / `1m` | Limite separado em `/api/v1/auth/*`, contado por cliente como o geral; valores abaixo de `1` (ou uma janela não positiva) caem para os padrões |
+| `OWNER_CACHE_TTL` | `1m` | Por quanto tempo o gateway guarda em memória o titular de uma conta; um valor não positivo cai para o padrão |
 
 O rate limit (`RATE_LIMIT_REQUESTS` por `RATE_LIMIT_WINDOW`) é contado por endereço do cliente, e um cliente IPv6 pela sua rede /64, então trocar de endereço dentro do próprio prefixo não lhe rende mais requisições (endereços IPv4, inclusive os IPv6 mapeados de IPv4, são contados um a um). Por padrão (`TRUST_PROXY_HEADERS=false`) esse é o endereço da conexão TCP, e `X-Forwarded-For`, `X-Real-IP` e `True-Client-IP` são ignorados, então um cliente não consegue escolher o próprio balde do rate limit enviando esses headers. Use `TRUST_PROXY_HEADERS=true` só quando o gateway for acessível exclusivamente através dos seus proxies reversos, e defina `TRUSTED_PROXY_HOPS` (padrão `1`; valores abaixo de `1` voltam para `1`) com o número de proxies entre a internet e o gateway. O endereço do cliente passa a ser a entrada do `X-Forwarded-For` adicionada pelo proxy mais externo: o gateway conta `TRUSTED_PROXY_HOPS` entradas a partir da direita do header (todos os headers `X-Forwarded-For` juntados na ordem em que chegaram) e fica com essa, então com um proxy é a entrada mais à direita — o endereço que esse proxy viu — e nada que o cliente tenha colocado mais à esquerda chega a ser lido. `X-Real-IP` e `True-Client-IP` também são ignorados nesse modo. Quando o `X-Forwarded-For` não vem, tem menos entradas que `TRUSTED_PROXY_HOPS` ou a entrada escolhida não é um IP, a requisição é contada pelo endereço da conexão (o do proxy mais próximo, então essas requisições dividem um único balde). Use a contagem exata: uma a menos conta todos os clientes pelo endereço de um proxy, e uma a mais lê uma entrada escrita pelo próprio cliente (ou, quando ela não existe, cai naquele balde compartilhado). O gateway nunca reescreve o endereço remoto da requisição, então os logs de requisição mantêm o par TCP — o proxy, quando há um — em `remote_addr` e acrescentam o endereço do cliente resolvido como `client_ip` sempre que houver um.
 
@@ -132,6 +139,15 @@ curl http://localhost:8082/health     # {"success":true,"data":{"status":"health
 ```
 
 Conectar ao Cassandra, aplicar as migrations em `migrations/*.cql` (contra o `CASSANDRA_KEYSPACE`, padrão `fintech_accounts`) e abrir a sessão do keyspace são retentados no boot até `STARTUP_RETRY_ATTEMPTS` vezes (padrão 30), esperando `STARTUP_RETRY_DELAY` entre as tentativas (padrão `2s`; um valor não positivo cai para o padrão). Configuração: `SERVER_*`, `KAFKA_BROKERS` / `KAFKA_GROUP_ID` / `KAFKA_*_TIMEOUT` / `KAFKA_MAX_ATTEMPTS`, `CONSUMER_RETRY_BACKOFF` / `CONSUMER_DRAIN_TIMEOUT`, `CASSANDRA_HOSTS` / `CASSANDRA_KEYSPACE` / `CASSANDRA_CONSISTENCY` / `CASSANDRA_*_TIMEOUT` / `CASSANDRA_MIGRATIONS_PATH`, `STARTUP_RETRY_ATTEMPTS` / `STARTUP_RETRY_DELAY`, `METRICS_ENABLED` / `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_SAMPLER_RATIO`, `LOG_LEVEL` / `LOG_PRETTY`.
+
+O account service também guarda as identidades da plataforma, em `identities_by_email` (`migrations/008_identities_by_email.cql`: e-mail, id do usuário, hash bcrypt da senha com custo 12, data de criação). O gateway chama dois endpoints internos no cadastro e no login; eles não são repassados pelo gateway:
+
+| Método | Caminho | Corpo | Resposta |
+|---|---|---|---|
+| `POST` | `/identities` | `{email, password}` | `201` `{user_id}` (um UUID aleatório novo), `409 EMAIL_TAKEN`, `422 VALIDATION_ERROR` (`email` ou `password`) |
+| `POST` | `/identities/verify` | `{email, password}` | `200` `{user_id}`, `401 INVALID_CREDENTIALS` |
+
+O e-mail tem os espaços das pontas removidos e é passado para minúsculas antes de ser gravado ou buscado, e o cadastro é gravado com `IF NOT EXISTS`, então dois cadastros simultâneos do mesmo e-mail não conseguem ambos ter sucesso. A senha precisa ter de 8 a 72 bytes, o limite do próprio bcrypt. A verificação responde o mesmo `401` para um e-mail desconhecido, uma senha errada, um e-mail que não é um endereço válido e uma senha com mais de 72 bytes; quando não há identidade com que comparar, ela ainda roda uma comparação bcrypt contra um hash fictício fixo, para que o tempo de resposta não revele quais e-mails estão cadastrados. Corpos acima de 16 KiB respondem `413 PAYLOAD_TOO_LARGE`.
 
 Comandos que ele trata (tópico `account.commands`) e os eventos com que ele responde (tópico `account.events`):
 
@@ -266,11 +282,62 @@ Os consumers de roteamento leem a partir do offset retido mais antigo e ignoram 
 
 **Dimensionando o Redis.** O Redis nunca expulsa chaves para abrir espaço: quando chega a `maxmemory`, as gravações passam a falhar. Expulsar era pior para este serviço, porque uma marca de processado expulsa transforma, em silêncio, um evento reentregue ou reprocessado em um evento novo, e a notificação sai de novo. Com `noeviction`, uma marca que não pode ser gravada é retentada com `CONSUMER_RETRY_BACKOFF` e depois devolvida ao consumidor sem commit, então o consumidor reinicia e o evento é processado de novo quando o Redis tiver espaço: as notificações atrasam em vez de se repetirem, e nada é enviado sem a sua marca. Uma entrada de histórico que não pode ser gravada é registrada no log como `notification history not recorded` e se perde, já que a notificação em si já saiu. As chaves continuam expirando pelo próprio TTL (7 dias para as marcas, 90 dias para o histórico). Dimensione o `maxmemory` para o seu volume de notificações — cada evento que os consumidores de roteamento leem em `account.events`, `transaction.events` e `payment.events`, roteado ou não, e cada comando de entrega guardam uma marca por 7 dias, e cada usuário guarda até `NOTIFICATION_HISTORY_SIZE` entradas de histórico — e acompanhe o `used_memory` em relação ao `maxmemory` no `redis-cli INFO memory` para aumentar o limite antes que ele seja atingido. Ao atualizar de uma versão anterior à Sprint 10, recrie o container do Redis (`docker compose up -d redis` na raiz) para aplicar o novo limite e a nova política.
 
-**Limitações conhecidas.** Ainda não há autenticação: o endpoint de histórico devolve o corpo das mensagens para qualquer id de usuário (com os destinatários mascarados) e precisa ser restrito ao titular da conta quando houver autenticação. O endpoint interno `GET /accounts/{id}/owner` do account service não tem autenticação e não é repassado pelo gateway; sua porta é publicada apenas para desenvolvimento.
+**Limitações conhecidas.** O endpoint de histórico em si não tem autenticação: pelo gateway ele só responde para o usuário do token de acesso (veja [Autenticação e autorização](#autenticação-e-autorização)), mas o serviço confia em quem chegar à sua própria porta. O endpoint interno `GET /accounts/{id}/owner` do account service também não tem autenticação e não é repassado pelo gateway. As duas portas são publicadas apenas para desenvolvimento.
+
+#### Autenticação e autorização
+
+Toda rota de `/api/v1`, exceto `POST /api/v1/auth/register`, `POST /api/v1/auth/login` e `GET /api/v1/openapi.yaml`, exige um token de acesso em `Authorization: Bearer <token>`. Os usuários se cadastram e entram com e-mail e senha: o gateway os confere pelos endpoints internos de identidade do account service (veja [Account Service](#account-service)) e assina o token ele mesmo.
+
+| Método | Caminho | Corpo | Resposta |
+|---|---|---|---|
+| `POST` | `/api/v1/auth/register` | `{email, password}` | `201` `{user_id, access_token, token_type: "Bearer", expires_in}`, `409 EMAIL_TAKEN`, `422 VALIDATION_ERROR` |
+| `POST` | `/api/v1/auth/login` | `{email, password}` | `200` `{access_token, token_type: "Bearer", expires_in}`, `401 INVALID_CREDENTIALS`, `422 VALIDATION_ERROR` |
+
+O e-mail tem os espaços das pontas removidos e é passado para minúsculas, então `Ana@Example.com` e `ana@example.com` são o mesmo usuário. O cadastro aceita um e-mail válido de até 254 caracteres (`details` `email`: `required`, `email` ou `max`) e uma senha de 8 a 72 bytes (`password`: `required` ou `length`), e responde com um id de usuário aleatório novo. O login só exige os dois campos (`required`) e dá o mesmo `401 INVALID_CREDENTIALS` para um e-mail desconhecido, uma senha errada, um e-mail que nunca poderia ter sido cadastrado e uma senha com mais de 72 bytes, então a resposta não diz qual foi o caso. Os dois respondem `413 PAYLOAD_TOO_LARGE` para um corpo acima de 16 KiB e `502 UPSTREAM_UNAVAILABLE` quando o account service não responde.
+
+**Tokens.** O token de acesso é um JWT assinado com HMAC-SHA256 (HS256) e o `JWT_SECRET`, com `sub` (o id do usuário), `iss` (`fintech-gateway`), `iat`, `exp` e `jti` (um id aleatório). Ele vale por `JWT_TTL` (padrão `1h`); `expires_in` é essa validade em segundos. O gateway só aceita tokens HS256 emitidos por ele mesmo: qualquer outro `alg` (inclusive `none`), outro emissor, uma assinatura inválida, um `exp` ausente ou vencido (com 30 s de tolerância para diferença de relógio) ou um `sub` que não é um id de usuário é recusado. Não há refresh token nem revogação: quando o token vence, o cliente faz login de novo, e um token vazado continua valendo até vencer. Um token ausente, malformado ou recusado responde `401 UNAUTHORIZED` com `WWW-Authenticate: Bearer`. O gateway remove o header `Authorization` antes de repassar uma leitura, então os serviços de domínio nunca veem o token.
+
+**Rate limit.** Além do limite geral, `/auth/register` e `/auth/login` dividem um limite mais rígido: `AUTH_RATE_LIMIT_REQUESTS` (padrão `10`) por `AUTH_RATE_LIMIT_WINDOW` (padrão `1m`), contado por endereço do cliente exatamente como o geral (um cliente IPv6 pela sua rede /64) e respondendo `429 RATE_LIMIT_EXCEEDED`. Ele atrasa quem tenta adivinhar senhas; aumente-o só para rodar testes (veja [Testes end-to-end e de carga](#testes-end-to-end-e-de-carga)).
+
+**Titularidade.** Um usuário só chega aos próprios dados. O gateway garante isso em todas as rotas; os serviços de domínio não conferem quem está chamando.
+
+| Rota | Permitida quando |
+|---|---|
+| `POST /accounts` | `user_id` é omitido — a conta é criada para o usuário do token — ou é igual ao usuário do token |
+| `GET`, `PATCH`, `DELETE /accounts/{id}` | a conta pertence ao usuário do token |
+| `GET /accounts/{account_id}/transactions`, `GET /accounts/{account_id}/payments` | a conta pertence ao usuário do token |
+| `POST /transactions`, `POST /payments` | o `account_id` do corpo pertence ao usuário do token |
+| `POST /transfers` | o `from_account_id` do corpo pertence ao usuário do token; o `to_account_id` pode ser de qualquer um |
+| `GET /transactions/{id}` | a conta da transação pertence ao usuário do token, ou, numa transferência, a contraparte pertence |
+| `GET /payments/{id}` | a conta do pagamento pertence ao usuário do token |
+| `GET /users/{user_id}/accounts`, `GET /users/{user_id}/notifications` | `user_id` é o usuário do token |
+
+Qualquer outro caso responde `403 FORBIDDEN`. O titular de uma conta vem do endpoint interno `GET /accounts/{id}/owner` do account service e fica na memória do gateway por `OWNER_CACHE_TTL` (padrão `1m`, no máximo 10.000 contas); o titular de uma conta nunca muda, então o cache não entrega uma conta a outra pessoa. Uma conta que o account service não conhece responde `404 ACCOUNT_NOT_FOUND` pelo próprio gateway, seja ela citada no caminho ou no corpo de um comando, e essa resposta não vai para o cache, então uma conta criada há pouco é encontrada assim que passa a existir; uma consulta que falha responde `502 UPSTREAM_UNAVAILABLE`. O corpo de um comando é validado primeiro, então um comando inválido ainda responde `422` antes de a conta ser consultada. `GET /transactions/{id}` e `GET /payments/{id}` buscam o registro e só o entregam ao titular, então um id desconhecido continua respondendo `404 TRANSACTION_NOT_FOUND` ou `404 PAYMENT_NOT_FOUND`, enquanto o registro de outro usuário responde `403`.
+
+Os serviços atrás do gateway confiam nele: não há autenticação entre serviços, então as portas deles (`8082`–`8085`), com os endpoints internos de identidade e de titular do account service, não podem ficar acessíveis de fora. Os arquivos de compose só as publicam para desenvolvimento; o webhook do payment service, que confere a própria assinatura, é a única rota que um provedor precisa alcançar.
+
+```bash
+curl -s -X POST localhost:8081/api/v1/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"ana@example.com","password":"correct-horse-battery"}'
+# {"success":true,"data":{"user_id":"5d1e7c2a-0a6b-4c1e-9f4e-2b6f7a8c9d01","access_token":"eyJhbGciOiJIUzI1NiIs…","token_type":"Bearer","expires_in":3600}}
+
+TOKEN=$(curl -s -X POST localhost:8081/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"ana@example.com","password":"correct-horse-battery"}' | jq -r .data.access_token)
+
+curl -s localhost:8081/api/v1/users/5d1e7c2a-0a6b-4c1e-9f4e-2b6f7a8c9d01/accounts -H "Authorization: Bearer $TOKEN"
+# {"success":true,"data":[]}
+
+curl -s localhost:8081/api/v1/users/5d1e7c2a-0a6b-4c1e-9f4e-2b6f7a8c9d01/accounts
+# {"success":false,"error":{"code":"UNAUTHORIZED","message":"authentication required"}}
+```
+
+**Atualizando de uma versão anterior à Sprint 11.** Todo cliente agora precisa se cadastrar ou fazer login e mandar o token em toda chamada, e `POST /accounts` não precisa mais de `user_id`. Os clientes existentes não têm senha, então se cadastram como qualquer outro — com o mesmo e-mail, se quiserem, já que as identidades ficam numa tabela própria — e recebem um id de usuário novo: as contas criadas antes com um id de usuário escolhido pelo cliente não ficam ligadas a ele, então não podem mais ser acessadas pela API, embora continuem intactas no banco. Comandos e leituras de extrato que citam uma conta inexistente agora são recusados pelo gateway com `404 ACCOUNT_NOT_FOUND`. Defina `JWT_SECRET` com um valor aleatório de pelo menos 32 bytes antes do deploy (o gateway se recusa a subir sem ele); o valor de desenvolvimento do compose e do `.env.example` é público. O account service aplica a `008_identities_by_email.cql` no boot; faça o deploy dele antes do gateway ou junto, porque o cadastro e o login chamam os novos endpoints de identidade e respondem `502 UPSTREAM_UNAVAILABLE` enquanto eles não existem.
 
 #### Endpoints de comando
 
-Toda escrita é aceita de forma assíncrona: o gateway valida o corpo, publica um comando no Kafka e responde `202` com o id do comando e o trace id (`X-Request-ID`).
+Toda escrita é aceita de forma assíncrona: o gateway valida o corpo, confere se quem chama pode agir sobre a conta (veja [Autenticação e autorização](#autenticação-e-autorização)), publica um comando no Kafka e responde `202` com o id do comando e o trace id (`X-Request-ID`).
 
 | Método | Caminho | Tópico | Tipo de evento |
 |---|---|---|---|
@@ -283,12 +350,13 @@ Toda escrita é aceita de forma assíncrona: o gateway valida o corpo, publica u
 
 ```bash
 curl -s -X POST localhost:8081/api/v1/accounts \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"user_id":"5d1e7c2a-0a6b-4c1e-9f4e-2b6f7a8c9d01","account_type":"checking","name":"Ana Souza","email":"ana@example.com","document":"52998224725"}'
+  -d '{"account_type":"checking","name":"Ana Souza","email":"ana@example.com","document":"52998224725"}'
 # {"success":true,"data":{"command_id":"…","trace_id":"…"}}
 ```
 
-Erros: `400 INVALID_JSON`, `413 PAYLOAD_TOO_LARGE` (corpo acima de 1 MiB), `422 VALIDATION_ERROR` (com `details` por campo), `422 EMPTY_UPDATE` (PATCH sem campos), `429 RATE_LIMIT_EXCEEDED`, `503 PUBLISH_FAILED` quando o broker está inacessível ou o circuito está aberto. Um handler que entra em panic — no gateway ou em qualquer serviço — responde `500 INTERNAL_ERROR` no mesmo envelope JSON, a menos que já tenha começado a resposta, e é registrado no log em nível de erro como `handler panicked`, com o valor do panic, a stack, o request id, o método, o caminho e os ids de trace.
+Erros: `400 INVALID_JSON`, `401 UNAUTHORIZED`, `403 FORBIDDEN`, `404 ACCOUNT_NOT_FOUND`, `413 PAYLOAD_TOO_LARGE` (corpo acima de 1 MiB), `422 VALIDATION_ERROR` (com `details` por campo), `422 EMPTY_UPDATE` (PATCH sem campos), `429 RATE_LIMIT_EXCEEDED`, `502 UPSTREAM_UNAVAILABLE` quando não dá para consultar o titular da conta, `503 PUBLISH_FAILED` quando o broker está inacessível ou o circuito está aberto. Um handler que entra em panic — no gateway ou em qualquer serviço — responde `500 INTERNAL_ERROR` no mesmo envelope JSON, a menos que já tenha começado a resposta, e é registrado no log em nível de erro como `handler panicked`, com o valor do panic, a stack, o request id, o método, o caminho e os ids de trace.
 
 O `idempotency_key`, obrigatório em `POST /transactions`, `/transfers` e `/payments`, precisa ter de 1 a 64 caracteres ASCII imprimíveis, sem espaços nem caracteres de controle (caso contrário, `422 idempotency_key: idempotency_key`).
 
@@ -313,17 +381,19 @@ As verificações `gt` e `lte` rodam depois da validação por tag de cada campo
 
 ```bash
 curl -s -X POST localhost:8081/api/v1/transactions \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"account_id":"7e47434d-40d8-4288-afc8-358b73999896","type":"deposit","amount":"1234.50","currency":"BRL","description":"Salário","idempotency_key":"salario-2026-09"}'
 # {"success":true,"data":{"command_id":"…","trace_id":"…"}}
 
-curl -s localhost:8081/api/v1/accounts/7e47434d-40d8-4288-afc8-358b73999896
+curl -s localhost:8081/api/v1/accounts/7e47434d-40d8-4288-afc8-358b73999896 -H "Authorization: Bearer $TOKEN"
 # {"success":true,"data":{"account_id":"7e47434d-…","status":"active","currency":"BRL","balance":"1234.50",…}}
 
-curl -s localhost:8081/api/v1/accounts/7e47434d-40d8-4288-afc8-358b73999896/transactions
+curl -s localhost:8081/api/v1/accounts/7e47434d-40d8-4288-afc8-358b73999896/transactions -H "Authorization: Bearer $TOKEN"
 # {"success":true,"data":[{"transaction_id":"f7c4b83f-…","type":"deposit","status":"completed","amount":"1234.50","currency":"BRL","to_balance_after":"1234.50",…}]}
 
 curl -s -X POST localhost:8081/api/v1/transactions \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"account_id":"7e47434d-40d8-4288-afc8-358b73999896","type":"deposit","amount":"1.234","currency":"BRL","idempotency_key":"preciso-demais"}'
 # {"success":false,"error":{"code":"VALIDATION_ERROR","message":"request validation failed","details":{"amount":"amount"}}}
@@ -331,11 +401,11 @@ curl -s -X POST localhost:8081/api/v1/transactions \
 
 As respostas trazem `balance` (contas), `amount`, `from_balance_after` e `to_balance_after` (transações), e `amount` e `balance_after` (pagamentos) como strings. Os eventos no Kafka trazem todos os campos de dinheiro (`amount`, `balance`, `balance_after`) do mesmo jeito; os consumidores também aceitam um número JSON, que é como as versões anteriores publicavam: o envelope é decodificado mantendo o texto literal de cada número, então um literal decimal simples como `1234.56` ou `92233720368547758.07` vira centavos exatamente, em qualquer tamanho, sem nunca passar por um float binário, e um envelope seguido de qualquer outro dado vai para a dead-letter como `invalid_event`; um evento cujo valor tem mais de duas casas decimais ou não cabe em centavos de 64 bits vai para a dead-letter como `bad_payload`.
 
-**Atualizando para esta versão.** As respostas de leitura devolviam dinheiro como números JSON e agora devolvem strings decimais, então os clientes precisam ler `balance`, `amount`, `balance_after`, `from_balance_after` e `to_balance_after` como strings; requisições com valores numéricos continuam funcionando. Os eventos gravados por versões anteriores trazem números e continuam legíveis, assim como as respostas guardadas em `balance_operations` antes da atualização, e nada muda no Cassandra. Já os serviços antigos não conseguem ler os valores em string que esta versão publica, então todo serviço precisa rodar uma versão que leia `Amount` antes que qualquer um deles publique um. Esta é a primeira versão que lê as duas formas, então atualize num único deploy coordenado: pare o gateway e os quatro serviços de domínio antigos, suba esta versão em todos e só então libere o tráfego, para que nenhuma instância antiga fique consumindo um evento publicado por uma nova.
+**Atualizando de uma versão anterior à Sprint 9.** As respostas de leitura devolviam dinheiro como números JSON e agora devolvem strings decimais, então os clientes precisam ler `balance`, `amount`, `balance_after`, `from_balance_after` e `to_balance_after` como strings; requisições com valores numéricos continuam funcionando. Os eventos gravados por versões anteriores trazem números e continuam legíveis, assim como as respostas guardadas em `balance_operations` antes da atualização, e nada muda no Cassandra. Já os serviços antigos não conseguem ler os valores em string que esta versão publica, então todo serviço precisa rodar uma versão que leia `Amount` antes que qualquer um deles publique um. A Sprint 9 é a primeira versão que lê as duas formas, então atualizar a partir de uma versão anterior é um único deploy coordenado: pare o gateway e os quatro serviços de domínio antigos, suba a versão nova em todos e só então libere o tráfego, para que nenhuma instância antiga fique consumindo um evento publicado por uma nova.
 
 #### Endpoints de leitura
 
-As leituras são repassadas por proxy ao account service via `ACCOUNT_SERVICE_URL`, ao transaction service via `TRANSACTION_SERVICE_URL`, ao payment service via `PAYMENT_SERVICE_URL` e ao notification service via `NOTIFICATION_SERVICE_URL` (padrão `http://localhost:8085`); `502 UPSTREAM_UNAVAILABLE` quando o upstream está fora do ar.
+As leituras são repassadas por proxy ao account service via `ACCOUNT_SERVICE_URL`, ao transaction service via `TRANSACTION_SERVICE_URL`, ao payment service via `PAYMENT_SERVICE_URL` e ao notification service via `NOTIFICATION_SERVICE_URL` (padrão `http://localhost:8085`); `502 UPSTREAM_UNAVAILABLE` quando o upstream está fora do ar. As leituras exigem o mesmo token bearer e passam pelas regras de titularidade acima antes de serem repassadas, então, além das respostas abaixo, toda leitura pode responder `401 UNAUTHORIZED` e `403 FORBIDDEN`, e as que são por conta, `404 ACCOUNT_NOT_FOUND` pelo gateway.
 
 | Método | Caminho | Upstream |
 |---|---|---|
@@ -354,9 +424,9 @@ A lista de transações ou de pagamentos de uma conta lê os ids mais recentes n
 **Paginando um extrato.** As duas listas aceitam `before`, um timestamp RFC 3339 com ou sem fração de segundo (`2026-09-20T10:00:00Z`, `2026-09-20T10:00:00.123Z`), e passam a devolver só as linhas criadas estritamente antes dele; um valor que não pode ser interpretado responde `422 VALIDATION_ERROR` com `details` `{"before":"datetime"}`. Quando a página vem cheia (tantas linhas quanto o `limit`), a resposta traz um header `X-Next-Before` com o `created_at` da última linha em RFC 3339 com nanossegundos: mande-o de volta, codificado para URL, como `before` para buscar a próxima página, mais antiga, e pare quando uma resposta vier sem ele (uma última página que por acaso vem cheia ainda traz o header, e a requisição seguinte devolve uma lista vazia). O gateway repassa `before` e `X-Next-Before` sem alterar e, por padrão, inclui `X-Next-Before` em `CORS_EXPOSED_HEADERS`, para que clientes no navegador consigam lê-lo; um valor definido por você substitui essa lista, então mantenha `X-Next-Before` nela (um `services/api-gateway/.env` com `CORS_EXPOSED_HEADERS=Link` esconde o header dos navegadores).
 
 ```bash
-curl -s -D - "localhost:8081/api/v1/accounts/7e47434d-40d8-4288-afc8-358b73999896/transactions?limit=2"
+curl -s -D - -H "Authorization: Bearer $TOKEN" "localhost:8081/api/v1/accounts/7e47434d-40d8-4288-afc8-358b73999896/transactions?limit=2"
 # X-Next-Before: 2026-09-20T10:00:00.123Z
-curl -s "localhost:8081/api/v1/accounts/7e47434d-40d8-4288-afc8-358b73999896/transactions?limit=2&before=2026-09-20T10%3A00%3A00.123Z"
+curl -s -H "Authorization: Bearer $TOKEN" "localhost:8081/api/v1/accounts/7e47434d-40d8-4288-afc8-358b73999896/transactions?limit=2&before=2026-09-20T10%3A00%3A00.123Z"
 ```
 
 O cursor é um timestamp, e o Cassandra guarda o `created_at` com precisão de milissegundo, então uma linha criada no mesmo milissegundo que a última linha de uma página, mas que ficou fora dela, é pulada pela página seguinte. Isso exige dois registros da mesma conta criados no mesmo milissegundo, bem na fronteira entre páginas.
@@ -453,18 +523,19 @@ scripts/stack.sh up
 STACK_TIMEOUT=900 scripts/stack.sh wait
 ```
 
-O `tests/e2e` é um módulo Go separado (build tag `e2e`) que exercita a stack em execução através do gateway: criação de conta, depósitos/saques/transferências (incluindo uma transferência que é revertida, quais saldos cada lado vê e chaves de idempotência no escopo de cada conta), pagamentos (incluindo rejeições do sandbox, liquidação por webhook, o mascaramento do documento da TED e um boleto cujo valor não bate com o código), valores decimais exatos (valores em string comparados exatamente, um valor numérico ainda aceito, três depósitos de `"0.10"` e um saque de `"0.30"` deixando `"0.00"`, e as rejeições `amount` e `lte`), a paginação do extrato (cinco depósitos lidos de dois em dois seguindo o `X-Next-Before`), a validação do formato da chave e as notificações que eles disparam. O `TestMain` pula a suíte se o gateway não estiver saudável, a menos que `E2E_REQUIRED=1` transforme isso numa falha; `GATEWAY_URL` e `MAILPIT_URL` apontam a suíte para a stack. Como a suíte dispara requisições suficientes para bater no rate limit padrão do gateway, o `services/api-gateway/docker-compose.yml` agora repassa `RATE_LIMIT_REQUESTS` a partir do ambiente — aumente-o ao subir a stack (a suíte usa por padrão `GATEWAY_URL=http://localhost:8081` e `MAILPIT_URL=http://localhost:8025`):
+O `tests/e2e` é um módulo Go separado (build tag `e2e`) que exercita a stack em execução através do gateway, cadastrando um usuário para cada cliente que cria e mandando o token desse usuário em toda chamada: cadastro e login (`401 UNAUTHORIZED` sem token ou com um token inválido, `INVALID_CREDENTIALS` para uma senha errada ou um e-mail desconhecido, `EMAIL_TAKEN` para um segundo cadastro), titularidade (as contas, os extratos, as transações, os pagamentos e as notificações de outro usuário respondem `403`, assim como comandos sobre a conta de outro usuário, e contas desconhecidas respondem `404`), criação de conta, depósitos/saques/transferências (incluindo uma transferência que é revertida, quais saldos cada lado vê e chaves de idempotência no escopo de cada conta), pagamentos (incluindo rejeições do sandbox, liquidação por webhook, o mascaramento do documento da TED e um boleto cujo valor não bate com o código), valores decimais exatos (valores em string comparados exatamente, um valor numérico ainda aceito, três depósitos de `"0.10"` e um saque de `"0.30"` deixando `"0.00"`, e as rejeições `amount` e `lte`), a paginação do extrato (cinco depósitos lidos de dois em dois seguindo o `X-Next-Before`), a validação do formato da chave e as notificações que eles disparam. O `TestMain` pula a suíte se o gateway não estiver saudável, a menos que `E2E_REQUIRED=1` transforme isso numa falha; `GATEWAY_URL` e `MAILPIT_URL` apontam a suíte para a stack. Como a suíte dispara requisições suficientes para bater no rate limit padrão do gateway e cadastra muito mais usuários do que os 10 por minuto do limite de autenticação, o `services/api-gateway/docker-compose.yml` repassa `RATE_LIMIT_REQUESTS` e `AUTH_RATE_LIMIT_REQUESTS` a partir do ambiente — aumente os dois ao subir a stack, já que, sem isso, o `scripts/stack.sh up` deixa o limite de autenticação em 10 por minuto (a suíte usa por padrão `GATEWAY_URL=http://localhost:8081` e `MAILPIT_URL=http://localhost:8025`):
 
 ```bash
-RATE_LIMIT_REQUESTS=100000 scripts/stack.sh up
+export RATE_LIMIT_REQUESTS=100000 AUTH_RATE_LIMIT_REQUESTS=100000
+scripts/stack.sh up
 scripts/stack.sh wait
 (cd tests/e2e && E2E_REQUIRED=1 go test -count=1 -tags e2e ./... -v)
 scripts/stack.sh down
 ```
 
-O `tests/load` tem cenários k6 que exercitam o gateway de ponta a ponta — comandos, leituras e um benchmark bruto de throughput de depósitos; veja [`tests/load/README.md`](tests/load/README.md) para os scripts, os cenários e como rodá-los.
+O `tests/load` tem cenários k6 que exercitam o gateway de ponta a ponta — comandos, leituras e um benchmark bruto de throughput de depósitos — e que cadastram um usuário por cliente e mandam o token dele, então também precisam dos dois limites aumentados; veja [`tests/load/README.md`](tests/load/README.md) para os scripts, os cenários e como rodá-los.
 
-O CI (`.github/workflows/ci.yml`) roda a cada push e pull request em sete jobs — `pkg`, `api-gateway` (com um container de serviço Kafka, também validando o `services/api-gateway/api/openapi.yaml` com o `redocly/cli`), `account-service`, `transaction-service` e `payment-service` (com containers de serviço Kafka e Cassandra), `notification-service` (com containers de serviço Kafka, Redis e Mailpit) e `e2e` (com `RATE_LIMIT_REQUESTS` elevado, rodando `scripts/stack.sh up`/`wait`, a suíte `tests/e2e` e `scripts/stack.sh down`) — checagem de `gofmt` e as suítes de `pkg`, `api-gateway`, `account-service`, `transaction-service`, `payment-service` e `notification-service`, falhando o build se a cobertura cair abaixo de 100 % (de `internal/app` para o account service, o transaction service, o payment service e o notification service).
+O CI (`.github/workflows/ci.yml`) roda a cada push e pull request em sete jobs — `pkg`, `api-gateway` (com um container de serviço Kafka, também validando o `services/api-gateway/api/openapi.yaml` com o `redocly/cli`), `account-service`, `transaction-service` e `payment-service` (com containers de serviço Kafka e Cassandra), `notification-service` (com containers de serviço Kafka, Redis e Mailpit) e `e2e` (com `RATE_LIMIT_REQUESTS` e `AUTH_RATE_LIMIT_REQUESTS` elevados, rodando `scripts/stack.sh up`/`wait`, a suíte `tests/e2e` e `scripts/stack.sh down`) — checagem de `gofmt` e as suítes de `pkg`, `api-gateway`, `account-service`, `transaction-service`, `payment-service` e `notification-service`, falhando o build se a cobertura cair abaixo de 100 % (de `internal/app` para o account service, o transaction service, o payment service e o notification service).
 
 ## Estrutura do projeto
 
@@ -493,9 +564,12 @@ fintech-bank-platform/
 │   │   ├── api/openapi.yaml               documento OpenAPI 3.1, embutido e servido
 │   │   ├── internal/
 │   │   │   ├── config/                    env → Config tipada
-│   │   │   ├── contracts/                 interfaces de config, contexto e http
-│   │   │   ├── app/handlers/              endpoints de comando, proxy de leitura, handler do OpenAPI
+│   │   │   ├── contracts/                 interfaces de config, contexto, http e autenticação
+│   │   │   ├── app/handlers/              endpoints de comando, cadastro/login, guarda de titularidade, proxy de leitura, handler do OpenAPI
 │   │   │   └── infrastructure/
+│   │   │       ├── auth/                  emissor e verificador de JWT, middleware bearer
+│   │   │       ├── identity/              cliente de identidades do account service
+│   │   │       ├── owners/                consulta do titular da conta com cache em memória
 │   │   │       ├── http/                  server, router, handlers, middleware/
 │   │   │       └── messaging/             producer kafka, circuit breaker
 │   │   ├── tests/  (unit/ · feature/ · integration/)     helpers TestCase no estilo testify
@@ -509,8 +583,8 @@ fintech-bank-platform/
 │   │   │   ├── contracts/                 interfaces de config, messaging e repositórios
 │   │   │   ├── app/
 │   │   │   │   ├── models/                tipos de domínio
-│   │   │   │   ├── services/              casos de uso de contas e clientes
-│   │   │   │   └── handlers/              dispatcher de comandos, DLQ, endpoints de leitura
+│   │   │   │   ├── services/              casos de uso de contas, clientes e identidades
+│   │   │   │   └── handlers/              dispatcher de comandos, DLQ, endpoints de leitura e de identidade
 │   │   │   └── infrastructure/
 │   │   │       ├── database/              repositórios Cassandra e migrations
 │   │   │       └── http/                  server, router, health, handlers de leitura
@@ -568,7 +642,7 @@ fintech-bank-platform/
 │       ├── Makefile · Dockerfile · docker-compose.yml · .air.toml
 │       └── .env.example
 └── tests/
-    ├── e2e/                    módulo Go (build tag e2e): contas, transações, extratos, pagamentos, notificações
+    ├── e2e/                    módulo Go (build tag e2e): autenticação, contas, transações, extratos, pagamentos, notificações
     └── load/                   cenários k6 (comandos, leituras, throughput) · README.md
 ```
 
@@ -588,6 +662,7 @@ Cada serviço futuro segue o mesmo layout: `cmd/`, `internal/{config,contracts,i
 - [x] **Sprint 8** — hardening: falsificação da chave do rate limit, tratamento de panics, idempotência por conta, alinhamento das validações e privacidade nas leituras
 - [x] **Sprint 9** — dinheiro decimal exato na API e nos eventos, extratos em lote e saltos de proxy confiáveis
 - [x] **Sprint 10** — robustez operacional: varreduras só dos registros em aberto, paginação de extratos, números legados exatos e Redis sem evicção
+- [x] **Sprint 11** — autenticação: identidades com e-mail e senha, tokens de acesso JWT e acesso restrito ao titular em todas as rotas
 
 ## Licença
 

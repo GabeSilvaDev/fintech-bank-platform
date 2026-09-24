@@ -17,7 +17,7 @@
 
 </div>
 
-> **Work in progress.** Infrastructure, shared packages and all five services — the API gateway, the account service, the transaction service, the payment service and the notification service — are in place: commands flow from HTTP to Kafka to Cassandra, deposits, withdrawals and transfers settle as sagas over the account service, PIX, TED and boleto payments settle the same way through a sandbox provider with signed webhooks, and result events turn into e-mail, SMS and push through the notification service, with reads coming back through the gateway. Money is exact: amounts travel as decimal strings through the API and the events and are handled as integer cents inside every service. Every service retries its Cassandra or Redis connection at start-up, account credits and debits are idempotent per key, a reconciliation sweeper recovers stuck transactions and payments from an index of the open ones, account statements page through history with a `before` cursor, and the platform is exercised end to end and under k6 load, on top of its unit, feature and integration tests. Every service exposes Prometheus metrics and OpenTelemetry traces, with a Grafana dashboard, alert rules and Jaeger in an optional compose profile, and the public API is described in OpenAPI. See the [roadmap](#roadmap) for what is done.
+> **Work in progress.** Infrastructure, shared packages and all five services — the API gateway, the account service, the transaction service, the payment service and the notification service — are in place: commands flow from HTTP to Kafka to Cassandra, deposits, withdrawals and transfers settle as sagas over the account service, PIX, TED and boleto payments settle the same way through a sandbox provider with signed webhooks, and result events turn into e-mail, SMS and push through the notification service, with reads coming back through the gateway. Customers register and log in with an e-mail and a password, and the gateway issues JWT access tokens and lets each user reach only their own accounts, statements, transactions, payments and notifications. Money is exact: amounts travel as decimal strings through the API and the events and are handled as integer cents inside every service. Every service retries its Cassandra or Redis connection at start-up, account credits and debits are idempotent per key, a reconciliation sweeper recovers stuck transactions and payments from an index of the open ones, account statements page through history with a `before` cursor, and the platform is exercised end to end and under k6 load, on top of its unit, feature and integration tests. Every service exposes Prometheus metrics and OpenTelemetry traces, with a Grafana dashboard, alert rules and Jaeger in an optional compose profile, and the public API is described in OpenAPI. See the [roadmap](#roadmap) for what is done.
 
 ## Architecture
 
@@ -39,7 +39,7 @@ The gateway receives HTTP requests and publishes them as commands on Kafka; each
 
 **Topics** (`pkg/events`): `account.commands`, `transaction.commands`, `payment.commands` for commands; `account.events`, `transaction.events`, `payment.events`, `notification.events` for results; one dead-letter topic per domain. The root compose pre-creates every topic with a `kafka-init` one-shot.
 
-The cross-service design — components, the topics table, sequence diagrams for every saga and for notifications and reconciliation, idempotency layers, failure semantics and observability — is in [`docs/architecture.md`](docs/architecture.md). How to run the checks, write commits and add a service is in [`CONTRIBUTING.md`](CONTRIBUTING.md).
+The cross-service design — components, the topics table, sequence diagrams for authentication, every saga, notifications and reconciliation, idempotency layers, failure semantics, security and observability — is in [`docs/architecture.md`](docs/architecture.md). How to run the checks, write commits and add a service is in [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## What exists today
 
@@ -47,8 +47,8 @@ The cross-service design — components, the topics table, sequence diagrams for
 |---|---|---|
 | Infrastructure | `docker-compose.yml` | Kafka 3.7.1 (KRaft), Cassandra 4.1, Redis 7.2, Mailpit, optional Kafka UI and Cassandra Web (profile `ui`), optional Prometheus, Grafana and Jaeger (profile `observability`, configured in `observability/`) |
 | Shared packages | `pkg/` | `logger`, `errors`, `response`, `validation`, `events`, `env`, `middleware`, `messaging`, `domain`, `cassandra`, `processor`, `retry`, `metrics`, `tracing` — 100 % test coverage, enforced in CI |
-| API Gateway | `services/api-gateway/` | Chi router with request-id, tracing, metrics, client IP (the connection address, or a trusted `X-Forwarded-For` hop with `TRUST_PROXY_HEADERS=true`), logging, recovery, CORS and rate-limit middleware; `GET /health`; command endpoints publishing to Kafka through a circuit-breaker-guarded producer; typed config from env; OpenAPI 3.1 document served at `GET /api/v1/openapi.yaml` and linted with Redocly in CI; unit + feature tests at 100 % coverage, Kafka integration test in CI; read routes proxied to the domain services |
-| Account Service | `services/account-service/` | Consumes `account.commands`, retries its Cassandra bootstrap, migrations and keyspace session at start-up (`STARTUP_RETRY_*`), persists customers and accounts in Cassandra (`fintech_accounts`), owns balances with compare-and-set credits/debits that require an `idempotency_key` and apply at most once (`balance_operations`, 30-day TTL), publishes results — including `account.credit_rejected` — on `account.events` and failures on `account.dlq`; read API on `:8082`; unit + feature tests at 100 % of `internal/app`, Cassandra and Kafka integration tests in CI |
+| API Gateway | `services/api-gateway/` | Chi router with request-id, tracing, metrics, client IP (the connection address, or a trusted `X-Forwarded-For` hop with `TRUST_PROXY_HEADERS=true`), logging, recovery, CORS and rate-limit middleware; `GET /health`; registration and login (`POST /api/v1/auth/register`, `/auth/login`, under their own rate limit) issuing HS256 JWT access tokens, bearer authentication on every other `/api/v1` route and owner-only access checked against the account service's owner endpoint (see [Authentication and authorization](#authentication-and-authorization)); command endpoints publishing to Kafka through a circuit-breaker-guarded producer; typed config from env; OpenAPI 3.1 document served at `GET /api/v1/openapi.yaml` and linted with Redocly in CI; unit + feature tests at 100 % coverage, Kafka integration test in CI; read routes proxied to the domain services |
+| Account Service | `services/account-service/` | Consumes `account.commands`, retries its Cassandra bootstrap, migrations and keyspace session at start-up (`STARTUP_RETRY_*`), persists customers and accounts in Cassandra (`fintech_accounts`), owns balances with compare-and-set credits/debits that require an `idempotency_key` and apply at most once (`balance_operations`, 30-day TTL), publishes results — including `account.credit_rejected` — on `account.events` and failures on `account.dlq`; stores e-mail/password identities (`identities_by_email`, bcrypt) behind internal endpoints the gateway calls for registration and login; read API on `:8082`; unit + feature tests at 100 % of `internal/app`, Cassandra and Kafka integration tests in CI |
 | Transaction Service | `services/transaction-service/` | Consumes `transaction.commands` and the account service's replies on `account.events`, retries its Cassandra bootstrap at start-up (`STARTUP_RETRY_*`), records deposits, withdrawals and transfers in Cassandra (`fintech_transactions`), orchestrates each one as a saga over `account.commands` (debit → credit → compensating credit on failure) with per-step idempotency keys, runs a reconciliation sweeper that reads an index of open transactions (`open_transactions`) and re-sends the next step of the stale ones (`SWEEPER_*`), publishes `transaction.created/completed/failed` and `transaction.transfer_completed/transfer_failed` on `transaction.events`, dead-letters on `transaction.dlq`; read API with `before`-cursor statements on `:8083`; unit + feature tests at 100 % of `internal/app`, Cassandra and Kafka integration tests in CI |
 | Payment Service | `services/payment-service/` | Consumes `payment.commands` and the account service's replies on `account.events`, retries its Cassandra bootstrap at start-up (`STARTUP_RETRY_*`), stores PIX, TED and boleto payments in Cassandra (`fintech_payments`), reserves funds with `account.debit`, submits to a sandbox provider — PIX settles at once, TED and boleto settle through a signed webhook — refunds rejections with `account.credit`, runs a reconciliation sweeper that reads an index of open payments (`open_payments`) and re-sends the next step of the stale ones (`SWEEPER_*`), publishes `payment.created/processed/completed/failed` on `payment.events`, dead-letters on `payment.dlq`; read API with `before`-cursor statements and webhook on `:8084`; unit + feature tests at 100 % of `internal/app`, Cassandra and Kafka integration tests in CI |
 | Notification Service | `services/notification-service/` | Consumes `account.events`, `transaction.events` and `payment.events` and routes the results as Portuguese e-mail, SMS and push, retrying its Redis ping at start-up (`STARTUP_RETRY_*`), looking up the account service's internal owner endpoint for contacts; delivery commands on `notification.events` are sent over SMTP (Mailpit in development) or sandbox SMS/push providers and recorded in a Redis-backed history, dead-lettering on `notification.dlq`; read API on `:8085`; unit + feature tests at 100 % of `internal/app`, Kafka, Redis and Mailpit integration tests in CI |
@@ -116,7 +116,14 @@ docker compose up -d                  # hot reload with Air, published on :8081
 curl http://localhost:8081/health
 ```
 
-Or natively: `make run` (listens on `SERVER_PORT`, default 8080). Configuration is read from the environment: `SERVER_*` (host, port, timeouts), `CORS_*` (`CORS_EXPOSED_HEADERS` defaults to `Link,X-Next-Before`), `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW`, `KAFKA_BROKERS` / `KAFKA_WRITE_TIMEOUT` / `KAFKA_BATCH_TIMEOUT` / `KAFKA_PUBLISH_TIMEOUT` / `KAFKA_MAX_ATTEMPTS` / `KAFKA_BREAKER_*`, `TRUST_PROXY_HEADERS` / `TRUSTED_PROXY_HOPS`, `METRICS_ENABLED` / `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_SAMPLER_RATIO` and `LOG_LEVEL` / `LOG_PRETTY`.
+Or natively: `make run` (listens on `SERVER_PORT`, default 8080). Configuration is read from the environment: `SERVER_*` (host, port, timeouts), `CORS_*` (`CORS_EXPOSED_HEADERS` defaults to `Link,X-Next-Before`), `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW`, `KAFKA_BROKERS` / `KAFKA_WRITE_TIMEOUT` / `KAFKA_BATCH_TIMEOUT` / `KAFKA_PUBLISH_TIMEOUT` / `KAFKA_MAX_ATTEMPTS` / `KAFKA_BREAKER_*`, `TRUST_PROXY_HEADERS` / `TRUSTED_PROXY_HOPS`, `JWT_SECRET` / `JWT_TTL`, `AUTH_RATE_LIMIT_REQUESTS` / `AUTH_RATE_LIMIT_WINDOW`, `OWNER_CACHE_TTL`, `METRICS_ENABLED` / `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_SAMPLER_RATIO` and `LOG_LEVEL` / `LOG_PRETTY`.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `JWT_SECRET` | none, required | HMAC key that signs and verifies access tokens; the gateway refuses to start when it is unset or shorter than 32 bytes. The `dev-only-jwt-secret-change-me-0123456789` value in `docker-compose.yml` and `.env.example` is public and for local development only: anywhere else, set a random secret of at least 32 bytes |
+| `JWT_TTL` | `1h` | Lifetime of an access token (`expires_in` in seconds); a non-positive value falls back to the default |
+| `AUTH_RATE_LIMIT_REQUESTS` / `AUTH_RATE_LIMIT_WINDOW` | `10` / `1m` | Separate limit on `/api/v1/auth/*`, counted per client like the general one; values below `1` (or a non-positive window) fall back to the defaults |
+| `OWNER_CACHE_TTL` | `1m` | How long the gateway keeps an account's owner in memory; a non-positive value falls back to the default |
 
 The rate limit (`RATE_LIMIT_REQUESTS` per `RATE_LIMIT_WINDOW`) is counted per client address, and an IPv6 client by its /64 network, so rotating addresses within its prefix doesn't earn it more requests (IPv4 addresses, including IPv4-mapped IPv6 ones, are counted one by one). By default (`TRUST_PROXY_HEADERS=false`) that is the address of the TCP connection, and `X-Forwarded-For`, `X-Real-IP` and `True-Client-IP` are ignored, so a client can't pick its own rate-limit bucket by sending them. Set `TRUST_PROXY_HEADERS=true` only when the gateway is reachable exclusively through your reverse proxies, and set `TRUSTED_PROXY_HOPS` (default `1`; values below `1` fall back to `1`) to the number of proxies between the internet and the gateway. The client address is then the `X-Forwarded-For` entry appended by the outermost of those proxies: the gateway counts `TRUSTED_PROXY_HOPS` entries from the right of the header (every `X-Forwarded-For` header merged in order) and takes that one, so with one proxy it is the rightmost entry — the address that proxy saw — and anything a client put further left is never read. `X-Real-IP` and `True-Client-IP` are ignored in this mode too. When `X-Forwarded-For` is missing, has fewer entries than `TRUSTED_PROXY_HOPS`, or the chosen entry is not an IP, the request is keyed on the connection address instead (the nearest proxy's, so those requests share one bucket). Set the exact count: one too low keys every client on a proxy's address, and one too high reads an entry the client wrote itself (or, when there is none, falls back to that shared bucket). The gateway never rewrites the request's remote address, so request logs keep the TCP peer — the proxy, behind one — in `remote_addr` and add the resolved client address as `client_ip` whenever there is one.
 
@@ -132,6 +139,15 @@ curl http://localhost:8082/health     # {"success":true,"data":{"status":"health
 ```
 
 Connecting to Cassandra, applying migrations in `migrations/*.cql` (against `CASSANDRA_KEYSPACE`, default `fintech_accounts`) and opening the keyspace session are retried at boot up to `STARTUP_RETRY_ATTEMPTS` times (default 30), waiting `STARTUP_RETRY_DELAY` between attempts (default `2s`; a non-positive value falls back to the default). Configuration: `SERVER_*`, `KAFKA_BROKERS` / `KAFKA_GROUP_ID` / `KAFKA_*_TIMEOUT` / `KAFKA_MAX_ATTEMPTS`, `CONSUMER_RETRY_BACKOFF` / `CONSUMER_DRAIN_TIMEOUT`, `CASSANDRA_HOSTS` / `CASSANDRA_KEYSPACE` / `CASSANDRA_CONSISTENCY` / `CASSANDRA_*_TIMEOUT` / `CASSANDRA_MIGRATIONS_PATH`, `STARTUP_RETRY_ATTEMPTS` / `STARTUP_RETRY_DELAY`, `METRICS_ENABLED` / `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_SAMPLER_RATIO`, `LOG_LEVEL` / `LOG_PRETTY`.
+
+The account service also keeps the platform's identities, in `identities_by_email` (`migrations/008_identities_by_email.cql`: e-mail, user id, bcrypt password hash with cost 12, creation time). The gateway calls two internal endpoints for registration and login; they are not proxied by the gateway:
+
+| Method | Path | Body | Answer |
+|---|---|---|---|
+| `POST` | `/identities` | `{email, password}` | `201` `{user_id}` (a new random UUID), `409 EMAIL_TAKEN`, `422 VALIDATION_ERROR` (`email` or `password`) |
+| `POST` | `/identities/verify` | `{email, password}` | `200` `{user_id}`, `401 INVALID_CREDENTIALS` |
+
+The e-mail is trimmed and lower-cased before it is stored or looked up, and a registration is written with `IF NOT EXISTS`, so two concurrent registrations of the same e-mail can't both succeed. The password must be 8 to 72 bytes, bcrypt's own limit. Verification answers the same `401` for an unknown e-mail, a wrong password, an e-mail that isn't a valid address and a password longer than 72 bytes; when there is no identity to compare against, it still runs a bcrypt comparison against a fixed dummy hash, so the time it takes doesn't reveal which e-mails are registered. Bodies over 16 KiB answer `413 PAYLOAD_TOO_LARGE`.
 
 Commands it handles (topic `account.commands`) and the events it answers with (topic `account.events`):
 
@@ -266,11 +282,62 @@ Routing consumers read from the earliest retained offset and skip source events 
 
 **Redis sizing.** Redis never evicts keys to make room: when it reaches `maxmemory`, writes fail instead. Evicting was worse for this service, because an evicted processed marker silently turns a redelivered or replayed event back into a new one and its notification goes out again. With `noeviction`, a marker that can't be written is retried with `CONSUMER_RETRY_BACKOFF` and then handed back to the consumer uncommitted, so the consumer restarts and the event is processed again once Redis has room: notifications stall instead of repeating, and nothing is sent without its marker. A history entry that can't be written is logged as `notification history not recorded` and lost, since the notification itself already went out. Keys still expire on their own TTL (7 days for markers, 90 days for history). Size `maxmemory` for your notification volume — every event the routing consumers read on `account.events`, `transaction.events` and `payment.events`, routed or not, and every delivery command keeps a marker for 7 days, and every user keeps up to `NOTIFICATION_HISTORY_SIZE` history entries — and watch `used_memory` against `maxmemory` in `redis-cli INFO memory` so the limit is raised before it is reached. After upgrading from a release before Sprint 10, recreate the Redis container (`docker compose up -d redis` at the root) to apply the new limit and policy.
 
-**Known limitations.** There is no authentication yet: the history endpoint returns message bodies for any user id (recipients masked) and must be limited to the account owner once auth exists. The account service's internal `GET /accounts/{id}/owner` is unauthenticated and not proxied by the gateway; its port is published only for development.
+**Known limitations.** The history endpoint itself has no authentication: through the gateway it answers only for the user in the access token (see [Authentication and authorization](#authentication-and-authorization)), but the service trusts whoever reaches its own port. The account service's internal `GET /accounts/{id}/owner` is unauthenticated too and not proxied by the gateway. Both ports are published only for development.
+
+#### Authentication and authorization
+
+Every `/api/v1` route except `POST /api/v1/auth/register`, `POST /api/v1/auth/login` and `GET /api/v1/openapi.yaml` requires an access token in `Authorization: Bearer <token>`. Users register and log in with an e-mail and a password: the gateway checks them through the account service's internal identity endpoints (see [Account Service](#account-service)) and signs the token itself.
+
+| Method | Path | Body | Answer |
+|---|---|---|---|
+| `POST` | `/api/v1/auth/register` | `{email, password}` | `201` `{user_id, access_token, token_type: "Bearer", expires_in}`, `409 EMAIL_TAKEN`, `422 VALIDATION_ERROR` |
+| `POST` | `/api/v1/auth/login` | `{email, password}` | `200` `{access_token, token_type: "Bearer", expires_in}`, `401 INVALID_CREDENTIALS`, `422 VALIDATION_ERROR` |
+
+The e-mail is trimmed and lower-cased, so `Ana@Example.com` and `ana@example.com` are the same user. Registration takes a valid e-mail of at most 254 characters (`details` `email`: `required`, `email` or `max`) and a password of 8 to 72 bytes (`password`: `required` or `length`), and answers with a new random user id. Login only requires both fields (`required`) and gives the same `401 INVALID_CREDENTIALS` for an unknown e-mail, a wrong password, an e-mail that could never have been registered and a password longer than 72 bytes, so the answer doesn't tell which one it was. Both answer `413 PAYLOAD_TOO_LARGE` for a body over 16 KiB and `502 UPSTREAM_UNAVAILABLE` when the account service can't be reached.
+
+**Tokens.** The access token is a JWT signed with HMAC-SHA256 (HS256) and `JWT_SECRET`, carrying `sub` (the user id), `iss` (`fintech-gateway`), `iat`, `exp` and `jti` (a random id). It lives for `JWT_TTL` (default `1h`); `expires_in` is that lifetime in seconds. The gateway accepts only HS256 tokens it issued itself: any other `alg` (`none` included), another issuer, a bad signature, a missing or past `exp` (with 30 s of leeway for clock skew) or a `sub` that isn't a user id is refused. There are no refresh tokens and no revocation: when a token expires, the client logs in again, and a token that leaks stays valid until it expires. A missing, malformed or refused token answers `401 UNAUTHORIZED` with `WWW-Authenticate: Bearer`. The gateway removes the `Authorization` header before it proxies a read, so the domain services never see the token.
+
+**Rate limit.** On top of the general limit, `/auth/register` and `/auth/login` share a stricter one: `AUTH_RATE_LIMIT_REQUESTS` (default `10`) per `AUTH_RATE_LIMIT_WINDOW` (default `1m`), counted per client address exactly like the general one (an IPv6 client by its /64 network) and answering `429 RATE_LIMIT_EXCEEDED`. It slows down password guessing; raise it only for test runs (see [End-to-end and load tests](#end-to-end-and-load-tests)).
+
+**Ownership.** A user reaches only their own data. The gateway enforces it on every route; the domain services don't check who is calling.
+
+| Route | Allowed when |
+|---|---|
+| `POST /accounts` | `user_id` is omitted — the account is created for the token's user — or equals the token's user |
+| `GET`, `PATCH`, `DELETE /accounts/{id}` | the account belongs to the token's user |
+| `GET /accounts/{account_id}/transactions`, `GET /accounts/{account_id}/payments` | the account belongs to the token's user |
+| `POST /transactions`, `POST /payments` | the body's `account_id` belongs to the token's user |
+| `POST /transfers` | the body's `from_account_id` belongs to the token's user; `to_account_id` may be anyone's |
+| `GET /transactions/{id}` | the transaction's account belongs to the token's user, or, for a transfer, its counterparty does |
+| `GET /payments/{id}` | the payment's account belongs to the token's user |
+| `GET /users/{user_id}/accounts`, `GET /users/{user_id}/notifications` | `user_id` is the token's user |
+
+Anything else answers `403 FORBIDDEN`. An account's owner comes from the account service's internal `GET /accounts/{id}/owner` and is kept in the gateway's memory for `OWNER_CACHE_TTL` (default `1m`, at most 10,000 accounts); an account's owner never changes, so the cache can't hand an account to someone else. An account the account service doesn't know answers `404 ACCOUNT_NOT_FOUND` from the gateway, whether it is named in the path or in a command body, and that answer isn't cached, so an account created a moment ago is found as soon as it exists; a failed lookup answers `502 UPSTREAM_UNAVAILABLE`. Command bodies are validated first, so an invalid command still answers `422` before its account is looked up. `GET /transactions/{id}` and `GET /payments/{id}` fetch the record and hand it over only to its owner, so an unknown id still answers `404 TRANSACTION_NOT_FOUND` or `404 PAYMENT_NOT_FOUND`, while another user's record answers `403`.
+
+The services behind the gateway trust it: there is no service-to-service authentication, so their own ports (`8082`–`8085`), with the account service's internal identity and owner endpoints, must not be reachable from outside. The compose files publish them only for development; the payment service's webhook, which checks its own signature, is the one route a provider needs to reach.
+
+```bash
+curl -s -X POST localhost:8081/api/v1/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"ana@example.com","password":"correct-horse-battery"}'
+# {"success":true,"data":{"user_id":"5d1e7c2a-0a6b-4c1e-9f4e-2b6f7a8c9d01","access_token":"eyJhbGciOiJIUzI1NiIs…","token_type":"Bearer","expires_in":3600}}
+
+TOKEN=$(curl -s -X POST localhost:8081/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"ana@example.com","password":"correct-horse-battery"}' | jq -r .data.access_token)
+
+curl -s localhost:8081/api/v1/users/5d1e7c2a-0a6b-4c1e-9f4e-2b6f7a8c9d01/accounts -H "Authorization: Bearer $TOKEN"
+# {"success":true,"data":[]}
+
+curl -s localhost:8081/api/v1/users/5d1e7c2a-0a6b-4c1e-9f4e-2b6f7a8c9d01/accounts
+# {"success":false,"error":{"code":"UNAUTHORIZED","message":"authentication required"}}
+```
+
+**Upgrading from a release before Sprint 11.** Every client now has to register or log in and send the token on every call, and `POST /accounts` no longer needs `user_id`. Existing customers have no password, so they register like anyone else — with the same e-mail if they like, since identities live in their own table — and get a new user id: accounts created earlier with a user id the client picked are not linked to it, so they can no longer be reached through the API, although they stay in the database untouched. Commands and statement reads that name an account that doesn't exist are now refused by the gateway with `404 ACCOUNT_NOT_FOUND`. Set `JWT_SECRET` to a random value of at least 32 bytes before deploying (the gateway refuses to start without one); the development value in the compose file and `.env.example` is public. The account service applies `008_identities_by_email.cql` at start-up; deploy it before or together with the gateway, because registration and login call its new identity endpoints and answer `502 UPSTREAM_UNAVAILABLE` until they exist.
 
 #### Command endpoints
 
-Every write is accepted asynchronously: the gateway validates the body, publishes a command to Kafka and answers `202` with the command id and the trace id (`X-Request-ID`).
+Every write is accepted asynchronously: the gateway validates the body, checks that the caller may act on the account (see [Authentication and authorization](#authentication-and-authorization)), publishes a command to Kafka and answers `202` with the command id and the trace id (`X-Request-ID`).
 
 | Method | Path | Topic | Event type |
 |---|---|---|---|
@@ -283,12 +350,13 @@ Every write is accepted asynchronously: the gateway validates the body, publishe
 
 ```bash
 curl -s -X POST localhost:8081/api/v1/accounts \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"user_id":"5d1e7c2a-0a6b-4c1e-9f4e-2b6f7a8c9d01","account_type":"checking","name":"Ana Souza","email":"ana@example.com","document":"52998224725"}'
+  -d '{"account_type":"checking","name":"Ana Souza","email":"ana@example.com","document":"52998224725"}'
 # {"success":true,"data":{"command_id":"…","trace_id":"…"}}
 ```
 
-Errors: `400 INVALID_JSON`, `413 PAYLOAD_TOO_LARGE` (body over 1 MiB), `422 VALIDATION_ERROR` (with per-field `details`), `422 EMPTY_UPDATE` (PATCH without fields), `429 RATE_LIMIT_EXCEEDED`, `503 PUBLISH_FAILED` when the broker is unreachable or the circuit is open. A handler that panics — in the gateway or in any service — answers `500 INTERNAL_ERROR` in the same JSON envelope, unless it had already started its response, and is logged at error level as `handler panicked` with the panic value, stack, request id, method, path and trace ids.
+Errors: `400 INVALID_JSON`, `401 UNAUTHORIZED`, `403 FORBIDDEN`, `404 ACCOUNT_NOT_FOUND`, `413 PAYLOAD_TOO_LARGE` (body over 1 MiB), `422 VALIDATION_ERROR` (with per-field `details`), `422 EMPTY_UPDATE` (PATCH without fields), `429 RATE_LIMIT_EXCEEDED`, `502 UPSTREAM_UNAVAILABLE` when the account owner can't be looked up, `503 PUBLISH_FAILED` when the broker is unreachable or the circuit is open. A handler that panics — in the gateway or in any service — answers `500 INTERNAL_ERROR` in the same JSON envelope, unless it had already started its response, and is logged at error level as `handler panicked` with the panic value, stack, request id, method, path and trace ids.
 
 `idempotency_key`, required on `POST /transactions`, `/transfers` and `/payments`, must be 1 to 64 printable ASCII characters with no spaces or control characters (`422 idempotency_key: idempotency_key` otherwise).
 
@@ -313,17 +381,19 @@ The `gt` and `lte` checks run after the per-field tag validation, so a request t
 
 ```bash
 curl -s -X POST localhost:8081/api/v1/transactions \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"account_id":"7e47434d-40d8-4288-afc8-358b73999896","type":"deposit","amount":"1234.50","currency":"BRL","description":"Salary","idempotency_key":"salary-2026-09"}'
 # {"success":true,"data":{"command_id":"…","trace_id":"…"}}
 
-curl -s localhost:8081/api/v1/accounts/7e47434d-40d8-4288-afc8-358b73999896
+curl -s localhost:8081/api/v1/accounts/7e47434d-40d8-4288-afc8-358b73999896 -H "Authorization: Bearer $TOKEN"
 # {"success":true,"data":{"account_id":"7e47434d-…","status":"active","currency":"BRL","balance":"1234.50",…}}
 
-curl -s localhost:8081/api/v1/accounts/7e47434d-40d8-4288-afc8-358b73999896/transactions
+curl -s localhost:8081/api/v1/accounts/7e47434d-40d8-4288-afc8-358b73999896/transactions -H "Authorization: Bearer $TOKEN"
 # {"success":true,"data":[{"transaction_id":"f7c4b83f-…","type":"deposit","status":"completed","amount":"1234.50","currency":"BRL","to_balance_after":"1234.50",…}]}
 
 curl -s -X POST localhost:8081/api/v1/transactions \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"account_id":"7e47434d-40d8-4288-afc8-358b73999896","type":"deposit","amount":"1.234","currency":"BRL","idempotency_key":"too-precise"}'
 # {"success":false,"error":{"code":"VALIDATION_ERROR","message":"request validation failed","details":{"amount":"amount"}}}
@@ -331,11 +401,11 @@ curl -s -X POST localhost:8081/api/v1/transactions \
 
 Responses carry `balance` (accounts), `amount`, `from_balance_after` and `to_balance_after` (transactions), and `amount` and `balance_after` (payments) as strings. Events on Kafka carry every money field (`amount`, `balance`, `balance_after`) the same way; consumers also accept a JSON number, which older releases published: the envelope is decoded keeping each number's literal text, so a plain decimal literal such as `1234.56` or `92233720368547758.07` is converted to cents exactly at any size, never through a binary float, and an envelope followed by any other data is dead-lettered as `invalid_event`; an event whose amount has more than two decimal places or does not fit in 64-bit cents is dead-lettered as `bad_payload`.
 
-**Upgrading to this release.** Read responses used to return money as JSON numbers and now return decimal strings, so clients must parse `balance`, `amount`, `balance_after`, `from_balance_after` and `to_balance_after` as strings; requests with numeric amounts keep working. Events written by older releases carry numbers and remain readable, as do the replies stored in `balance_operations` before the upgrade, and nothing in Cassandra changes. Older services can't decode the string amounts this release publishes, though, so every service has to run a release that reads `Amount` before any of them publishes one. This release is the first that reads both forms, so upgrade in a single coordinated deploy: stop the old gateway and all four domain services, start this release everywhere, and only then let traffic back in, so that no old instance is left to consume an event a new one published.
+**Upgrading from a release before Sprint 9.** Read responses used to return money as JSON numbers and now return decimal strings, so clients must parse `balance`, `amount`, `balance_after`, `from_balance_after` and `to_balance_after` as strings; requests with numeric amounts keep working. Events written by older releases carry numbers and remain readable, as do the replies stored in `balance_operations` before the upgrade, and nothing in Cassandra changes. Older services can't decode the string amounts this release publishes, though, so every service has to run a release that reads `Amount` before any of them publishes one. Sprint 9 is the first release that reads both forms, so upgrading from an earlier one is a single coordinated deploy: stop the old gateway and all four domain services, start the new release everywhere, and only then let traffic back in, so that no old instance is left to consume an event a new one published.
 
 #### Read endpoints
 
-Reads are proxied to the account service via `ACCOUNT_SERVICE_URL`, to the transaction service via `TRANSACTION_SERVICE_URL`, to the payment service via `PAYMENT_SERVICE_URL` and to the notification service via `NOTIFICATION_SERVICE_URL` (default `http://localhost:8085`); `502 UPSTREAM_UNAVAILABLE` when the upstream is down.
+Reads are proxied to the account service via `ACCOUNT_SERVICE_URL`, to the transaction service via `TRANSACTION_SERVICE_URL`, to the payment service via `PAYMENT_SERVICE_URL` and to the notification service via `NOTIFICATION_SERVICE_URL` (default `http://localhost:8085`); `502 UPSTREAM_UNAVAILABLE` when the upstream is down. Reads need the same bearer token and pass the ownership rules above before they are proxied, so on top of the answers below every read can answer `401 UNAUTHORIZED` and `403 FORBIDDEN`, and the account-scoped ones `404 ACCOUNT_NOT_FOUND` from the gateway.
 
 | Method | Path | Upstream |
 |---|---|---|
@@ -354,9 +424,9 @@ An account's transaction or payment list reads the newest ids from the account's
 **Paging a statement.** Both lists accept `before`, an RFC 3339 timestamp with or without fractional seconds (`2026-09-20T10:00:00Z`, `2026-09-20T10:00:00.123Z`), and then return only rows created strictly before it; an unparsable value answers `422 VALIDATION_ERROR` with `details` `{"before":"datetime"}`. When a page is full (as many rows as `limit`), the response carries an `X-Next-Before` header with the last row's `created_at` in RFC 3339 with nanoseconds: send it back, URL-encoded, as `before` to get the next, older page, and stop when a response comes without it (a last page that happens to be full still carries the header, and the request after it returns an empty list). The gateway forwards `before` and `X-Next-Before` unchanged and lists `X-Next-Before` in `CORS_EXPOSED_HEADERS` by default, so browser clients can read it; a value you set yourself replaces that list, so keep `X-Next-Before` in it (a `services/api-gateway/.env` that sets `CORS_EXPOSED_HEADERS=Link` hides the header from browsers).
 
 ```bash
-curl -s -D - "localhost:8081/api/v1/accounts/7e47434d-40d8-4288-afc8-358b73999896/transactions?limit=2"
+curl -s -D - -H "Authorization: Bearer $TOKEN" "localhost:8081/api/v1/accounts/7e47434d-40d8-4288-afc8-358b73999896/transactions?limit=2"
 # X-Next-Before: 2026-09-20T10:00:00.123Z
-curl -s "localhost:8081/api/v1/accounts/7e47434d-40d8-4288-afc8-358b73999896/transactions?limit=2&before=2026-09-20T10%3A00%3A00.123Z"
+curl -s -H "Authorization: Bearer $TOKEN" "localhost:8081/api/v1/accounts/7e47434d-40d8-4288-afc8-358b73999896/transactions?limit=2&before=2026-09-20T10%3A00%3A00.123Z"
 ```
 
 The cursor is a timestamp, and Cassandra keeps `created_at` to the millisecond, so a row created in the same millisecond as the last row of a page, but left off that page, is skipped by the next one. That takes two records of one account created within the same millisecond, right at a page boundary.
@@ -453,18 +523,19 @@ scripts/stack.sh up
 STACK_TIMEOUT=900 scripts/stack.sh wait
 ```
 
-`tests/e2e` is a separate Go module (build tag `e2e`) that drives the running stack through the gateway: account creation, deposits/withdrawals/transfers (including a transfer that gets reversed, which balances each side sees, and idempotency keys scoped per account), payments (including sandbox rejections, webhook settlement, TED document masking and a boleto whose amount doesn't match its code), exact decimal amounts (string amounts compared exactly, a numeric amount still accepted, three `"0.10"` deposits and a `"0.30"` withdrawal leaving `"0.00"`, and the `amount` and `lte` rejections), statement pagination (five deposits read two at a time by following `X-Next-Before`), key format validation and the notifications they trigger. `TestMain` skips the suite if the gateway isn't healthy, unless `E2E_REQUIRED=1` makes that a hard failure instead; `GATEWAY_URL` and `MAILPIT_URL` point it at the stack. The suite fires enough requests to hit the gateway's default rate limit, so `services/api-gateway/docker-compose.yml` now passes `RATE_LIMIT_REQUESTS` through from the environment — raise it when starting the stack (the suite defaults to `GATEWAY_URL=http://localhost:8081` and `MAILPIT_URL=http://localhost:8025`):
+`tests/e2e` is a separate Go module (build tag `e2e`) that drives the running stack through the gateway, registering a user for every customer it creates and sending that user's token on every call: registration and login (`401 UNAUTHORIZED` without a token or with a bad one, `INVALID_CREDENTIALS` for a wrong password or an unknown e-mail, `EMAIL_TAKEN` for a second registration), ownership (another user's accounts, statements, transactions, payments and notifications answer `403`, as do commands on another user's account, and unknown accounts answer `404`), account creation, deposits/withdrawals/transfers (including a transfer that gets reversed, which balances each side sees, and idempotency keys scoped per account), payments (including sandbox rejections, webhook settlement, TED document masking and a boleto whose amount doesn't match its code), exact decimal amounts (string amounts compared exactly, a numeric amount still accepted, three `"0.10"` deposits and a `"0.30"` withdrawal leaving `"0.00"`, and the `amount` and `lte` rejections), statement pagination (five deposits read two at a time by following `X-Next-Before`), key format validation and the notifications they trigger. `TestMain` skips the suite if the gateway isn't healthy, unless `E2E_REQUIRED=1` makes that a hard failure instead; `GATEWAY_URL` and `MAILPIT_URL` point it at the stack. The suite fires enough requests to hit the gateway's default rate limit and registers far more users than the auth limit's 10 a minute, so `services/api-gateway/docker-compose.yml` passes `RATE_LIMIT_REQUESTS` and `AUTH_RATE_LIMIT_REQUESTS` through from the environment — raise both when starting the stack, since `scripts/stack.sh up` otherwise leaves the auth limit at 10 a minute (the suite defaults to `GATEWAY_URL=http://localhost:8081` and `MAILPIT_URL=http://localhost:8025`):
 
 ```bash
-RATE_LIMIT_REQUESTS=100000 scripts/stack.sh up
+export RATE_LIMIT_REQUESTS=100000 AUTH_RATE_LIMIT_REQUESTS=100000
+scripts/stack.sh up
 scripts/stack.sh wait
 (cd tests/e2e && E2E_REQUIRED=1 go test -count=1 -tags e2e ./... -v)
 scripts/stack.sh down
 ```
 
-`tests/load` has k6 scenarios exercising the gateway end to end — commands, reads and a raw deposit-throughput benchmark; see [`tests/load/README.md`](tests/load/README.md) for the scripts, scenarios and how to run them.
+`tests/load` has k6 scenarios exercising the gateway end to end — commands, reads and a raw deposit-throughput benchmark — that register a user per customer and send its token, so they need both limits raised the same way; see [`tests/load/README.md`](tests/load/README.md) for the scripts, scenarios and how to run them.
 
-CI (`.github/workflows/ci.yml`) runs on every push and pull request as seven jobs — `pkg`, `api-gateway` (with a Kafka service container, also linting `services/api-gateway/api/openapi.yaml` with `redocly/cli`), `account-service`, `transaction-service` and `payment-service` (with Kafka and Cassandra service containers), `notification-service` (with Kafka, Redis and Mailpit service containers) and `e2e` (with `RATE_LIMIT_REQUESTS` raised, running `scripts/stack.sh up`/`wait`, the `tests/e2e` suite and `scripts/stack.sh down`) — running `gofmt` check and the test suites for `pkg`, `api-gateway`, `account-service`, `transaction-service`, `payment-service` and `notification-service`, failing the build if coverage drops below 100 % (of `internal/app` for the account, transaction, payment and notification services).
+CI (`.github/workflows/ci.yml`) runs on every push and pull request as seven jobs — `pkg`, `api-gateway` (with a Kafka service container, also linting `services/api-gateway/api/openapi.yaml` with `redocly/cli`), `account-service`, `transaction-service` and `payment-service` (with Kafka and Cassandra service containers), `notification-service` (with Kafka, Redis and Mailpit service containers) and `e2e` (with `RATE_LIMIT_REQUESTS` and `AUTH_RATE_LIMIT_REQUESTS` raised, running `scripts/stack.sh up`/`wait`, the `tests/e2e` suite and `scripts/stack.sh down`) — running `gofmt` check and the test suites for `pkg`, `api-gateway`, `account-service`, `transaction-service`, `payment-service` and `notification-service`, failing the build if coverage drops below 100 % (of `internal/app` for the account, transaction, payment and notification services).
 
 ## Project structure
 
@@ -493,9 +564,12 @@ fintech-bank-platform/
 │   │   ├── api/openapi.yaml               OpenAPI 3.1 document, embedded and served
 │   │   ├── internal/
 │   │   │   ├── config/                    env → typed Config
-│   │   │   ├── contracts/                 interfaces for config, context and http
-│   │   │   ├── app/handlers/              command endpoints, read proxy, OpenAPI handler
+│   │   │   ├── contracts/                 interfaces for config, context, http and auth
+│   │   │   ├── app/handlers/              command endpoints, register/login, ownership guard, read proxy, OpenAPI handler
 │   │   │   └── infrastructure/
+│   │   │       ├── auth/                  JWT issuer and verifier, bearer middleware
+│   │   │       ├── identity/              account service identity client
+│   │   │       ├── owners/                account owner lookup with an in-memory cache
 │   │   │       ├── http/                  server, router, handlers, middleware/
 │   │   │       └── messaging/             kafka producer, circuit breaker
 │   │   ├── tests/  (unit/ · feature/ · integration/)     testify-style TestCase helpers
@@ -509,8 +583,8 @@ fintech-bank-platform/
 │   │   │   ├── contracts/                 interfaces for config, messaging and repositories
 │   │   │   ├── app/
 │   │   │   │   ├── models/                domain types
-│   │   │   │   ├── services/              account and customer use cases
-│   │   │   │   └── handlers/              command dispatcher, DLQ, read endpoints
+│   │   │   │   ├── services/              account, customer and identity use cases
+│   │   │   │   └── handlers/              command dispatcher, DLQ, read and identity endpoints
 │   │   │   └── infrastructure/
 │   │   │       ├── database/              Cassandra repositories and migrations
 │   │   │       └── http/                  server, router, health, read handlers
@@ -568,7 +642,7 @@ fintech-bank-platform/
 │       ├── Makefile · Dockerfile · docker-compose.yml · .air.toml
 │       └── .env.example
 └── tests/
-    ├── e2e/                    Go module (build tag e2e): accounts, transactions, statements, payments, notifications
+    ├── e2e/                    Go module (build tag e2e): auth, accounts, transactions, statements, payments, notifications
     └── load/                   k6 scenarios (commands, reads, throughput) · README.md
 ```
 
@@ -588,6 +662,7 @@ Each future service follows the same layout: `cmd/`, `internal/{config,contracts
 - [x] **Sprint 8** — hardening: rate-limit key spoofing, panic handling, per-account idempotency, validation alignment and read privacy
 - [x] **Sprint 9** — exact decimal money in the API and events, batched statements and trusted proxy hops
 - [x] **Sprint 10** — operational robustness: open-record sweeps, statement pagination, exact legacy numbers and Redis without eviction
+- [x] **Sprint 11** — authentication: e-mail/password identities, JWT access tokens and owner-only access on every route
 
 ## License
 
