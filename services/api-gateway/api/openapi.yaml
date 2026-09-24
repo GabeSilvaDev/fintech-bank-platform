@@ -444,10 +444,11 @@ paths:
           $ref: '#/components/responses/PayloadTooLarge'
         '422':
           description: |
-            The body failed validation (`VALIDATION_ERROR`). `details` maps each invalid field to the rule it broke,
-            `amount` to `amount` when it is not a positive decimal string with at most two decimal places, `amount` to
-            `lte` when it is above `9999999999999.99`, or, for `boleto`, `amount` to `boleto_amount` when it does not
-            match the amount encoded in `boleto_code`.
+            The body failed validation (`VALIDATION_ERROR`). `details` maps each invalid field to the rule it broke.
+            `amount` maps to `amount` when it is not a decimal with at most two decimal places, to `gt` when it is zero
+            or negative, to `lte` when it is above `9999999999999.99`, or, for `boleto`, to `boleto_amount` when it
+            does not match the amount encoded in `boleto_code`. `gt`, `lte` and `boleto_amount` are only checked once
+            every other field is valid, so they are reported on their own.
           headers:
             X-Request-ID:
               $ref: '#/components/headers/XRequestID'
@@ -457,15 +458,15 @@ paths:
                 $ref: '#/components/schemas/ErrorEnvelope'
               examples:
                 validation:
-                  summary: Invalid field
+                  summary: Invalid fields
                   value:
                     success: false
                     error:
                       code: VALIDATION_ERROR
                       message: request validation failed
                       details:
-                        amount: gt
                         currency: currency
+                        account_id: uuid
                 malformedAmount:
                   summary: Amount is not a valid decimal string
                   value:
@@ -704,8 +705,9 @@ components:
         The body failed validation (`VALIDATION_ERROR`). `details` maps each invalid field to the rule it broke, such
         as `required`, `uuid`, `oneof`, `email`, `gt`, `lte`, `amount`, `min`, `max`, `len`, `nefield`, `cpf|cnpj`,
         `phone_br`, `currency`, `pix_key`, `boleto`, `agency_number`, `account_number` or `excluded`. `amount` set to
-        `amount` means the value is not a positive decimal string with at most two decimal places; `lte` means it is
-        above `9999999999999.99`.
+        `amount` means the value is not a decimal with at most two decimal places, `gt` means it is zero or negative,
+        and `lte` means it is above `9999999999999.99`. `gt` and `lte` are only checked once every other field is
+        valid, so they are reported on their own.
       headers:
         X-Request-ID:
           $ref: '#/components/headers/XRequestID'
@@ -720,7 +722,6 @@ components:
               message: request validation failed
               details:
                 amount: gt
-                currency: currency
     InvalidPathId:
       description: A path id is not a UUID (`VALIDATION_ERROR`, `details` maps the parameter name to `uuid`).
       headers:

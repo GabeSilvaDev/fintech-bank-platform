@@ -100,7 +100,10 @@ Struct tags: `cpf`, `cnpj`, `phone_br`, `pix_key`, `agency_number`, `account_num
 ## events
 
 ```go
-import "github.com/fintech-bank-platform/pkg/events"
+import (
+    "github.com/fintech-bank-platform/pkg/domain"
+    "github.com/fintech-bank-platform/pkg/events"
+)
 
 event := events.NewAccountCommand(events.EventTypes.CreateAccount, events.CreateAccountPayload{
     UserID:      "user-123",
@@ -119,7 +122,7 @@ topic := events.Topics.AccountCommands // "account.commands"
 payment := events.NewPaymentCommand(events.EventTypes.ProcessPayment, events.ProcessPaymentPayload{
     AccountID:      "5d1e7c2a-0a6b-4c1e-9f4e-2b6f7a8c9d01",
     PaymentMethod:  "ted",
-    Amount:         150.00,
+    Amount:         domain.AmountFromCents(15000),
     Currency:       "BRL",
     Recipient:      "Ana Souza",
     TED:            &events.TEDDetails{BankCode: "341", Branch: "0001", Account: "123456", Document: "52998224725"},
