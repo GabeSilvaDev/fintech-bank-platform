@@ -439,6 +439,19 @@ func TestDecodePayload(t *testing.T) {
 	assert.ErrorIs(t, DecodePayload(cmd, &dst), ErrBadPayload)
 }
 
+func TestDecodePayload_KeepsLegacyNumericAmountExact(t *testing.T) {
+	raw := []byte(`{"id":"e1","type":"account.credit","version":"1.0","source":"legacy","timestamp":"2024-01-01T00:00:00Z","payload":{"amount":92233720368547758.07}}`)
+
+	cmd, err := events.FromJSON(raw)
+	require.NoError(t, err)
+
+	var dst struct {
+		Amount domain.Amount `json:"amount"`
+	}
+	require.NoError(t, DecodePayload(cmd, &dst))
+	assert.Equal(t, int64(math.MaxInt64), dst.Amount.Cents())
+}
+
 const (
 	remoteTraceID = "4bf92f3577b34da6a3ce929d0e0e4736"
 	remoteSpanID  = "00f067aa0ba902b7"

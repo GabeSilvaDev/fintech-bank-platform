@@ -69,6 +69,29 @@ func TestFromJSON_Invalid(t *testing.T) {
 	assert.Nil(t, event)
 }
 
+func TestFromJSON_TrailingData(t *testing.T) {
+	original := NewEvent("test.event", "test-service", map[string]string{"key": "value"})
+	jsonData, _ := original.ToJSON()
+
+	event, err := FromJSON(append(jsonData, []byte(`{}`)...))
+
+	assert.Error(t, err)
+	assert.Nil(t, event)
+}
+
+func TestFromJSON_KeepsNumericLiteralsExact(t *testing.T) {
+	raw := []byte(`{"id":"e1","type":"test.event","version":"1.0","source":"legacy","timestamp":"2024-01-01T00:00:00Z","payload":{"amount":92233720368547758.07}}`)
+
+	event, err := FromJSON(raw)
+
+	assert.NoError(t, err)
+	payload, ok := event.Payload.(map[string]interface{})
+	assert.True(t, ok)
+	amount, ok := payload["amount"].(json.Number)
+	assert.True(t, ok)
+	assert.Equal(t, "92233720368547758.07", amount.String())
+}
+
 func TestTopics(t *testing.T) {
 	assert.Equal(t, "account.commands", Topics.AccountCommands)
 	assert.Equal(t, "transaction.commands", Topics.TransactionCommands)

@@ -1,7 +1,9 @@
 package events
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/fintech-bank-platform/pkg/domain"
@@ -54,9 +56,15 @@ func (e *Event) ToJSON() ([]byte, error) {
 
 // FromJSON deserializes JSON to an event
 func FromJSON(data []byte) (*Event, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+
 	var event Event
-	if err := json.Unmarshal(data, &event); err != nil {
+	if err := dec.Decode(&event); err != nil {
 		return nil, err
+	}
+	if dec.More() {
+		return nil, fmt.Errorf("invalid character after top-level value")
 	}
 	return &event, nil
 }
