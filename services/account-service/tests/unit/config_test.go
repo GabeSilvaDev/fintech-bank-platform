@@ -1,6 +1,7 @@
 package unit
 
 import (
+	"runtime"
 	"testing"
 	"time"
 
@@ -31,6 +32,7 @@ func TestConfigDefaults(t *testing.T) {
 	assert.False(t, cfg.Log.Pretty)
 	assert.Equal(t, 30, cfg.Startup.Attempts)
 	assert.Equal(t, 2*time.Second, cfg.Startup.Delay)
+	assert.Equal(t, 2*runtime.GOMAXPROCS(0), cfg.Identity.HashConcurrency)
 }
 
 func TestConfigFromEnv(t *testing.T) {
@@ -106,4 +108,23 @@ func TestConfigObservabilityInvalidSampleRatioFallsBack(t *testing.T) {
 	cfg, _ := config.New()
 
 	assert.Equal(t, 1.0, cfg.Observability.SampleRatio)
+}
+
+func TestConfigIdentityHashConcurrencyFromEnv(t *testing.T) {
+	t.Setenv("IDENTITY_HASH_CONCURRENCY", "3")
+
+	cfg, err := config.New()
+
+	assert.NoError(t, err)
+	assert.Equal(t, 3, cfg.Identity.HashConcurrency)
+}
+
+func TestConfigIdentityHashConcurrencyBelowOneFallsBack(t *testing.T) {
+	for _, value := range []string{"0", "-2", "many"} {
+		t.Setenv("IDENTITY_HASH_CONCURRENCY", value)
+
+		cfg, _ := config.New()
+
+		assert.Equal(t, 2*runtime.GOMAXPROCS(0), cfg.Identity.HashConcurrency, value)
+	}
 }

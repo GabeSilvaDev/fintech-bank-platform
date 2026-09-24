@@ -107,6 +107,8 @@ func mapIdentityError(err error) error {
 		return apperrors.Conflict("EMAIL_TAKEN", "email already registered")
 	case errors.Is(err, services.ErrInvalidCredentials):
 		return apperrors.Unauthorized("INVALID_CREDENTIALS", "invalid email or password")
+	case errors.Is(err, services.ErrBusy):
+		return apperrors.ServiceUnavailable("SERVICE_BUSY", "service is busy, try again shortly")
 	case domain.InvalidCode(err) == "invalid_email":
 		return apperrors.UnprocessableEntity("VALIDATION_ERROR", "request validation failed").WithDetail("email", "email")
 	case domain.InvalidCode(err) == "invalid_password":

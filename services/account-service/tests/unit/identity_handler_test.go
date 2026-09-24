@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/fintech-bank-platform/account-service/internal/app/handlers"
+	"github.com/fintech-bank-platform/account-service/internal/app/services"
 	"github.com/fintech-bank-platform/account-service/tests"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -107,5 +108,18 @@ func TestIdentityHandlersHideUnexpectedErrors(t *testing.T) {
 		assert.Equal(t, http.StatusInternalServerError, rec.Code)
 		assert.Equal(t, "INTERNAL_ERROR", decoded["error"].(map[string]interface{})["code"])
 		assert.NotContains(t, rec.Body.String(), "cassandra")
+	}
+}
+
+func TestIdentityHandlersAnswerBusyWhenHashingIsSaturated(t *testing.T) {
+	router := identityRouter(stubIdentities{err: services.ErrBusy})
+
+	for _, path := range []string{"/identities", "/identities/verify"} {
+		rec, decoded := post(router, path, `{"email":"ana@example.com","password":"correct horse"}`)
+
+		assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+		errorBody := decoded["error"].(map[string]interface{})
+		assert.Equal(t, "SERVICE_BUSY", errorBody["code"])
+		assert.Equal(t, "service is busy, try again shortly", errorBody["message"])
 	}
 }

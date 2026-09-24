@@ -1,6 +1,7 @@
 package config
 
 import (
+	"runtime"
 	"time"
 
 	"github.com/fintech-bank-platform/account-service/internal/contracts"
@@ -16,6 +17,7 @@ type Config struct {
 	Log           contracts.LogConfig
 	Startup       contracts.StartupConfig
 	Observability contracts.ObservabilityConfig
+	Identity      contracts.IdentityConfig
 }
 
 func New() (*Config, error) {
@@ -59,6 +61,9 @@ func New() (*Config, error) {
 			Delay:    positiveDuration(env.GetDuration("STARTUP_RETRY_DELAY", 2*time.Second), 2*time.Second),
 		},
 		Observability: loadObservabilityConfig(),
+		Identity: contracts.IdentityConfig{
+			HashConcurrency: env.GetIntMin("IDENTITY_HASH_CONCURRENCY", 2*runtime.GOMAXPROCS(0), 1),
+		},
 	}, nil
 }
 

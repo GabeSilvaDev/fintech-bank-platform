@@ -53,3 +53,7 @@ type ObservabilityConfig struct {
 	OTLPEndpoint   string
 	SampleRatio    float64
 }
+
+type IdentityConfig struct {
+	HashConcurrency int
+}
