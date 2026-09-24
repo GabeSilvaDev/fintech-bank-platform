@@ -44,7 +44,7 @@ func TestAccountCreationSendsWelcomeEmail(t *testing.T) {
 	require.Equal(t, userID, account["user_id"])
 	require.Equal(t, "checking", account["type"])
 	require.Equal(t, "active", account["status"])
-	require.InDelta(t, 0, account["balance"].(float64), 0.001)
+	require.Equal(t, "0.00", account["balance"])
 
 	email := emailOf(userID)
 	var subjects []string

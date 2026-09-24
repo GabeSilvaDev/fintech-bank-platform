@@ -39,14 +39,14 @@ func ted(bankCode string) map[string]interface{} {
 func TestPaymentSandboxPaths(t *testing.T) {
 	t.Parallel()
 	_, accountID := newCustomer(t, "")
-	deposit(t, accountID, 2000)
+	deposit(t, accountID, "2000.00")
 
-	pix := pay(t, accountID, map[string]interface{}{"payment_method": "pix", "amount": 42.50, "pix_key": "ana@example.com"})
-	pixRejected := pay(t, accountID, map[string]interface{}{"payment_method": "pix", "amount": 10, "pix_key": "reject@reject.test"})
-	tedSettled := pay(t, accountID, map[string]interface{}{"payment_method": "ted", "amount": 100, "ted": ted("341")})
-	tedRejected := pay(t, accountID, map[string]interface{}{"payment_method": "ted", "amount": 50, "ted": ted("999")})
-	boleto := pay(t, accountID, map[string]interface{}{"payment_method": "boleto", "amount": 150, "boleto_code": settledBoleto})
-	boletoRejected := pay(t, accountID, map[string]interface{}{"payment_method": "boleto", "amount": 50, "boleto_code": rejectedBoleto})
+	pix := pay(t, accountID, map[string]interface{}{"payment_method": "pix", "amount": "42.50", "pix_key": "ana@example.com"})
+	pixRejected := pay(t, accountID, map[string]interface{}{"payment_method": "pix", "amount": "10.00", "pix_key": "reject@reject.test"})
+	tedSettled := pay(t, accountID, map[string]interface{}{"payment_method": "ted", "amount": "100.00", "ted": ted("341")})
+	tedRejected := pay(t, accountID, map[string]interface{}{"payment_method": "ted", "amount": "50.00", "ted": ted("999")})
+	boleto := pay(t, accountID, map[string]interface{}{"payment_method": "boleto", "amount": "150.00", "boleto_code": settledBoleto})
+	boletoRejected := pay(t, accountID, map[string]interface{}{"payment_method": "boleto", "amount": "50.00", "boleto_code": rejectedBoleto})
 
 	cases := []struct {
 		name   string
@@ -75,9 +75,12 @@ func TestPaymentSandboxPaths(t *testing.T) {
 		}
 	}
 
-	require.InDelta(t, 1707.50, balance(t, accountID), 0.001)
+	require.Equal(t, "1707.50", balance(t, accountID))
+
+	require.Equal(t, "42.50", payment(t, accountID, pix)["amount"])
 
 	tedPayment := payment(t, accountID, tedSettled)
+	require.Equal(t, "100.00", tedPayment["amount"])
 	tedDetails, ok := tedPayment["ted"].(map[string]interface{})
 	require.True(t, ok, "ted payment has no ted details: %v", tedPayment)
 	require.Equal(t, "*********25", tedDetails["document"])
@@ -85,7 +88,7 @@ func TestPaymentSandboxPaths(t *testing.T) {
 	status, rejection := postRejected(t, "/api/v1/payments", map[string]interface{}{
 		"account_id":      accountID,
 		"payment_method":  "boleto",
-		"amount":          149.99,
+		"amount":          "149.99",
 		"currency":        "BRL",
 		"recipient":       "Destinatário E2E",
 		"boleto_code":     settledBoleto,
@@ -99,7 +102,7 @@ func TestPaymentSandboxPaths(t *testing.T) {
 	status, rejection = postRejected(t, "/api/v1/payments", map[string]interface{}{
 		"account_id":      accountID,
 		"payment_method":  "boleto",
-		"amount":          150,
+		"amount":          "150.00",
 		"currency":        "BRL",
 		"recipient":       "Destinatário E2E",
 		"boleto_code":     invalidBoleto,
@@ -112,7 +115,7 @@ func TestPaymentSandboxPaths(t *testing.T) {
 	status, rejection = postRejected(t, "/api/v1/payments", map[string]interface{}{
 		"account_id":      accountID,
 		"payment_method":  "ted",
-		"amount":          100,
+		"amount":          "100.00",
 		"currency":        "BRL",
 		"recipient":       "Destinatário E2E",
 		"idempotency_key": key(),

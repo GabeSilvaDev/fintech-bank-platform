@@ -240,11 +240,13 @@ func newCustomer(t *testing.T, phone string) (string, string) {
 	return userID, accountID
 }
 
-func balance(t *testing.T, accountID string) float64 {
+func balance(t *testing.T, accountID string) string {
 	t.Helper()
 	status, data := get(t, "/api/v1/accounts/"+accountID)
 	require.Equal(t, http.StatusOK, status)
-	return data.(map[string]interface{})["balance"].(float64)
+	value, ok := data.(map[string]interface{})["balance"].(string)
+	require.True(t, ok, "account %s balance is not a decimal string: %v", accountID, data)
+	return value
 }
 
 func contains(values []string, value interface{}) bool {
@@ -281,7 +283,7 @@ func payment(t *testing.T, accountID, idempotencyKey string) map[string]interfac
 	return settled(t, 60*time.Second, "/api/v1/accounts/"+accountID+"/payments", idempotencyKey, paymentFinal)
 }
 
-func movement(t *testing.T, accountID, kind string, amount float64) string {
+func movement(t *testing.T, accountID, kind, amount string) string {
 	t.Helper()
 	k := key()
 	accepted(t, "/api/v1/transactions", map[string]interface{}{
@@ -295,13 +297,13 @@ func movement(t *testing.T, accountID, kind string, amount float64) string {
 	return k
 }
 
-func deposit(t *testing.T, accountID string, amount float64) {
+func deposit(t *testing.T, accountID, amount string) {
 	t.Helper()
 	tx := transaction(t, accountID, movement(t, accountID, "deposit", amount))
 	require.Equal(t, "completed", tx["status"], "deposit: %v", tx)
 }
 
-func transfer(t *testing.T, fromAccountID, toAccountID string, amount float64) string {
+func transfer(t *testing.T, fromAccountID, toAccountID, amount string) string {
 	t.Helper()
 	k := key()
 	accepted(t, "/api/v1/transfers", map[string]interface{}{

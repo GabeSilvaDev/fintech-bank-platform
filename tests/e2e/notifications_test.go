@@ -32,8 +32,8 @@ func TestNotificationHistory(t *testing.T) {
 	senderUser, sender := newCustomer(t, "")
 	receiverUser, receiver := newCustomer(t, "")
 
-	deposit(t, sender, 200)
-	tx := transaction(t, sender, transfer(t, sender, receiver, 80))
+	deposit(t, sender, "200.00")
+	tx := transaction(t, sender, transfer(t, sender, receiver, "80.00"))
 	if tx["status"] != "completed" {
 		t.Fatalf("transfer did not complete: %v", tx)
 	}
