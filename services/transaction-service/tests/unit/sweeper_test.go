@@ -588,6 +588,28 @@ func TestSweeperRunLogsOpenIndexRebuildFailures(t *testing.T) {
 	assert.NotContains(t, logs.String(), "open index rebuilt")
 }
 
+func TestSweeperRunRetriesFailedReindexUntilItSucceeds(t *testing.T) {
+	h := newHarness()
+	h.repo.ReindexErr = errors.New("cassandra down")
+	attempts := 0
+	h.repo.OnReindex = func() {
+		attempts++
+		if attempts == 2 {
+			h.repo.ReindexErr = nil
+		}
+	}
+	cfg := sweeperConfig()
+	cfg.Interval = time.Millisecond
+	logs := &bytes.Buffer{}
+	sweeper := services.NewSweeper(h.service, &tests.FakePublisher{}, tests.FakeClock{T: now}, cfg, logger.New(logger.Config{Output: logs}))
+
+	runSweeperFor(t, sweeper, 30*time.Millisecond)
+
+	assert.Equal(t, 2, h.repo.Reindexes)
+	assert.Contains(t, logs.String(), "open index rebuild failed")
+	assert.Contains(t, logs.String(), "open index rebuilt")
+}
+
 func TestSweeperRunOnceIgnoresSettledAndMissingRecordsLeftInTheOpenIndex(t *testing.T) {
 	h := newHarness()
 	settled := h.pending(models.TypeDeposit, models.StatusCompleted)

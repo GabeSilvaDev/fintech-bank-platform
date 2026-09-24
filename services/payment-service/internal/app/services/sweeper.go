@@ -109,9 +109,13 @@ func (s *Sweeper) exhaust(ctx context.Context, payment *models.Payment, now time
 }
 
 func (s *Sweeper) Run(ctx context.Context) {
-	ticker := time.NewTicker(s.cfg.Interval)
-	defer ticker.Stop()
-	s.reindex(ctx)
+	reindexed := s.reindex(ctx)
+	var sweepTick <-chan time.Time
+	if s.cfg.Interval > 0 {
+		ticker := time.NewTicker(s.cfg.Interval)
+		defer ticker.Stop()
+		sweepTick = ticker.C
+	}
 	var fullScan <-chan time.Time
 	if s.cfg.FullScanInterval > 0 {
 		fullScanTicker := time.NewTicker(s.cfg.FullScanInterval)
@@ -124,7 +128,11 @@ func (s *Sweeper) Run(ctx context.Context) {
 			return
 		case <-fullScan:
 			s.reindex(ctx)
-		case <-ticker.C:
+		case <-sweepTick:
+			if !reindexed {
+				reindexed = s.reindex(ctx)
+				continue
+			}
 			if _, err := s.RunOnce(ctx); err != nil {
 				s.log.Error().Err(err).Msg("reconciliation sweep failed")
 			}
@@ -132,11 +140,12 @@ func (s *Sweeper) Run(ctx context.Context) {
 	}
 }
 
-func (s *Sweeper) reindex(ctx context.Context) {
+func (s *Sweeper) reindex(ctx context.Context) bool {
 	count, err := s.service.Reindex(ctx)
 	if err != nil {
 		s.log.Error().Err(err).Msg("open index rebuild failed")
-		return
+		return false
 	}
 	s.log.Info().Int("count", count).Msg("open index rebuilt")
+	return true
 }
