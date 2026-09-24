@@ -252,8 +252,21 @@ func TestConcurrentWrongPasswordsAreBoundedStrictlyAgainstCassandra(t *testing.T
 	require.Equal(t, compares, invalid.Load())
 	require.Equal(t, int32(20), invalid.Load()+locked.Load())
 
-	_, err = service.Verify(ctx, email, "correct horse")
 	var tooMany *services.ErrTooManyAttempts
+	lockedOut := false
+	for attempt := 0; attempt < 5 && !lockedOut; attempt++ {
+		_, err = service.Verify(ctx, email, "wrong horse")
+		if errors.As(err, &tooMany) {
+			lockedOut = true
+			continue
+		}
+		require.ErrorIs(t, err, services.ErrInvalidCredentials)
+	}
+	require.True(t, lockedOut)
+	compares = hasher.compares.Load()
+	require.LessOrEqual(t, compares, int32(5))
+
+	_, err = service.Verify(ctx, email, "correct horse")
 	require.ErrorAs(t, err, &tooMany)
 	require.Equal(t, compares, hasher.compares.Load())
 }
