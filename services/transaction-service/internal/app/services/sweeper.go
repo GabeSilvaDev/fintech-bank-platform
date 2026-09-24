@@ -36,6 +36,7 @@ func NewSweeper(service *TransactionService, publisher contracts.Publisher, cloc
 func (s *Sweeper) WithMetrics(m *metrics.Metrics) *Sweeper {
 	s.resent = m.CounterVec(ResentTotalName, ResentTotalHelp, "status")
 	s.exhausted = m.CounterVec(ExhaustedTotalName, ExhaustedTotalHelp)
+	s.exhausted.WithLabelValues()
 	return s
 }
 

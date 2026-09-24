@@ -18,7 +18,7 @@ groups:
           summary: "{{ $labels.service }} is answering more than 5% of requests with 5xx"
           description: "5xx ratio over the last 5 minutes is {{ $value | humanizePercentage }}."
       - alert: DeadLettersGrowing
-        expr: increase(messages_processed_total{outcome="dead_lettered"}[10m]) > 0
+        expr: increase(messages_processed_total{outcome="dead_lettered"}[10m]) > 0 or (messages_processed_total{outcome="dead_lettered"} unless messages_processed_total{outcome="dead_lettered"} offset 10m)
         labels:
           severity: warning
         annotations:

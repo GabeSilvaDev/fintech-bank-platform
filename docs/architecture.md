@@ -351,9 +351,9 @@ A "Traces in Jaeger (Explore)" link opens the Jaeger data source filtered by the
 |---|---|---|---|
 | `ServiceDown` | `up == 0` | 1m | critical |
 | `HighErrorRate` | 5xx share of `http_requests_total` per service over 5m `> 0.05` | 5m | warning |
-| `DeadLettersGrowing` | `increase(messages_processed_total{outcome="dead_lettered"}[10m]) > 0` | — | warning |
+| `DeadLettersGrowing` | `increase(messages_processed_total{outcome="dead_lettered"}[10m]) > 0 or (messages_processed_total{outcome="dead_lettered"} unless messages_processed_total{outcome="dead_lettered"} offset 10m)` | — | warning |
 | `ConsumerLagHigh` | `kafka_consumer_lag > 1000` | 5m | warning |
 | `ReconciliationExhausted` | `increase(reconciliation_exhausted_total[15m]) > 0` | — | critical |
 | `CircuitBreakerOpen` | `circuit_breaker_state == 2` | 1m | critical |
 
-`DeadLettersGrowing` counts processor dead letters only; the saga alerts (`reversal_failed`, `refund_failed`) and the sweeper's `reconciliation_exhausted` event are published straight to the DLQ topics, and the last one has its own alert.
+A counter series only appears on its first increment, so `increase` alone never sees the first dead letter of a `service`/`type` pair; the `unless … offset 10m` branch fires for a series that did not exist 10 minutes earlier. The sweepers expose `reconciliation_exhausted_total` at `0` from start-up, so `increase` sees its first step. `DeadLettersGrowing` counts processor dead letters only; the saga alerts (`reversal_failed`, `refund_failed`) and the sweeper's `reconciliation_exhausted` event are published straight to the DLQ topics, and the last one has its own alert.

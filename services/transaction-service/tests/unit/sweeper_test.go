@@ -466,3 +466,13 @@ func TestSweeperDoesNotIncrementExhaustedCounterWhenTouchIsLost(t *testing.T) {
 	assert.Equal(t, 0, count)
 	assert.Equal(t, float64(0), exhaustedCount(t, m))
 }
+
+func TestSweeperExposesExhaustedCounterAtZeroBeforeAnyRecordIsExhausted(t *testing.T) {
+	h := newHarness()
+	m := metrics.New("test-transaction-sweeper-exhausted-zero")
+
+	services.NewSweeper(h.service, &tests.FakePublisher{}, tests.FakeClock{T: now}, sweeperConfig(), logger.New(logger.Config{Output: io.Discard})).WithMetrics(m)
+
+	assert.Equal(t, 1, testutil.CollectAndCount(m.Registry(), services.ExhaustedTotalName))
+	assert.Equal(t, float64(0), exhaustedCount(t, m))
+}
