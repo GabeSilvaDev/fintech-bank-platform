@@ -9,7 +9,7 @@ flowchart LR
     C[Client] -->|HTTP| GW[api-gateway]
     GW -->|account.commands<br/>transaction.commands<br/>payment.commands| K[(Kafka)]
     GW -->|read proxy| A & T & P & N
-    GW -->|identities, owner lookup| A
+    GW -->|identities, sessions, owner lookup| A
     K --> A[account-service]
     K --> T[transaction-service]
     K --> P[payment-service]
@@ -29,8 +29,8 @@ flowchart LR
 
 | Component | Port (container / published) | Responsibility | State |
 |---|---|---|---|
-| `api-gateway` | 8080 / 8081 | Registers and logs users in through the account service and issues HS256 JWT access tokens; authenticates every other `/api/v1` request and lets it through only for the caller's own accounts and user id (see [Security](#security)); validates HTTP writes and publishes them as commands (`202` with `command_id` and `trace_id`); proxies reads to the domain services; serves the OpenAPI document at `GET /api/v1/openapi.yaml`; guards the Kafka producer with a circuit breaker; CORS and a per-client rate limit keyed on the connection address, or with `TRUST_PROXY_HEADERS=true` on the `TRUSTED_PROXY_HOPS`-th `X-Forwarded-For` entry counting from the right (`X-Real-IP` and `True-Client-IP` are never read), plus a separate limit on `/api/v1/auth/*` | In memory: account owners for `OWNER_CACHE_TTL`, at most 10,000 |
-| `account-service` | 8082 / 8082 | Customers and accounts; the only owner of balances — credits and debits are compare-and-set updates applied at most once per idempotency key; e-mail/password identities (bcrypt) behind internal `POST /identities` and `POST /identities/verify` for the gateway; internal owner endpoint for the gateway and the notification service | `fintech_accounts`: `accounts`, `customers`, lookup tables, `identities_by_email`, `balance_operations`, `processed_events` |
+| `api-gateway` | 8080 / 8081 | Registers and logs users in through the account service and issues short-lived HS256 JWT access tokens next to the account service's rotating refresh tokens, which it exchanges (`/auth/refresh`) and revokes (`/auth/logout`); authenticates every other `/api/v1` request and lets it through only for the caller's own accounts and user id (see [Security](#security)); validates HTTP writes and publishes them as commands (`202` with `command_id` and `trace_id`); proxies reads to the domain services; serves the OpenAPI document at `GET /api/v1/openapi.yaml`; guards the Kafka producer with a circuit breaker; CORS and a per-client rate limit keyed on the connection address, or with `TRUST_PROXY_HEADERS=true` on the `TRUSTED_PROXY_HOPS`-th `X-Forwarded-For` entry counting from the right (`X-Real-IP` and `True-Client-IP` are never read), plus a separate limit on `/api/v1/auth/*` | In memory: account owners for `OWNER_CACHE_TTL` and unknown accounts for `OWNER_NEGATIVE_CACHE_TTL`, at most 10,000 entries |
+| `account-service` | 8082 / 8082 | Customers and accounts; the only owner of balances — credits and debits are compare-and-set updates applied at most once per idempotency key; e-mail/password identities (bcrypt) with a per-e-mail login lockout behind internal `POST /identities` and `POST /identities/verify`, and refresh sessions behind internal `POST /sessions`, `/sessions/rotate` and `/sessions/revoke`, all for the gateway; internal owner endpoint for the gateway and the notification service | `fintech_accounts`: `accounts`, `customers`, lookup tables, `identities_by_email`, `login_failures`, `refresh_tokens`, `sessions_by_family`, `revoked_families`, `balance_operations`, `processed_events` |
 | `transaction-service` | 8083 / 8083 | Deposits, withdrawals and transfers as sagas over `account.commands`, compensation of rejected transfer credits, reconciliation sweeper, per-account statements | `fintech_transactions`: `transactions`, `transactions_by_account`, `transactions_by_account_key`, `open_transactions`, `processed_events` (the older `transactions_by_key` is no longer used) |
 | `payment-service` | 8084 / 8084 | PIX, TED and boleto as sagas: debit, submission to the sandbox provider, settlement (at once or by signed webhook), refund on rejection, reconciliation sweeper, per-account statements | `fintech_payments`: `payments`, `payments_by_account`, `payments_by_key`, `payments_by_external_id`, `open_payments`, `processed_events` |
 | `notification-service` | 8085 / 8085 | Routes result events into e-mail, SMS and push commands and delivers them; per-user history | Redis (`maxmemory 256mb`, `noeviction`): processed markers and `notification:history:<user id>`; in memory: owner contacts, bounded by `ACCOUNT_DIRECTORY_MAX_ENTRIES` |
@@ -69,7 +69,7 @@ In the diagrams, an arrow between two services is a message published on Kafka a
 
 ### Authentication and ownership
 
-Every flow below starts with a request that has already been through these checks. Registration is shown; login is the same exchange with `POST /identities/verify`, answered `200` with the user id or `401 INVALID_CREDENTIALS`. Here the arrows between the gateway and the account service are synchronous HTTP calls.
+Every flow below starts with a request that has already been through these checks. Registration is shown; login is the same exchange with `POST /identities/verify`, answered `200` with the user id, `401 INVALID_CREDENTIALS` or, for a locked e-mail, `429 TOO_MANY_ATTEMPTS` (see [Sessions and login lockout](#sessions-and-login-lockout)). Here the arrows between the gateway and the account service are synchronous HTTP calls.
 
 ```mermaid
 sequenceDiagram
@@ -88,17 +88,20 @@ sequenceDiagram
         GW-->>C: 409 EMAIL_TAKEN
     else created
         AS-->>GW: 201 user_id
+        GW->>AS: POST /sessions (user_id)
+        AS->>AS: new family, store SHA-256 of a random refresh token
+        AS-->>GW: 201 refresh_token, expires_at
         GW->>GW: sign HS256 JWT with JWT_SECRET (sub, iss, iat, exp, jti)
-        GW-->>C: 201 user_id, access_token, token_type Bearer, expires_in
+        GW-->>C: 201 user_id, access_token, token_type Bearer, expires_in, refresh_token, refresh_expires_in
     end
     C->>GW: GET /api/v1/accounts/id/transactions (Authorization Bearer token)
     GW->>GW: verify HS256 signature, iss fintech-gateway, exp (30 s leeway)
     alt token missing or refused
         GW-->>C: 401 UNAUTHORIZED, WWW-Authenticate Bearer
     else token valid, caller is sub
-        GW->>AS: GET /accounts/id/owner (skipped while cached for OWNER_CACHE_TTL)
+        GW->>AS: GET /accounts/id/owner (skipped while cached, shared by concurrent lookups)
         alt account unknown
-            AS-->>GW: 404 ACCOUNT_NOT_FOUND
+            AS-->>GW: 404 ACCOUNT_NOT_FOUND (remembered for OWNER_NEGATIVE_CACHE_TTL)
             GW-->>C: 404 ACCOUNT_NOT_FOUND
         else owned by another user
             AS-->>GW: 200 user_id
@@ -113,6 +116,42 @@ sequenceDiagram
 ```
 
 `/users/{user_id}/…` routes compare the path with `sub` and need no lookup; `GET /transactions/{id}` and `GET /payments/{id}` proxy first and release the record only when its account (or, for a transfer, the counterparty) belongs to the caller. The full route table is in the README's [Authentication and authorization](../README.md#authentication-and-authorization).
+
+### Sessions and login lockout
+
+A session is a family of refresh tokens that starts at login or registration. Each refresh token works once: a refresh rotates it into the next token of the family, and presenting a token that was already used revokes the whole family. The account service stores only SHA-256 hashes of the tokens.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant GW as api-gateway
+    participant AS as account-service
+    C->>GW: POST /api/v1/auth/refresh (refresh_token R1)
+    GW->>AS: POST /sessions/rotate (R1)
+    AS->>AS: look up SHA-256(R1), check expiry and revoked_families
+    alt R1 active and family younger than REFRESH_FAMILY_MAX_AGE
+        AS->>AS: store R2 in the same family
+        AS->>AS: UPDATE refresh_tokens SET status rotated IF status = active (LWT)
+        AS->>AS: check revoked_families again
+        AS-->>GW: 200 user_id, R2, expires_at
+        GW->>GW: sign a new access token
+        GW-->>C: 200 access_token, R2
+    else R1 rotated or revoked, or the LWT lost
+        AS->>AS: write revoked_families marker, mark every token of the family revoked
+        AS-->>GW: 401 INVALID_SESSION
+        GW-->>C: 401 INVALID_SESSION, WWW-Authenticate Bearer
+    end
+    C->>GW: POST /api/v1/auth/logout (refresh_token)
+    GW->>AS: POST /sessions/revoke
+    AS->>AS: revoke the family (nothing to do for an unknown or expired token)
+    AS-->>GW: 204
+    GW-->>C: 204
+```
+
+Refresh tokens live `REFRESH_TOKEN_TTL` (default `720h`) and never outlive their family's `REFRESH_FAMILY_MAX_AGE` (default `2160h`). The revoked-family marker is written before the tokens are marked, and a rotation checks it both before and after its LWT, so a revocation running at the same time as a rotation wins: the token the rotation just issued is refused. A rotation whose write outcome is unknown answers an error although the token may have been rotated; a client that retries with the same token then revokes its own family and logs in again. Access tokens are not tracked, so logout doesn't cut one short: it stays valid until its `exp` (`JWT_TTL`, default `15m`).
+
+`POST /identities/verify` reserves every attempt in `login_failures`, keyed by the normalised e-mail whether or not it is registered, with an LWT compare-and-set before it checks the password. Once `LOGIN_MAX_FAILURES` (default `5`) attempts count within `LOGIN_LOCKOUT_WINDOW` (default `15m`, a fixed window from the first failure measured by the service's clock), it answers `429 TOO_MANY_ATTEMPTS` with `Retry-After` set to the seconds left, even for the right password, so at most `LOGIN_MAX_FAILURES` passwords are compared per e-mail per window however many requests race. A success deletes the row; an attempt that fails for a reason other than wrong credentials gives its reservation back. An attempt that keeps losing the compare-and-set, or whose write has an unknown outcome, answers `429` with `Retry-After: 1`; one that can't read or write the row answers `503 SERVICE_BUSY` with `Retry-After: 1` without comparing the password. The gateway forwards `Retry-After` on both.
 
 ### Deposit
 
@@ -331,22 +370,22 @@ The sandbox provider deduplicates submissions by payment id; a real provider mus
 - **Redelivery instead of dead-letter.** A cancelled context or a failure of the processed-events store returns the error to the consumer, which does not commit, so the message is processed again after the restart.
 - **`ambiguous_write`.** A Cassandra write timeout or unavailable error, an unknown LWT outcome, a client-side timeout or a cancelled write context may or may not have applied, so it is never retried automatically. In the account service the balance operation stays `pending` and every re-send of that key gets `ambiguous_write` again until the sweeper reaches `SWEEPER_MAX_AGE` and raises `reconciliation_exhausted`; the record then needs manual resolution well within the 30-day TTL (check the balance and the `balance_operations` row before replaying anything).
 - **Notifications.** The processed marker is written before the send, so a crash mid-delivery drops that notification (at most once), while an in-process retry after an ambiguous provider error can repeat one. Redis runs with `maxmemory 256mb` and `noeviction`, so a marker is never evicted to make room (an evicted marker would let a redelivered event notify again); when Redis is full, writes fail instead: a marker write is retried with the backoff and then returned to the consumer uncommitted, so the event is processed again once there is room, and a failed history write is logged and dropped. Size `maxmemory` for the notification volume, since markers live 7 days. Routing skips source events older than `NOTIFICATION_MAX_EVENT_AGE`; delivery commands have no age check.
-- **Gateway.** When the broker is unreachable or the circuit breaker is open, writes answer `503 PUBLISH_FAILED`; a down upstream answers `502 UPSTREAM_UNAVAILABLE` on reads, and so does a failed owner lookup on any account-scoped route and a failed identity call on registration or login (the identity and owner clients never follow redirects, so a redirect counts as a failure). An account service that is already hashing as many passwords as it allows answers `503 SERVICE_BUSY`, which the gateway passes through unchanged. `401`, `403` and `404 ACCOUNT_NOT_FOUND` are answered before anything is published, so a refused command never reaches Kafka.
+- **Gateway.** When the broker is unreachable or the circuit breaker is open, writes answer `503 PUBLISH_FAILED`; a down upstream answers `502 UPSTREAM_UNAVAILABLE` on reads, and so does a failed owner lookup on any account-scoped route and a failed identity call on registration or login (the identity and owner clients never follow redirects, so a redirect counts as a failure). An account service that is already hashing as many passwords as it allows, or can't reach its login-failure counters, answers `503 SERVICE_BUSY` with `Retry-After: 1`, and a locked e-mail `429 TOO_MANY_ATTEMPTS` with the seconds left in `Retry-After`; the gateway passes both through with their `Retry-After`. A refresh or logout the account service can't answer is `502 UPSTREAM_UNAVAILABLE`, and a logout that fails that way has not revoked anything. `401`, `403` and `404 ACCOUNT_NOT_FOUND` are answered before anything is published, so a refused command never reaches Kafka.
 - **HTTP panics.** Every router mounts `pkg/middleware.Recovery(log)`: a panicking handler is logged at error level as `handler panicked` (panic value, stack, request id, method, path, `otel_trace_id` and `otel_span_id` when present) and answered with the JSON error envelope, `500 INTERNAL_ERROR`, unless it had already written a response. `http.ErrAbortHandler` is re-raised so the server aborts the connection as usual.
 
 ## Security
 
-**Identities.** The account service owns them: `identities_by_email` (migration 008) keys a user by the trimmed, lower-cased e-mail and keeps a random user id and a bcrypt hash (cost 12) of a password of 8 to 72 bytes. Registration is an `IF NOT EXISTS` insert, so an e-mail is registered once. Verification gives the same `401 INVALID_CREDENTIALS` for an unknown e-mail, a wrong password, an invalid e-mail and a password over 72 bytes, and runs a bcrypt comparison against a fixed dummy hash when there is no identity, so neither the answer nor its timing tells whether login succeeded because the e-mail exists. Registration does tell: a taken e-mail answers `409 EMAIL_TAKEN`, a deliberate usability trade-off that the auth rate limit below only slows down. bcrypt runs behind a semaphore of `IDENTITY_HASH_CONCURRENCY` slots (default `2 × GOMAXPROCS`) shared by hashes, real comparisons and the dummy comparison; a request that can't get a slot within 2 s, or whose context ends first, answers `503 SERVICE_BUSY`, so a login flood degrades into fast refusals instead of an unbounded CPU queue. Both endpoints are internal: the gateway doesn't proxy them.
+**Identities.** The account service owns them: `identities_by_email` (migration 008) keys a user by the trimmed, lower-cased e-mail and keeps a random user id and a bcrypt hash (cost 12) of a password of 8 to 72 bytes. Registration is an `IF NOT EXISTS` insert, so an e-mail is registered once. Verification gives the same `401 INVALID_CREDENTIALS` for an unknown e-mail, a wrong password, an invalid e-mail and a password over 72 bytes, and runs a bcrypt comparison against a fixed dummy hash when there is no identity, so neither the answer nor its timing tells whether login succeeded because the e-mail exists. Registration does tell: a taken e-mail answers `409 EMAIL_TAKEN`, a deliberate usability trade-off that the auth rate limit below only slows down. bcrypt runs behind a semaphore of `IDENTITY_HASH_CONCURRENCY` slots (default `2 × GOMAXPROCS`) shared by hashes, real comparisons and the dummy comparison; a request that can't get a slot within 2 s, or whose context ends first, answers `503 SERVICE_BUSY`, so a login flood degrades into fast refusals instead of an unbounded CPU queue. Both endpoints are internal: the gateway doesn't proxy them. Verification also enforces the per-e-mail lockout described in [Sessions and login lockout](#sessions-and-login-lockout): it counts unknown e-mails like registered ones, so a `429` reveals nothing either.
 
-**Tokens.** The gateway signs HS256 JWTs with `JWT_SECRET` (`sub` user id, `iss` `fintech-gateway`, `iat`, `exp` after `JWT_TTL`, default `1h` and at most `24h` — a longer value stops the gateway at start-up — and a random `jti`) and verifies them with the algorithm pinned to HS256, the issuer checked, `exp` required and 30 s of leeway. The secret is trimmed of surrounding whitespace and must then be at least 32 bytes or the gateway refuses to start; the value shipped in `services/api-gateway/docker-compose.yml` and `.env.example` is public and only for development, so the gateway logs a warning at start-up whenever it runs with it, and any real deployment sets its own random secret. There are no refresh tokens and no revocation list: a client logs in again when its token expires, and a leaked token stays valid until its `exp`, so keep `JWT_TTL` short. The `jti` is not tracked. Changing `JWT_SECRET` invalidates every token at once.
+**Tokens.** The gateway signs HS256 JWTs with `JWT_SECRET` (`sub` user id, `iss` `fintech-gateway`, `iat`, `exp` after `JWT_TTL`, default `15m` and at most `24h` — a longer value stops the gateway at start-up — and a random `jti`) and verifies them with the algorithm pinned to HS256, the issuer checked, `exp` required and 30 s of leeway. The secret is trimmed of surrounding whitespace and must then be at least 32 bytes or the gateway refuses to start; the value shipped in `services/api-gateway/docker-compose.yml` and `.env.example` is public and only for development, so the gateway logs a warning at start-up whenever it runs with it, and any real deployment sets its own random secret. Clients renew access tokens with the account service's single-use refresh tokens (see [Sessions and login lockout](#sessions-and-login-lockout)); a leaked refresh token is usable at most once before reuse detection revokes its session, and logout revokes a session on purpose. There is no revocation list for access tokens: the `jti` is not tracked, so a leaked access token stays valid until its `exp`, which is why `JWT_TTL` is short. Password reset, MFA and listing a user's sessions are out of scope. Changing `JWT_SECRET` invalidates every token at once.
 
-**Authentication and authorization.** Every `/api/v1` route except `/auth/register`, `/auth/login` and `/openapi.yaml` requires `Authorization: Bearer`, answering `401 UNAUTHORIZED` with `WWW-Authenticate: Bearer` otherwise; `/health` and `/metrics` sit outside `/api/v1` and are not authenticated. Ownership is enforced in the gateway only: a path `user_id` must equal `sub`, and an account named in a path or a command body (`account_id`, or `from_account_id` for a transfer) must belong to `sub`, as told by the account service's `GET /accounts/{id}/owner` and cached for `OWNER_CACHE_TTL`. `POST /accounts` takes the user id from the token. Violations answer `403 FORBIDDEN`, unknown accounts `404 ACCOUNT_NOT_FOUND`. The owner check fails closed: an account id in a read path that is not a UUID answers `422 VALIDATION_ERROR` (`details` `{"id":"uuid"}` or `{"account_id":"uuid"}`) from the gateway; a percent-encoded id is decoded for the owner check (so another user's account still answers `403`) and then refused with the same `422`, so only unencoded ids that parse as UUIDs reach a service. `GET /transactions/{id}` serves the owner of `account_id` the record as stored, and the owner of only `counterparty_id` the same record without `description` and `idempotency_key`, which the sender chose. The gateway drops `Authorization` from proxied reads.
+**Authentication and authorization.** Every `/api/v1` route except `/auth/register`, `/auth/login`, `/auth/refresh`, `/auth/logout` and `/openapi.yaml` requires `Authorization: Bearer`, answering `401 UNAUTHORIZED` with `WWW-Authenticate: Bearer` otherwise; `/health` and `/metrics` sit outside `/api/v1` and are not authenticated. Ownership is enforced in the gateway only: a path `user_id` must equal `sub`, and an account named in a path or a command body (`account_id`, or `from_account_id` for a transfer) must belong to `sub`, as told by the account service's `GET /accounts/{id}/owner` and cached for `OWNER_CACHE_TTL`; concurrent lookups of one account share a single call, and an unknown account is remembered for `OWNER_NEGATIVE_CACHE_TTL` (default `5s`, `0` turns it off), so a burst for an unknown id doesn't turn into a burst on the account service. `POST /accounts` takes the user id from the token. Violations answer `403 FORBIDDEN`, unknown accounts `404 ACCOUNT_NOT_FOUND`. The owner check fails closed: an account id in a read path that is not a UUID answers `422 VALIDATION_ERROR` (`details` `{"id":"uuid"}` or `{"account_id":"uuid"}`) from the gateway; a percent-encoded id is decoded for the owner check (so another user's account still answers `403`) and then refused with the same `422`, so only unencoded ids that parse as UUIDs reach a service. `GET /transactions/{id}` serves the owner of `account_id` the record as stored, and the owner of only `counterparty_id` the same record without `description` and `idempotency_key`, which the sender chose. The gateway drops `Authorization` from proxied reads.
 
 **CORS.** By default any origin may call the API (`CORS_ALLOWED_ORIGINS=*`) with `GET`, `POST`, `PUT`, `PATCH`, `DELETE` and `OPTIONS`, and `CORS_ALLOW_CREDENTIALS` is `false`: the API authenticates with a bearer token, not cookies, so browsers have no ambient credential to send. Turn credentials on only together with an explicit origin list.
 
-**Brute force.** `/auth/register` and `/auth/login` share a limiter of `AUTH_RATE_LIMIT_REQUESTS` (default 10) per `AUTH_RATE_LIMIT_WINDOW` (default `1m`) per client address, IPv6 counted by /64, on top of the general limit. It is keyed by address only, not by account, so it slows one client down but doesn't lock an account against guesses spread over many addresses; the bcrypt cost and the hashing bound are what limit the total guessing rate.
+**Brute force.** `/auth/register`, `/auth/login`, `/auth/refresh` and `/auth/logout` share a limiter of `AUTH_RATE_LIMIT_REQUESTS` (default 10) per `AUTH_RATE_LIMIT_WINDOW` (default `1m`) per client address, IPv6 counted by /64, on top of the general limit. It slows one client down; guesses spread over many addresses are capped by the per-e-mail lockout instead, at `LOGIN_MAX_FAILURES` passwords per `LOGIN_LOCKOUT_WINDOW` for each e-mail. The flip side is that anyone who knows an e-mail can lock it for the rest of the window with five wrong passwords (by default), a trade-off accepted for a limit that can't be spread across addresses.
 
-**Trust boundary.** The domain services trust the gateway: there is no service-to-service authentication, and their HTTP APIs — reads, `GET /accounts/{id}/owner`, `POST /identities` and `POST /identities/verify` — answer anyone who reaches them. Their ports are published by the compose files only for development; in any other deployment only the gateway (and the payment service's signed webhook) may be reachable from outside. Kafka is unauthenticated too, so whoever can publish a command bypasses the gateway's checks.
+**Trust boundary.** The domain services trust the gateway: there is no service-to-service authentication, and their HTTP APIs — reads, `GET /accounts/{id}/owner`, `POST /identities`, `POST /identities/verify` and the `/sessions` endpoints — answer anyone who reaches them. `POST /sessions` trusts the `user_id` it is given, so whoever reaches the account service can start a session for any user; its compose file publishes it on `127.0.0.1:8082` only. The other ports are published by the compose files only for development; in any other deployment only the gateway (and the payment service's signed webhook) may be reachable from outside. Kafka is unauthenticated too, so whoever can publish a command bypasses the gateway's checks.
 
 ## Observability
 
@@ -383,7 +422,7 @@ A result publish that fails still counts the processed message as `ok`; the fail
 `tracing.Init` installs the W3C `traceparent`/`tracestate` and `baggage` propagators. The spans a request produces:
 
 - **HTTP server** — `tracing.Middleware` on every domain service router continues an incoming `traceparent` and names the span after the route (`POST /api/v1/transactions`). The gateway uses `tracing.EdgeMiddleware` instead: it starts a new root span, records a client's `traceparent` only as a span link, and strips `traceparent`, `tracestate` and `baggage` from the request so none of them reaches the services. Neither traces `/health` or `/metrics`. A method outside the nine standard ones is recorded as `_OTHER` (span name `HTTP`), with the raw value in `http.request.method_original`.
-- **HTTP client** — the gateway's read proxy, identity client and owner lookup use `tracing.Transport`, so proxied reads, registrations, logins and owner lookups continue into the domain service's server span.
+- **HTTP client** — the gateway's read proxy, identity client and owner lookup use `tracing.Transport`, so proxied reads, registrations, logins, refreshes, logouts and owner lookups continue into the domain service's server span.
 - **Kafka publish** — `Producer.Publish` starts a `publish <topic>` producer span and injects `traceparent` into the message headers, next to the `event_type` and `trace_id` headers.
 - **Kafka consume** — the consumer hands the handler a context extracted from those headers, and `Processor.Process` runs in a `process <event type>` consumer span; the store, the dispatcher and every publish use that span's context, so results and dead letters stay on the same trace. Events labelled `unknown` (see the metrics table) get `process unknown`, with their own type in `messaging.message.type_original`.
 

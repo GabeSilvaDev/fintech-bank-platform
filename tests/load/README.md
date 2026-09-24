@@ -4,7 +4,7 @@ k6 scripts exercising the gateway (`:8081`) end to end: commands (writes through
 
 ## Prerequisite: raise the rate limits
 
-The gateway rate-limits requests per IP (`RATE_LIMIT_REQUESTS`, default 100/min) and applies a stricter, separate limit to `POST /auth/register` and `POST /auth/login` (`AUTH_RATE_LIMIT_REQUESTS`, default 10/min). Load scenarios exceed the first in seconds, and every script's `setup()` registers one user per customer (20 for `commands.js` / `reads.js`, at least 10 for `throughput.js`), which trips the second, so recreate the gateway with both limits raised before running anything here:
+The gateway rate-limits requests per IP (`RATE_LIMIT_REQUESTS`, default 100/min) and applies a stricter, separate limit to `POST /auth/register`, `/auth/login`, `/auth/refresh` and `/auth/logout` (`AUTH_RATE_LIMIT_REQUESTS`, default 10/min). Load scenarios exceed the first in seconds, and every script's `setup()` registers one user per customer (20 for `commands.js` / `reads.js`, at least 10 for `throughput.js`), which trips the second, so recreate the gateway with both limits raised before running anything here:
 
 ```bash
 cd services/api-gateway && RATE_LIMIT_REQUESTS=100000 AUTH_RATE_LIMIT_REQUESTS=100000 docker compose up -d
@@ -12,7 +12,7 @@ cd services/api-gateway && RATE_LIMIT_REQUESTS=100000 AUTH_RATE_LIMIT_REQUESTS=1
 
 ## Authentication
 
-Every `/api/v1` route except `/auth/register` and `/auth/login` requires `Authorization: Bearer <token>`, and each customer can only touch its own accounts. `setup()` therefore registers a fresh user per customer (unique `@load.test` e-mail), keeps the returned access token next to the account id, and creates the account without `user_id` (the gateway takes it from the token). Every request then sends the owning customer's token: reads and deposits use the customer's own token, and a transfer uses the sender's token. Tokens live for `JWT_TTL` (default 1 h), longer than any scenario here.
+Every `/api/v1` route except `/auth/register`, `/auth/login`, `/auth/refresh` and `/auth/logout` requires `Authorization: Bearer <token>`, and each customer can only touch its own accounts. `setup()` therefore registers a fresh user per customer (unique `@load.test` e-mail), keeps the returned access token next to the account id, and creates the account without `user_id` (the gateway takes it from the token). Every request then sends the owning customer's token: reads and deposits use the customer's own token, and a transfer uses the sender's token. Access tokens live for `JWT_TTL` (default 15 min), longer than any scenario here (the longest, `soak`, runs 10 minutes after a setup of about half a minute), so the scripts never refresh them and ignore the `refresh_token` registration also returns. The scripts only register and never log in, so the per-e-mail login lockout doesn't apply to them.
 
 ## Running
 
