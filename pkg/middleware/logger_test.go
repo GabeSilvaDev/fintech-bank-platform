@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/fintech-bank-platform/pkg/logger"
+	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/trace"
@@ -83,4 +84,28 @@ func TestLoggerMiddlewareOmitsTraceIDsWithoutSpan(t *testing.T) {
 
 	assert.NotContains(t, entry, "otel_trace_id")
 	assert.NotContains(t, entry, "otel_span_id")
+}
+
+func TestLoggerMiddlewareLogsResolvedClientIP(t *testing.T) {
+	var buf bytes.Buffer
+	log := logger.New(logger.Config{Level: "debug", Output: &buf})
+	handler := chiMiddleware.ClientIPFromXFFTrustedProxies(1)(Logger(log)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})))
+
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req.RemoteAddr = "10.0.0.7:5555"
+	req.Header.Set("X-Forwarded-For", "198.51.100.23")
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	var entry map[string]interface{}
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
+	assert.Equal(t, "198.51.100.23", entry["client_ip"])
+	assert.Equal(t, "10.0.0.7:5555", entry["remote_addr"])
+}
+
+func TestLoggerMiddlewareOmitsClientIPWhenUnresolved(t *testing.T) {
+	entry := captureLog(t, http.StatusOK, "")
+
+	assert.NotContains(t, entry, "client_ip")
 }

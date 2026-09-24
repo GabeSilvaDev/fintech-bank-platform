@@ -26,6 +26,10 @@ func Logger(log *logger.Logger) func(http.Handler) http.Handler {
 				entry = entry.Str("otel_trace_id", traceID).Str("otel_span_id", spanID)
 			}
 
+			if clientIP := chiMiddleware.GetClientIP(r.Context()); clientIP != "" {
+				entry = entry.Str("client_ip", clientIP)
+			}
+
 			entry.
 				Str("request_id", GetRequestID(r.Context())).
 				Str("method", r.Method).
