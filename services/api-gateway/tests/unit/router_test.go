@@ -18,6 +18,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func testDependencies() appHttp.Dependencies {
@@ -177,4 +182,52 @@ func TestSetupRouterRecordsRoutePatternForProxiedReads(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 	counter := m.CounterVec("http_requests_total", "Total number of HTTP requests", "method", "route", "status")
 	assert.Equal(t, float64(1), testutil.ToFloat64(counter.WithLabelValues("GET", "/api/v1/accounts/{id}", "200")))
+}
+
+func TestSetupRouterStartsNewTraceForClientTraceContext(t *testing.T) {
+	recorder := useTraceRecorder(t)
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(propagation.TraceContext{}, propagation.Baggage{}))
+
+	var upstreamHeader http.Header
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHeader = r.Header.Clone()
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
+	}))
+	defer upstream.Close()
+
+	router := chi.NewRouter()
+	cfg := &config.Config{
+		CORS:      contracts.CORSConfig{AllowedOrigins: []string{"*"}, AllowedMethods: []string{"GET"}},
+		RateLimit: contracts.RateLimitConfig{Requests: 1000, Window: time.Minute},
+	}
+	deps := testDependencies()
+	accountService, _ := url.Parse(upstream.URL)
+	deps.AccountService = accountService
+
+	appHttp.SetupRouter(router, cfg, deps)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/abc", nil)
+	req.Header.Set("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+	req.Header.Set("tracestate", "vendor=value")
+	req.Header.Set("baggage", "user_id=attacker")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	var server sdktrace.ReadOnlySpan
+	for _, span := range recorder.Ended() {
+		if span.SpanKind() == trace.SpanKindServer {
+			server = span
+		}
+	}
+	require.NotNil(t, server)
+	assert.False(t, server.Parent().IsValid())
+	assert.NotEqual(t, "4bf92f3577b34da6a3ce929d0e0e4736", server.SpanContext().TraceID().String())
+	require.Len(t, server.Links(), 1)
+	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", server.Links()[0].SpanContext.TraceID().String())
+
+	assert.Contains(t, upstreamHeader.Get("traceparent"), server.SpanContext().TraceID().String())
+	assert.Empty(t, upstreamHeader.Get("tracestate"))
+	assert.Empty(t, upstreamHeader.Get("baggage"))
 }

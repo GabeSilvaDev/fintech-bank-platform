@@ -22,6 +22,14 @@ var untracedPaths = map[string]bool{
 }
 
 func Middleware(next http.Handler) http.Handler {
+	return serverMiddleware(next, false)
+}
+
+func EdgeMiddleware(next http.Handler) http.Handler {
+	return serverMiddleware(next, true)
+}
+
+func serverMiddleware(next http.Handler, edge bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if untracedPaths[r.URL.Path] {
 			next.ServeHTTP(w, r)
@@ -29,15 +37,36 @@ func Middleware(next http.Handler) http.Handler {
 		}
 
 		name, methodAttrs := method(r.Method)
-		ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
-		ctx, span := Tracer().Start(ctx, name,
+		options := []trace.SpanStartOption{
 			trace.WithSpanKind(trace.SpanKindServer),
 			trace.WithAttributes(append(methodAttrs, semconv.URLPath(r.URL.Path))...),
-		)
+		}
+
+		propagator := otel.GetTextMapPropagator()
+		carrier := propagation.HeaderCarrier(r.Header)
+		ctx := r.Context()
+		if edge {
+			options = append(options, trace.WithNewRoot())
+			if incoming := trace.SpanContextFromContext(propagator.Extract(ctx, carrier)); incoming.IsValid() {
+				options = append(options, trace.WithLinks(trace.Link{SpanContext: incoming}))
+			}
+		} else {
+			ctx = propagator.Extract(ctx, carrier)
+		}
+
+		ctx, span := Tracer().Start(ctx, name, options...)
 		defer span.End()
 
+		inner := r.WithContext(ctx)
+		if edge {
+			inner.Header = r.Header.Clone()
+			for _, field := range propagator.Fields() {
+				inner.Header.Del(field)
+			}
+		}
+
 		ww := chiMiddleware.NewWrapResponseWriter(w, r.ProtoMajor)
-		next.ServeHTTP(ww, r.WithContext(ctx))
+		next.ServeHTTP(ww, inner)
 
 		if route := chi.RouteContext(r.Context()).RoutePattern(); route != "" {
 			span.SetName(name + " " + route)

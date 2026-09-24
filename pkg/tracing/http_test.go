@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/baggage"
 	"go.opentelemetry.io/otel/codes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
@@ -262,7 +263,7 @@ func TestTransportCollapsesNonStandardMethods(t *testing.T) {
 }
 
 func TestMiddlewareSkipsHealthChecksAndScrapes(t *testing.T) {
-	for _, middleware := range []func(http.Handler) http.Handler{Middleware} {
+	for _, middleware := range []func(http.Handler) http.Handler{Middleware, EdgeMiddleware} {
 		for _, path := range []string{"/health", "/metrics"} {
 			recorder := useRecorder(t)
 
@@ -285,4 +286,82 @@ func TestMiddlewareTracesPathsThatOnlyStartLikeHealth(t *testing.T) {
 	serveWith(Middleware, func(w http.ResponseWriter, r *http.Request) {}, http.MethodGet, "/healthz", nil)
 
 	assert.Len(t, recorder.Ended(), 1)
+}
+
+func TestEdgeMiddlewareLinksIncomingSpanInsteadOfContinuingIt(t *testing.T) {
+	recorder := useRecorder(t)
+
+	var handlerTraceID string
+	var handlerBaggage baggage.Baggage
+	var forwarded http.Header
+	serveWith(EdgeMiddleware, func(w http.ResponseWriter, r *http.Request) {
+		handlerTraceID, _, _ = IDs(r.Context())
+		handlerBaggage = baggage.FromContext(r.Context())
+		forwarded = r.Header.Clone()
+	}, http.MethodGet, "/accounts/123", http.Header{
+		"Traceparent": {remoteTraceParent},
+		"Tracestate":  {"vendor=value"},
+		"Baggage":     {"user_id=attacker,tenant=other"},
+		"X-Custom":    {"kept"},
+	})
+
+	spans := recorder.Ended()
+	require.Len(t, spans, 1)
+	span := spans[0]
+	assert.Equal(t, "GET /accounts/{id}", span.Name())
+	assert.NotEqual(t, "4bf92f3577b34da6a3ce929d0e0e4736", span.SpanContext().TraceID().String())
+	assert.False(t, span.Parent().IsValid())
+	require.Len(t, span.Links(), 1)
+	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", span.Links()[0].SpanContext.TraceID().String())
+	assert.Equal(t, "00f067aa0ba902b7", span.Links()[0].SpanContext.SpanID().String())
+
+	assert.Equal(t, span.SpanContext().TraceID().String(), handlerTraceID)
+	assert.Equal(t, 0, handlerBaggage.Len())
+	assert.Empty(t, forwarded.Get("traceparent"))
+	assert.Empty(t, forwarded.Get("tracestate"))
+	assert.Empty(t, forwarded.Get("baggage"))
+	assert.Equal(t, "kept", forwarded.Get("X-Custom"))
+}
+
+func TestEdgeMiddlewareDropsIncomingBaggageFromOutgoingCalls(t *testing.T) {
+	recorder := useRecorder(t)
+
+	var upstream http.Header
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstream = r.Header.Clone()
+	}))
+	defer server.Close()
+
+	client := &http.Client{Transport: Transport(nil)}
+	serveWith(EdgeMiddleware, func(w http.ResponseWriter, r *http.Request) {
+		req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, server.URL, nil)
+		require.NoError(t, err)
+		for key, values := range r.Header {
+			req.Header[key] = values
+		}
+		resp, err := client.Do(req)
+		require.NoError(t, err)
+		resp.Body.Close()
+	}, http.MethodGet, "/accounts/123", http.Header{
+		"Traceparent": {remoteTraceParent},
+		"Baggage":     {"user_id=attacker"},
+	})
+
+	spans := recorder.Ended()
+	require.Len(t, spans, 2)
+	edge := spans[1]
+	assert.Empty(t, upstream.Get("baggage"))
+	assert.Contains(t, upstream.Get("traceparent"), edge.SpanContext().TraceID().String())
+	assert.NotContains(t, upstream.Get("traceparent"), "4bf92f3577b34da6a3ce929d0e0e4736")
+}
+
+func TestEdgeMiddlewareStartsRootWithoutLinksWhenNoIncomingSpan(t *testing.T) {
+	recorder := useRecorder(t)
+
+	serveWith(EdgeMiddleware, func(w http.ResponseWriter, r *http.Request) {}, http.MethodGet, "/accounts/123", nil)
+
+	spans := recorder.Ended()
+	require.Len(t, spans, 1)
+	assert.False(t, spans[0].Parent().IsValid())
+	assert.Empty(t, spans[0].Links())
 }
