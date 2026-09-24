@@ -11,6 +11,7 @@ import (
 	"github.com/fintech-bank-platform/api-gateway/internal/infrastructure/auth"
 	"github.com/fintech-bank-platform/api-gateway/internal/infrastructure/http/middleware"
 	"github.com/fintech-bank-platform/api-gateway/internal/infrastructure/identity"
+	"github.com/fintech-bank-platform/api-gateway/internal/infrastructure/owners"
 	"github.com/fintech-bank-platform/pkg/logger"
 	"github.com/fintech-bank-platform/pkg/metrics"
 	pkgmw "github.com/fintech-bank-platform/pkg/middleware"
@@ -19,7 +20,7 @@ import (
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 )
 
-const identityTimeout = 5 * time.Second
+const upstreamCallTimeout = 5 * time.Second
 
 type Dependencies struct {
 	Publisher           contracts.Publisher
@@ -29,6 +30,7 @@ type Dependencies struct {
 	TransactionService  *url.URL
 	PaymentService      *url.URL
 	NotificationService *url.URL
+	Owners              contracts.AccountOwners
 }
 
 func SetupRouter(router *chi.Mux, cfg *config.Config, deps Dependencies) {
@@ -56,16 +58,27 @@ func SetupRouter(router *chi.Mux, cfg *config.Config, deps Dependencies) {
 		router.Get("/metrics", deps.Metrics.Handler().ServeHTTP)
 	}
 
-	account := handlers.NewAccountHandler(deps.Publisher)
-	transaction := handlers.NewTransactionHandler(deps.Publisher)
-	payment := handlers.NewPaymentHandler(deps.Publisher)
+	accountOwners := deps.Owners
+	if accountOwners == nil {
+		accountOwners = owners.NewClient(deps.AccountService, upstreamCallTimeout, cfg.Auth.OwnerCacheTTL)
+	}
+	guard := handlers.NewAccessGuard(accountOwners)
+	self := guard.RequireSelf("user_id")
+	ownAccount := guard.RequireAccountOwner("id")
+	ownAccountItems := guard.RequireAccountOwner("account_id")
+
+	account := handlers.NewAccountHandler(deps.Publisher, guard)
+	transaction := handlers.NewTransactionHandler(deps.Publisher, guard)
+	payment := handlers.NewPaymentHandler(deps.Publisher, guard)
 	accountReads := nethttp.StripPrefix("/api/v1", handlers.NewReadProxy(deps.AccountService, "account service"))
 	transactionReads := nethttp.StripPrefix("/api/v1", handlers.NewReadProxy(deps.TransactionService, "transaction service"))
+	transactionByID := nethttp.StripPrefix("/api/v1", handlers.NewGuardedReadProxy(deps.TransactionService, "transaction service", guard, "account_id", "counterparty_id"))
 	paymentReads := nethttp.StripPrefix("/api/v1", handlers.NewReadProxy(deps.PaymentService, "payment service"))
+	paymentByID := nethttp.StripPrefix("/api/v1", handlers.NewGuardedReadProxy(deps.PaymentService, "payment service", guard, "account_id"))
 	notificationReads := nethttp.StripPrefix("/api/v1", handlers.NewReadProxy(deps.NotificationService, "notification service"))
 
 	authentication := handlers.NewAuthHandler(
-		identity.NewClient(deps.AccountService, identityTimeout),
+		identity.NewClient(deps.AccountService, upstreamCallTimeout),
 		auth.NewIssuer(cfg.Auth.JWTSecret, cfg.Auth.TokenTTL),
 	)
 	authLimit := middleware.RateLimit(cfg.AuthRateLimit)
@@ -85,16 +98,16 @@ func SetupRouter(router *chi.Mux, cfg *config.Config, deps Dependencies) {
 			r.Post("/accounts", account.Create)
 			r.Patch("/accounts/{id}", account.Update)
 			r.Delete("/accounts/{id}", account.Delete)
-			r.Get("/accounts/{id}", accountReads.ServeHTTP)
-			r.Get("/users/{user_id}/accounts", accountReads.ServeHTTP)
-			r.Get("/accounts/{account_id}/transactions", transactionReads.ServeHTTP)
+			r.With(ownAccount).Get("/accounts/{id}", accountReads.ServeHTTP)
+			r.With(self).Get("/users/{user_id}/accounts", accountReads.ServeHTTP)
+			r.With(ownAccountItems).Get("/accounts/{account_id}/transactions", transactionReads.ServeHTTP)
 			r.Post("/transactions", transaction.Create)
 			r.Post("/transfers", transaction.Transfer)
-			r.Get("/transactions/{id}", transactionReads.ServeHTTP)
-			r.Get("/accounts/{account_id}/payments", paymentReads.ServeHTTP)
+			r.Get("/transactions/{id}", transactionByID.ServeHTTP)
+			r.With(ownAccountItems).Get("/accounts/{account_id}/payments", paymentReads.ServeHTTP)
 			r.Post("/payments", payment.Process)
-			r.Get("/payments/{id}", paymentReads.ServeHTTP)
-			r.Get("/users/{user_id}/notifications", notificationReads.ServeHTTP)
+			r.Get("/payments/{id}", paymentByID.ServeHTTP)
+			r.With(self).Get("/users/{user_id}/notifications", notificationReads.ServeHTTP)
 		})
 	})
 }

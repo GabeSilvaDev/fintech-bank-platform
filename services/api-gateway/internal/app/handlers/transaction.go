@@ -30,10 +30,11 @@ type transferRequest struct {
 
 type TransactionHandler struct {
 	publisher contracts.Publisher
+	guard     *AccessGuard
 }
 
-func NewTransactionHandler(publisher contracts.Publisher) *TransactionHandler {
-	return &TransactionHandler{publisher: publisher}
+func NewTransactionHandler(publisher contracts.Publisher, guard *AccessGuard) *TransactionHandler {
+	return &TransactionHandler{publisher: publisher, guard: guard}
 }
 
 func (h *TransactionHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -47,6 +48,10 @@ func (h *TransactionHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := validateAmount(req.Amount); err != nil {
+		response.FromError(w, err)
+		return
+	}
+	if err := h.guard.AuthorizeAccount(r.Context(), req.AccountID); err != nil {
 		response.FromError(w, err)
 		return
 	}
@@ -74,6 +79,10 @@ func (h *TransactionHandler) Transfer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := validateAmount(req.Amount); err != nil {
+		response.FromError(w, err)
+		return
+	}
+	if err := h.guard.AuthorizeAccount(r.Context(), req.FromAccountID); err != nil {
 		response.FromError(w, err)
 		return
 	}

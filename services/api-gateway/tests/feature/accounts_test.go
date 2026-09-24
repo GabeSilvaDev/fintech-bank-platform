@@ -19,7 +19,6 @@ func TestAccountsSuite(t *testing.T) {
 
 func (s *AccountsTestSuite) validAccount() map[string]interface{} {
 	return map[string]interface{}{
-		"user_id":      tests.UUID(),
 		"account_type": "savings",
 		"name":         "Bruno Costa",
 		"email":        tests.RandomEmail(),
@@ -38,6 +37,29 @@ func (s *AccountsTestSuite) TestCreateAccountIsAccepted() {
 	s.Len(s.Publisher.Published, 1)
 	s.Equal(events.Topics.AccountCommands, s.Publisher.Last().Topic)
 	s.Equal(events.EventTypes.CreateAccount, s.Publisher.Last().Event.Type)
+	s.Equal(s.UserID.String(), s.Publisher.Last().Key)
+	s.Equal(s.UserID.String(), s.Publisher.Last().Event.Payload.(events.CreateAccountPayload).UserID)
+}
+
+func (s *AccountsTestSuite) TestCreateAccountAcceptsTheCallersOwnUserID() {
+	account := s.validAccount()
+	account["user_id"] = s.UserID.String()
+
+	s.Post("/api/v1/accounts", account).AssertAccepted()
+
+	s.Equal(s.UserID.String(), s.Publisher.Last().Event.Payload.(events.CreateAccountPayload).UserID)
+}
+
+func (s *AccountsTestSuite) TestCreateAccountForAnotherUserIsForbidden() {
+	account := s.validAccount()
+	account["user_id"] = tests.UUID()
+
+	s.Post("/api/v1/accounts", account).
+		AssertForbidden().
+		AssertErrorCode("FORBIDDEN").
+		AssertErrorMessage("access to this resource is not allowed")
+
+	s.Empty(s.Publisher.Published)
 }
 
 func (s *AccountsTestSuite) TestCreateAccountEchoesRequestIDAsTraceID() {
@@ -54,7 +76,8 @@ func (s *AccountsTestSuite) TestCreateAccountValidationError() {
 		AssertUnprocessableEntity().
 		AssertError().
 		AssertErrorCode("VALIDATION_ERROR").
-		AssertJsonPath("error.details.user_id", "required")
+		AssertJsonPath("error.details.account_type", "required").
+		AssertJsonMissing("error.details.user_id")
 
 	s.Empty(s.Publisher.Published)
 }
@@ -68,7 +91,7 @@ func (s *AccountsTestSuite) TestCreateAccountWhenBrokerIsDown() {
 }
 
 func (s *AccountsTestSuite) TestUpdateAccountIsAccepted() {
-	id := tests.UUID()
+	id := s.OwnedAccount()
 
 	s.Patch("/api/v1/accounts/"+id, map[string]interface{}{"status": "blocked"}).
 		AssertAccepted().
@@ -88,7 +111,7 @@ func (s *AccountsTestSuite) TestUpdateAccountCannotCloseThroughPatch() {
 }
 
 func (s *AccountsTestSuite) TestDeleteAccountIsAccepted() {
-	id := tests.UUID()
+	id := s.OwnedAccount()
 
 	s.Delete("/api/v1/accounts/" + id).
 		AssertAccepted().
@@ -104,5 +127,5 @@ func (s *AccountsTestSuite) TestAccountsRejectUnsupportedMethods() {
 
 func (s *AccountsTestSuite) TestReadRoutesAreProxied() {
 	s.Get("/api/v1/accounts/" + tests.UUID()).AssertStatus(502).AssertErrorCode("UPSTREAM_UNAVAILABLE")
-	s.Get("/api/v1/users/" + tests.UUID() + "/accounts").AssertStatus(502)
+	s.Get("/api/v1/users/" + s.UserID.String() + "/accounts").AssertStatus(502)
 }

@@ -16,7 +16,7 @@ import (
 )
 
 func transactionRouter(pub contracts.Publisher) http.Handler {
-	h := handlers.NewTransactionHandler(pub)
+	h := handlers.NewTransactionHandler(pub, ownedByHandlerUser())
 	r := chi.NewRouter()
 	r.Post("/transactions", h.Create)
 	r.Post("/transfers", h.Transfer)

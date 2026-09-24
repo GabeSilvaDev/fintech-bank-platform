@@ -17,7 +17,7 @@ func TestPaymentsSuite(t *testing.T) {
 }
 
 func (s *PaymentsTestSuite) TestPixPaymentIsAccepted() {
-	accountID := tests.UUID()
+	accountID := s.OwnedAccount()
 
 	s.Post("/api/v1/payments", map[string]interface{}{
 		"account_id":      accountID,
@@ -74,7 +74,7 @@ func (s *PaymentsTestSuite) TestTedDestinationIsValidated() {
 
 func (s *PaymentsTestSuite) TestTedIsPublishedWithItsDestination() {
 	s.Post("/api/v1/payments", map[string]interface{}{
-		"account_id": tests.UUID(), "payment_method": "ted", "amount": 10, "currency": "brl",
+		"account_id": s.OwnedAccount(), "payment_method": "ted", "amount": 10, "currency": "brl",
 		"recipient": "Ana Souza", "idempotency_key": "ted-3",
 		"ted": map[string]string{"bank_code": "341", "branch": "0001", "account": "123456", "document": "52998224725"},
 	}).AssertAccepted()

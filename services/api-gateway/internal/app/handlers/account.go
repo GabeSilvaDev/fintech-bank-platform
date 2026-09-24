@@ -12,7 +12,7 @@ import (
 )
 
 type createAccountRequest struct {
-	UserID      string `json:"user_id" validate:"required,uuid"`
+	UserID      string `json:"user_id" validate:"omitempty,uuid"`
 	AccountType string `json:"account_type" validate:"required,oneof=checking savings"`
 	Name        string `json:"name" validate:"required,min=3,max=120"`
 	Email       string `json:"email" validate:"required,email"`
@@ -33,10 +33,11 @@ func (r updateAccountRequest) empty() bool {
 
 type AccountHandler struct {
 	publisher contracts.Publisher
+	guard     *AccessGuard
 }
 
-func NewAccountHandler(publisher contracts.Publisher) *AccountHandler {
-	return &AccountHandler{publisher: publisher}
+func NewAccountHandler(publisher contracts.Publisher, guard *AccessGuard) *AccountHandler {
+	return &AccountHandler{publisher: publisher, guard: guard}
 }
 
 func (h *AccountHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -49,9 +50,14 @@ func (h *AccountHandler) Create(w http.ResponseWriter, r *http.Request) {
 		response.FromError(w, err)
 		return
 	}
+	userID, err := h.guard.ResolveUser(r.Context(), req.UserID)
+	if err != nil {
+		response.FromError(w, err)
+		return
+	}
 
 	event := events.NewAccountCommand(events.EventTypes.CreateAccount, events.CreateAccountPayload{
-		UserID:      req.UserID,
+		UserID:      userID,
 		AccountType: req.AccountType,
 		Name:        req.Name,
 		Email:       req.Email,
@@ -59,7 +65,7 @@ func (h *AccountHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Phone:       validation.SanitizePhone(req.Phone),
 	})
 
-	publish(w, r, h.publisher, events.Topics.AccountCommands, req.UserID, event)
+	publish(w, r, h.publisher, events.Topics.AccountCommands, userID, event)
 }
 
 func (h *AccountHandler) Update(w http.ResponseWriter, r *http.Request) {
@@ -79,6 +85,10 @@ func (h *AccountHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := validate(req); err != nil {
+		response.FromError(w, err)
+		return
+	}
+	if err := h.guard.AuthorizeAccount(r.Context(), accountID); err != nil {
 		response.FromError(w, err)
 		return
 	}
@@ -103,6 +113,10 @@ func (h *AccountHandler) Update(w http.ResponseWriter, r *http.Request) {
 func (h *AccountHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	accountID := chi.URLParam(r, "id")
 	if err := validateID(accountID); err != nil {
+		response.FromError(w, err)
+		return
+	}
+	if err := h.guard.AuthorizeAccount(r.Context(), accountID); err != nil {
 		response.FromError(w, err)
 		return
 	}

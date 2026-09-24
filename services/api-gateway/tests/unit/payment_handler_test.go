@@ -18,7 +18,7 @@ const boletoCode = "34191790010100000012334567812309500000000000000"
 const boletoCodeWithAmount = "34191790010100000012334567812309811000000015000"
 
 func paymentRouter(pub contracts.Publisher) http.Handler {
-	h := handlers.NewPaymentHandler(pub)
+	h := handlers.NewPaymentHandler(pub, ownedByHandlerUser())
 	r := chi.NewRouter()
 	r.Post("/payments", h.Process)
 	return r

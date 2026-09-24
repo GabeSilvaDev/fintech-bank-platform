@@ -25,6 +25,7 @@ type TestCase struct {
 	Config    *config.Config
 	Logger    zerolog.Logger
 	Publisher *FakePublisher
+	Owners    *FakeOwners
 	UserID    uuid.UUID
 	headers   map[string]string
 }
@@ -33,6 +34,7 @@ func (tc *TestCase) SetupSuite() {
 	tc.Config = testConfig()
 	tc.Logger = zerolog.Nop()
 	tc.Publisher = &FakePublisher{}
+	tc.Owners = NewFakeOwners()
 	tc.headers = make(map[string]string)
 
 	tc.Rebuild(func(*config.Config, *appHttp.Dependencies) {})
@@ -46,6 +48,7 @@ func (tc *TestCase) Rebuild(configure func(*config.Config, *appHttp.Dependencies
 		TransactionService:  MustURL("http://127.0.0.1:1"),
 		PaymentService:      MustURL("http://127.0.0.1:1"),
 		NotificationService: MustURL("http://127.0.0.1:1"),
+		Owners:              tc.Owners,
 	}
 	configure(tc.Config, &deps)
 
@@ -58,6 +61,7 @@ func (tc *TestCase) SetupTest() {
 	tc.ActingAs(uuid.New())
 	tc.Publisher.Err = nil
 	tc.Publisher.Published = nil
+	tc.Owners.Reset()
 }
 
 func (tc *TestCase) TearDownTest() {
@@ -117,6 +121,14 @@ func (tc *TestCase) WithToken(token string) *TestCase {
 func (tc *TestCase) ActingAs(userID uuid.UUID) *TestCase {
 	tc.UserID = userID
 	return tc.WithToken(AccessToken(userID))
+}
+
+func (tc *TestCase) OwnedAccount() string {
+	return tc.Owners.Own(UUID(), tc.UserID)
+}
+
+func (tc *TestCase) ForeignAccount() string {
+	return tc.Owners.Own(UUID(), uuid.New())
 }
 
 func (tc *TestCase) WithoutToken() *TestCase {

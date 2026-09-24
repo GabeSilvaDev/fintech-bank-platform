@@ -17,7 +17,7 @@ func TestTransactionsSuite(t *testing.T) {
 }
 
 func (s *TransactionsTestSuite) TestCreateTransactionIsAccepted() {
-	accountID := tests.UUID()
+	accountID := s.OwnedAccount()
 
 	s.Post("/api/v1/transactions", map[string]interface{}{
 		"account_id":      accountID,
@@ -43,7 +43,7 @@ func (s *TransactionsTestSuite) TestCreateTransactionValidationError() {
 }
 
 func (s *TransactionsTestSuite) TestTransferIsAccepted() {
-	from := tests.UUID()
+	from := s.OwnedAccount()
 
 	s.Post("/api/v1/transfers", map[string]interface{}{
 		"from_account_id": from,

@@ -16,5 +16,5 @@ func TestNotificationsSuite(t *testing.T) {
 }
 
 func (s *NotificationsTestSuite) TestReadRoutesAreProxied() {
-	s.Get("/api/v1/users/" + tests.UUID() + "/notifications").AssertStatus(502).AssertErrorCode("UPSTREAM_UNAVAILABLE")
+	s.Get("/api/v1/users/" + s.UserID.String() + "/notifications").AssertStatus(502).AssertErrorCode("UPSTREAM_UNAVAILABLE")
 }

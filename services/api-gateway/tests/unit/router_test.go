@@ -423,3 +423,50 @@ func TestSetupRouterStartsNewTraceForClientTraceContext(t *testing.T) {
 	assert.Empty(t, upstreamHeader.Get("tracestate"))
 	assert.Empty(t, upstreamHeader.Get("baggage"))
 }
+
+func TestEveryRouteButThePublicOnesRequiresAToken(t *testing.T) {
+	router := chi.NewRouter()
+	cfg := &config.Config{
+		CORS:          contracts.CORSConfig{AllowedOrigins: []string{"*"}, AllowedMethods: []string{"GET"}},
+		RateLimit:     contracts.RateLimitConfig{Requests: 1000, Window: time.Minute},
+		AuthRateLimit: contracts.RateLimitConfig{Requests: 1000, Window: time.Minute},
+		Auth:          tests.AuthConfig(),
+	}
+	deps := testDependencies()
+	deps.Metrics = metrics.New("test-router-requires-token")
+	appHttp.SetupRouter(router, cfg, deps)
+
+	public := map[string]bool{
+		"GET /health":                true,
+		"GET /metrics":               true,
+		"GET /api/v1/openapi.yaml":   true,
+		"POST /api/v1/auth/register": true,
+		"POST /api/v1/auth/login":    true,
+	}
+	id := uuid.NewString()
+	var protected []string
+	err := chi.Walk(router, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		route = normaliseRoute(route)
+		if public[method+" "+route] {
+			return nil
+		}
+		protected = append(protected, method+" "+route)
+		path := routeParamRegexp.ReplaceAllString(route, id)
+		for _, candidate := range []string{path, path + "/"} {
+			req := httptest.NewRequest(method, candidate, strings.NewReader("{}"))
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+
+			assert.Equal(t, http.StatusUnauthorized, rec.Code, method+" "+candidate)
+			assert.Equal(t, "Bearer", rec.Header().Get("WWW-Authenticate"), method+" "+candidate)
+		}
+		return nil
+	})
+	require.NoError(t, err)
+	assert.Len(t, protected, 13)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/"+id+"/", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+}

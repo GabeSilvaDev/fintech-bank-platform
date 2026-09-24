@@ -273,8 +273,11 @@ func (s *AuthTestSuite) TestProtectedRoutesRequireAValidToken() {
 }
 
 func (s *AuthTestSuite) TestProtectedCommandsAcceptAValidToken() {
-	s.WithoutToken().WithHeader("Authorization", "bearer "+tests.AccessToken(uuid.New())).
-		Delete("/api/v1/accounts/" + tests.UUID()).
+	userID := uuid.New()
+	accountID := s.Owners.Own(tests.UUID(), userID)
+
+	s.WithoutToken().WithHeader("Authorization", "bearer "+tests.AccessToken(userID)).
+		Delete("/api/v1/accounts/" + accountID).
 		AssertAccepted()
 
 	s.Len(s.Publisher.Published, 1)

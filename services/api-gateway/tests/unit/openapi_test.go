@@ -148,3 +148,72 @@ func TestOpenAPIRouteNormalisation(t *testing.T) {
 	assert.Equal(t, "/", normaliseRoute("/"))
 	assert.Equal(t, []string{"GET /b"}, missingFrom([]string{"GET /a", "GET /b"}, []string{"GET /a"}))
 }
+
+type openAPISecurityDocument struct {
+	Security   []map[string][]string `yaml:"security"`
+	Paths      map[string]map[string]yaml.Node
+	Components struct {
+		SecuritySchemes map[string]struct {
+			Type         string `yaml:"type"`
+			Scheme       string `yaml:"scheme"`
+			BearerFormat string `yaml:"bearerFormat"`
+		} `yaml:"securitySchemes"`
+		Schemas map[string]struct {
+			Required []string `yaml:"required"`
+		} `yaml:"schemas"`
+	} `yaml:"components"`
+}
+
+type openAPIOperation struct {
+	Security  *[]map[string][]string `yaml:"security"`
+	Responses map[string]yaml.Node   `yaml:"responses"`
+}
+
+func TestOpenAPIDocumentProtectsEveryOperationButThePublicOnes(t *testing.T) {
+	var doc openAPISecurityDocument
+	require.NoError(t, yaml.Unmarshal(api.Spec, &doc))
+
+	scheme, ok := doc.Components.SecuritySchemes["bearerAuth"]
+	require.True(t, ok)
+	assert.Equal(t, "http", scheme.Type)
+	assert.Equal(t, "bearer", scheme.Scheme)
+	assert.Equal(t, "JWT", scheme.BearerFormat)
+	assert.Equal(t, []map[string][]string{{"bearerAuth": {}}}, doc.Security)
+
+	public := map[string]bool{
+		"GET /health":                true,
+		"GET /api/v1/openapi.yaml":   true,
+		"POST /api/v1/auth/register": true,
+		"POST /api/v1/auth/login":    true,
+	}
+	protected := 0
+	for path, item := range doc.Paths {
+		for method, node := range item {
+			if !openAPIMethods[method] {
+				continue
+			}
+			operation := strings.ToUpper(method) + " " + path
+			var op openAPIOperation
+			require.NoError(t, node.Decode(&op), operation)
+
+			if public[operation] {
+				require.NotNil(t, op.Security, operation)
+				assert.Empty(t, *op.Security, operation)
+				continue
+			}
+			protected++
+			assert.Nil(t, op.Security, operation)
+			assert.Contains(t, op.Responses, "401", operation)
+			assert.Contains(t, op.Responses, "403", operation)
+		}
+	}
+	assert.Equal(t, 13, protected)
+}
+
+func TestOpenAPIDocumentMakesTheAccountOwnerOptional(t *testing.T) {
+	var doc openAPISecurityDocument
+	require.NoError(t, yaml.Unmarshal(api.Spec, &doc))
+
+	assert.NotContains(t, doc.Components.Schemas["CreateAccountRequest"].Required, "user_id")
+	assert.Contains(t, doc.Components.Schemas["CreateAccountRequest"].Required, "account_type")
+}

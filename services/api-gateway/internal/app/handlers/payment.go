@@ -59,10 +59,11 @@ func (r paymentRequest) tedDetails() *events.TEDDetails {
 
 type PaymentHandler struct {
 	publisher contracts.Publisher
+	guard     *AccessGuard
 }
 
-func NewPaymentHandler(publisher contracts.Publisher) *PaymentHandler {
-	return &PaymentHandler{publisher: publisher}
+func NewPaymentHandler(publisher contracts.Publisher, guard *AccessGuard) *PaymentHandler {
+	return &PaymentHandler{publisher: publisher, guard: guard}
 }
 
 func (h *PaymentHandler) Process(w http.ResponseWriter, r *http.Request) {
@@ -96,6 +97,10 @@ func (h *PaymentHandler) Process(w http.ResponseWriter, r *http.Request) {
 			response.FromError(w, errors.UnprocessableEntity("VALIDATION_ERROR", "request validation failed").WithDetail("amount", "boleto_amount"))
 			return
 		}
+	}
+	if err := h.guard.AuthorizeAccount(r.Context(), req.AccountID); err != nil {
+		response.FromError(w, err)
+		return
 	}
 
 	event := events.NewPaymentCommand(events.EventTypes.ProcessPayment, events.ProcessPaymentPayload{

@@ -9,16 +9,24 @@ import (
 
 	"github.com/fintech-bank-platform/api-gateway/internal/app/handlers"
 	"github.com/fintech-bank-platform/api-gateway/internal/contracts"
+	"github.com/fintech-bank-platform/api-gateway/internal/infrastructure/auth"
 	"github.com/fintech-bank-platform/api-gateway/tests"
 	apperrors "github.com/fintech-bank-platform/pkg/errors"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/middleware"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 )
 
+var handlerUser = uuid.New()
+
+func ownedByHandlerUser() *handlers.AccessGuard {
+	return handlers.NewAccessGuard(tests.OwnedBy(handlerUser))
+}
+
 func accountRouter(pub contracts.Publisher) http.Handler {
-	h := handlers.NewAccountHandler(pub)
+	h := handlers.NewAccountHandler(pub, ownedByHandlerUser())
 	r := chi.NewRouter()
 	r.Post("/accounts", h.Create)
 	r.Patch("/accounts/{id}", h.Update)
@@ -29,7 +37,8 @@ func accountRouter(pub contracts.Publisher) http.Handler {
 func call(handler http.Handler, method, path, body string) (*httptest.ResponseRecorder, map[string]interface{}) {
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(context.WithValue(req.Context(), middleware.RequestIDKey, "req-1"))
+	ctx := context.WithValue(req.Context(), middleware.RequestIDKey, "req-1")
+	req = req.WithContext(auth.WithUserID(ctx, handlerUser))
 	rec := httptest.NewRecorder()
 
 	handler.ServeHTTP(rec, req)
@@ -53,7 +62,7 @@ func validCreateAccountBody(userID string) string {
 
 func TestCreateAccountPublishesCommand(t *testing.T) {
 	pub := &tests.FakePublisher{}
-	userID := tests.UUID()
+	userID := handlerUser.String()
 
 	rec, body := call(accountRouter(pub), http.MethodPost, "/accounts", validCreateAccountBody(userID))
 
@@ -81,7 +90,7 @@ func TestCreateAccountPublishesCommand(t *testing.T) {
 
 func TestCreateAccountNormalizesDocumentAndPhone(t *testing.T) {
 	pub := &tests.FakePublisher{}
-	userID := tests.UUID()
+	userID := handlerUser.String()
 
 	rec, _ := call(accountRouter(pub), http.MethodPost, "/accounts", `{"user_id":"`+userID+`","account_type":"savings","name":"Ana Souza","email":"ana@example.com","document":"529.982.247-25","phone":"(11) 99988-7766"}`)
 
@@ -141,7 +150,7 @@ func TestCreateAccountValidatesFields(t *testing.T) {
 func TestCreateAccountReturnsPublisherError(t *testing.T) {
 	pub := &tests.FakePublisher{Err: apperrors.ServiceUnavailable("PUBLISH_FAILED", "down")}
 
-	rec, body := call(accountRouter(pub), http.MethodPost, "/accounts", validCreateAccountBody(tests.UUID()))
+	rec, body := call(accountRouter(pub), http.MethodPost, "/accounts", validCreateAccountBody(handlerUser.String()))
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 	assert.Equal(t, "PUBLISH_FAILED", errorCode(body))

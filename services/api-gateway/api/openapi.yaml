@@ -12,6 +12,12 @@ info:
 
     Reads are proxied to the service that owns the data (account, transaction, payment and notification services).
 
+    Every operation except the health check, this document, registration and login needs an access token from
+    `POST /api/v1/auth/register` or `POST /api/v1/auth/login`, sent as `Authorization: Bearer <access_token>`. A
+    missing, invalid or expired token answers `401`. Each user reaches only their own data: a `user_id` in the path
+    must be the caller's, and every account named in the path or in a command body (the source account of a
+    transfer) must belong to the caller, otherwise the gateway answers `403`.
+
     Every JSON response uses the same envelope: `success` plus either `data` or `error`. Every response carries an
     `X-Request-ID` header; a valid `X-Request-ID` sent by the client is reused, otherwise the gateway generates one.
     Command responses return the same value as `trace_id`.
@@ -23,7 +29,8 @@ info:
 servers:
   - url: http://localhost:8081
     description: Local development stack
-security: []
+security:
+  - bearerAuth: []
 tags:
   - name: Authentication
     description: Registration and login. Both issue a bearer access token.
@@ -42,6 +49,7 @@ paths:
     get:
       tags: [System]
       operationId: getHealth
+      security: []
       summary: Check gateway health
       description: Reports that the gateway process is up. It does not check the upstream services or Kafka.
       parameters:
@@ -62,6 +70,7 @@ paths:
     get:
       tags: [System]
       operationId: getOpenAPI
+      security: []
       summary: Download this OpenAPI document
       parameters:
         - $ref: '#/components/parameters/RequestId'
@@ -81,6 +90,7 @@ paths:
     post:
       tags: [Authentication]
       operationId: register
+      security: []
       summary: Register a user
       description: |
         Creates an identity in the account service and returns an access token for the new user. The e-mail is trimmed
@@ -151,6 +161,7 @@ paths:
     post:
       tags: [Authentication]
       operationId: login
+      security: []
       summary: Log in
       description: |
         Checks the e-mail and password with the account service and returns an access token. There are no refresh
@@ -224,6 +235,9 @@ paths:
       description: |
         Publishes a `CreateAccount` command. The account service assigns the agency and the account number and opens the
         account with a zero BRL balance.
+
+        The account always belongs to the caller: `user_id` may be omitted and is then taken from the access token; a
+        `user_id` of another user answers `403`.
       parameters:
         - $ref: '#/components/parameters/RequestId'
       requestBody:
@@ -237,6 +251,10 @@ paths:
           $ref: '#/components/responses/CommandAccepted'
         '400':
           $ref: '#/components/responses/InvalidJSON'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '413':
           $ref: '#/components/responses/PayloadTooLarge'
         '422':
@@ -254,7 +272,9 @@ paths:
       tags: [Accounts]
       operationId: getAccount
       summary: Get an account
-      description: Proxied to the account service.
+      description: |
+        Proxied to the account service. Only the owner of the account may read it: another user's account answers
+        `403`, while an unknown account keeps the account service's `404`.
       parameters:
         - $ref: '#/components/parameters/RequestId'
       responses:
@@ -267,6 +287,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AccountEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           description: No account has this id (`ACCOUNT_NOT_FOUND`).
           headers:
@@ -295,8 +319,9 @@ paths:
       summary: Update an account
       description: |
         Publishes an `UpdateAccount` command. Only the fields present in the body are changed; at least one must be
-        present, otherwise the gateway answers `422` with the code `EMPTY_UPDATE`. The command is accepted even when the
-        account does not exist; the outcome is reported by the account service.
+        present, otherwise the gateway answers `422` with the code `EMPTY_UPDATE`. Once the body is valid, only the
+        owner of the account may update it: another user's account answers `403` and an unknown account `404`
+        (`ACCOUNT_NOT_FOUND`). The outcome is reported by the account service.
       parameters:
         - $ref: '#/components/parameters/RequestId'
       requestBody:
@@ -310,6 +335,12 @@ paths:
           $ref: '#/components/responses/CommandAccepted'
         '400':
           $ref: '#/components/responses/InvalidJSON'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AccountNotFound'
         '413':
           $ref: '#/components/responses/PayloadTooLarge'
         '422':
@@ -342,6 +373,8 @@ paths:
                       message: at least one field must be provided
         '429':
           $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/UpstreamUnavailable'
         '503':
           $ref: '#/components/responses/PublishFailed'
         default:
@@ -351,17 +384,25 @@ paths:
       operationId: deleteAccount
       summary: Close an account
       description: |
-        Publishes a `DeleteAccount` command. The account service closes the account; the command is accepted even when
-        the account does not exist.
+        Publishes a `DeleteAccount` command and the account service closes the account. Only the owner of the account
+        may close it: another user's account answers `403` and an unknown account `404` (`ACCOUNT_NOT_FOUND`).
       parameters:
         - $ref: '#/components/parameters/RequestId'
       responses:
         '202':
           $ref: '#/components/responses/CommandAccepted'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AccountNotFound'
         '422':
           $ref: '#/components/responses/InvalidPathId'
         '429':
           $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/UpstreamUnavailable'
         '503':
           $ref: '#/components/responses/PublishFailed'
         default:
@@ -373,7 +414,9 @@ paths:
       tags: [Accounts]
       operationId: listUserAccounts
       summary: List the accounts of a user
-      description: Proxied to the account service. A user without accounts gets an empty list.
+      description: |
+        Proxied to the account service. A user without accounts gets an empty list. `user_id` must be the caller's
+        own user id; any other value, including one that is not a UUID, answers `403`.
       parameters:
         - $ref: '#/components/parameters/RequestId'
       responses:
@@ -386,8 +429,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/AccountListEnvelope'
-        '422':
-          $ref: '#/components/responses/InvalidUserId'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '429':
           $ref: '#/components/responses/TooManyRequests'
         '502':
@@ -401,7 +446,9 @@ paths:
       tags: [Transactions]
       operationId: listAccountTransactions
       summary: List the transactions of an account
-      description: Proxied to the transaction service. Newest first. Includes balances as seen from `account_id`.
+      description: |
+        Proxied to the transaction service. Newest first. Includes balances as seen from `account_id`. Only the owner
+        of the account may list its transactions; another user's account answers `403`.
       parameters:
         - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/LedgerLimit'
@@ -418,6 +465,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TransactionListEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '422':
           $ref: '#/components/responses/InvalidListQuery'
         '429':
@@ -434,6 +485,8 @@ paths:
       description: |
         Publishes a `CreateTransaction` command. The transaction service records the transaction as `pending` and asks
         the account service to move the balance. Requests that reuse an `idempotency_key` are not executed twice.
+        Once the body is valid, `account_id` must belong to the caller: another user's account answers `403` and an
+        unknown account `404` (`ACCOUNT_NOT_FOUND`).
       parameters:
         - $ref: '#/components/parameters/RequestId'
       requestBody:
@@ -447,12 +500,20 @@ paths:
           $ref: '#/components/responses/CommandAccepted'
         '400':
           $ref: '#/components/responses/InvalidJSON'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AccountNotFound'
         '413':
           $ref: '#/components/responses/PayloadTooLarge'
         '422':
           $ref: '#/components/responses/ValidationError'
         '429':
           $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/UpstreamUnavailable'
         '503':
           $ref: '#/components/responses/PublishFailed'
         default:
@@ -465,6 +526,8 @@ paths:
       description: |
         Publishes a `ProcessTransfer` command. The source account is debited first and the destination is credited
         afterwards; a failed credit reverses the debit. Requests that reuse an `idempotency_key` are not executed twice.
+        Once the body is valid, `from_account_id` must belong to the caller: another user's account answers `403` and
+        an unknown account `404` (`ACCOUNT_NOT_FOUND`). `to_account_id` may belong to any user.
       parameters:
         - $ref: '#/components/parameters/RequestId'
       requestBody:
@@ -478,12 +541,20 @@ paths:
           $ref: '#/components/responses/CommandAccepted'
         '400':
           $ref: '#/components/responses/InvalidJSON'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AccountNotFound'
         '413':
           $ref: '#/components/responses/PayloadTooLarge'
         '422':
           $ref: '#/components/responses/ValidationError'
         '429':
           $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/UpstreamUnavailable'
         '503':
           $ref: '#/components/responses/PublishFailed'
         default:
@@ -495,7 +566,10 @@ paths:
       tags: [Transactions]
       operationId: getTransaction
       summary: Get a transaction
-      description: Proxied to the transaction service. Returns no balances.
+      description: |
+        Fetched from the transaction service and returned unchanged only when its `account_id` or, for a transfer, its
+        `counterparty_id` belongs to the caller; otherwise the gateway answers `403`. Returns no balances. An unknown
+        transaction keeps the service's `404`.
       parameters:
         - $ref: '#/components/parameters/RequestId'
       responses:
@@ -508,6 +582,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TransactionEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           description: No transaction has this id (`TRANSACTION_NOT_FOUND`).
           headers:
@@ -537,7 +615,9 @@ paths:
       tags: [Payments]
       operationId: listAccountPayments
       summary: List the payments of an account
-      description: Proxied to the payment service. Newest first.
+      description: |
+        Proxied to the payment service. Newest first. Only the owner of the account may list its payments; another
+        user's account answers `403`.
       parameters:
         - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/LedgerLimit'
@@ -554,6 +634,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PaymentListEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '422':
           $ref: '#/components/responses/InvalidListQuery'
         '429':
@@ -573,7 +657,9 @@ paths:
         for `pix`, `boleto_code` for `boleto` and `ted` for `ted`; a missing one is reported as `required` in
         `details`, and `ted` sent with another method is reported as `excluded`. For `boleto`, when `boleto_code`
         encodes a nonzero amount that does not match `amount`, the gateway answers `422` with `details.amount` =
-        `boleto_amount`. Requests that reuse an `idempotency_key` are not executed twice.
+        `boleto_amount`. Requests that reuse an `idempotency_key` are not executed twice. Once the body is valid,
+        `account_id` must belong to the caller: another user's account answers `403` and an unknown account `404`
+        (`ACCOUNT_NOT_FOUND`).
       parameters:
         - $ref: '#/components/parameters/RequestId'
       requestBody:
@@ -587,6 +673,12 @@ paths:
           $ref: '#/components/responses/CommandAccepted'
         '400':
           $ref: '#/components/responses/InvalidJSON'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/AccountNotFound'
         '413':
           $ref: '#/components/responses/PayloadTooLarge'
         '422':
@@ -634,6 +726,8 @@ paths:
                         amount: boleto_amount
         '429':
           $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/UpstreamUnavailable'
         '503':
           $ref: '#/components/responses/PublishFailed'
         default:
@@ -645,7 +739,9 @@ paths:
       tags: [Payments]
       operationId: getPayment
       summary: Get a payment
-      description: Proxied to the payment service.
+      description: |
+        Fetched from the payment service and returned unchanged only when its `account_id` belongs to the caller;
+        otherwise the gateway answers `403`. An unknown payment keeps the service's `404`.
       parameters:
         - $ref: '#/components/parameters/RequestId'
       responses:
@@ -658,6 +754,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PaymentEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '404':
           description: No payment has this id (`PAYMENT_NOT_FOUND`).
           headers:
@@ -689,7 +789,8 @@ paths:
       summary: List the notifications sent to a user
       description: |
         Proxied to the notification service. Newest first. The history keeps the most recent notifications of each user
-        for 90 days.
+        for 90 days. `user_id` must be the caller's own user id; any other value, including one that is not a UUID,
+        answers `403`.
       parameters:
         - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/NotificationLimit'
@@ -703,6 +804,10 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/NotificationListEnvelope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '422':
           $ref: '#/components/responses/InvalidListQuery'
         '429':
@@ -712,6 +817,14 @@ paths:
         default:
           $ref: '#/components/responses/InternalError'
 components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        HS256 access token issued by `POST /api/v1/auth/register` and `POST /api/v1/auth/login`. It identifies the
+        user in `sub` and expires after `expires_in` seconds; there are no refresh tokens.
   parameters:
     RequestId:
       name: X-Request-ID
@@ -809,6 +922,11 @@ components:
       schema:
         type: string
         format: date-time
+    WWWAuthenticate:
+      description: Always `Bearer`.
+      schema:
+        type: string
+        const: Bearer
     RetryAfter:
       description: Seconds to wait before retrying (the length of the rate limit window).
       schema:
@@ -920,22 +1038,6 @@ components:
               message: request validation failed
               details:
                 id: uuid
-    InvalidUserId:
-      description: The `user_id` path parameter is not a UUID (`VALIDATION_ERROR`, `details` has `user_id` = `uuid`).
-      headers:
-        X-Request-ID:
-          $ref: '#/components/headers/XRequestID'
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/ErrorEnvelope'
-          example:
-            success: false
-            error:
-              code: VALIDATION_ERROR
-              message: request validation failed
-              details:
-                user_id: uuid
     InvalidListQuery:
       description: |
         A path id is not a UUID (`details` maps it to `uuid`) or `limit` is not an integer inside its range (`details`
@@ -955,6 +1057,52 @@ components:
               message: request validation failed
               details:
                 limit: range
+    Unauthorized:
+      description: The access token is missing, malformed, expired or not issued by this gateway (`UNAUTHORIZED`).
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+        WWW-Authenticate:
+          $ref: '#/components/headers/WWWAuthenticate'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            success: false
+            error:
+              code: UNAUTHORIZED
+              message: authentication required
+    Forbidden:
+      description: |
+        The resource belongs to another user (`FORBIDDEN`): a path `user_id` that is not the caller's, or an account,
+        transaction or payment of an account the caller does not own.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            success: false
+            error:
+              code: FORBIDDEN
+              message: access to this resource is not allowed
+    AccountNotFound:
+      description: The account named in the path or in the body does not exist (`ACCOUNT_NOT_FOUND`).
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            success: false
+            error:
+              code: ACCOUNT_NOT_FOUND
+              message: account not found
     TooManyRequests:
       description: The client IP exceeded the rate limit (`RATE_LIMIT_EXCEEDED`).
       headers:
@@ -1214,12 +1362,14 @@ components:
     CreateAccountRequest:
       type: object
       additionalProperties: false
-      required: [user_id, account_type, name, email, document]
+      required: [account_type, name, email, document]
       properties:
         user_id:
           type: string
           format: uuid
-          description: Owner of the account.
+          description: |
+            Owner of the account. Optional: when omitted the account is opened for the caller. When present it must
+            be the caller's own user id, otherwise the gateway answers `403`.
         account_type:
           type: string
           enum: [checking, savings]
