@@ -424,8 +424,9 @@ paths:
         Publishes a `ProcessPayment` command. The payment service debits the account, submits the payment to the
         payment gateway and refunds the debit when the gateway rejects it. Each method needs its own field: `pix_key`
         for `pix`, `boleto_code` for `boleto` and `ted` for `ted`; a missing one is reported as `required` in
-        `details`, and `ted` sent with another method is reported as `excluded`. Requests that reuse an
-        `idempotency_key` are not executed twice.
+        `details`, and `ted` sent with another method is reported as `excluded`. For `boleto`, when `boleto_code`
+        encodes a nonzero amount that does not match `amount`, the gateway answers `422` with `details.amount` =
+        `boleto_amount`. Requests that reuse an `idempotency_key` are not executed twice.
       parameters:
         - $ref: '#/components/parameters/RequestId'
       requestBody:
@@ -442,7 +443,36 @@ paths:
         '413':
           $ref: '#/components/responses/PayloadTooLarge'
         '422':
-          $ref: '#/components/responses/ValidationError'
+          description: |
+            The body failed validation (`VALIDATION_ERROR`). `details` maps each invalid field to the rule it broke, or,
+            for `boleto`, `amount` to `boleto_amount` when it does not match the amount encoded in `boleto_code`.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              examples:
+                validation:
+                  summary: Invalid field
+                  value:
+                    success: false
+                    error:
+                      code: VALIDATION_ERROR
+                      message: request validation failed
+                      details:
+                        amount: gt
+                        currency: currency
+                boletoAmountMismatch:
+                  summary: Amount does not match the boleto code
+                  value:
+                    success: false
+                    error:
+                      code: VALIDATION_ERROR
+                      message: request validation failed
+                      details:
+                        amount: boleto_amount
         '429':
           $ref: '#/components/responses/TooManyRequests'
         '503':
@@ -890,6 +920,13 @@ components:
         Brazilian phone number: 10 or 11 digits (area code and number), optionally prefixed by the country code 55.
         Punctuation is ignored.
       examples: ['+55 11 91234-5678']
+    IdempotencyKey:
+      type: string
+      pattern: '^[\x21-\x7E]{1,64}$'
+      description: |
+        Client chosen key, 1 to 64 printable ASCII characters with no spaces. A second request with the same key does
+        not repeat the effect of the first.
+      examples: [order-9f1c2b]
     CreateAccountRequest:
       type: object
       additionalProperties: false
@@ -956,10 +993,7 @@ components:
           type: string
           maxLength: 255
         idempotency_key:
-          type: string
-          minLength: 1
-          maxLength: 64
-          description: Client chosen key; a second request with the same key does not create another transaction.
+          $ref: '#/components/schemas/IdempotencyKey'
     TransferRequest:
       type: object
       additionalProperties: false
@@ -986,10 +1020,7 @@ components:
           type: string
           maxLength: 255
         idempotency_key:
-          type: string
-          minLength: 1
-          maxLength: 64
-          description: Client chosen key; a second request with the same key does not create another transfer.
+          $ref: '#/components/schemas/IdempotencyKey'
     TEDDetails:
       type: object
       additionalProperties: false
@@ -1031,7 +1062,9 @@ components:
           exclusiveMinimum: 0
           description: |
             Amount in currency units. The gateway only checks that it is positive; an amount with more than two decimal
-            places is accepted and then fails in the service, like an unsupported currency.
+            places is accepted and then fails in the service, like an unsupported currency. For `boleto`, when
+            `boleto_code` encodes a nonzero amount, this value converted to cents must equal it, or the gateway answers
+            `422` `VALIDATION_ERROR` with `details.amount` = `boleto_amount`.
           examples: [89.9]
         currency:
           $ref: '#/components/schemas/Currency'
@@ -1048,17 +1081,16 @@ components:
         boleto_code:
           type: string
           pattern: '^[0-9]{47}$'
-          description: Boleto digitable line (47 digits) with valid check digits, required for `boleto`.
+          description: |
+            Boleto digitable line (47 digits) with valid check digits, required for `boleto`. When it encodes a nonzero
+            amount, `amount` converted to cents must match it (rule `boleto_amount`).
         ted:
           $ref: '#/components/schemas/TEDDetails'
         description:
           type: string
           maxLength: 255
         idempotency_key:
-          type: string
-          minLength: 1
-          maxLength: 64
-          description: Client chosen key; a second request with the same key does not create another payment.
+          $ref: '#/components/schemas/IdempotencyKey'
       allOf:
         - if:
             required: [payment_method]

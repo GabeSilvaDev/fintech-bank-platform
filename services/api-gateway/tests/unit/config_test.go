@@ -50,6 +50,23 @@ func TestConfigServerWithEnvVars(t *testing.T) {
 	assert.Equal(t, 60*time.Second, cfg.Server.ReadTimeout)
 }
 
+func TestConfigServerTrustProxyHeadersDefault(t *testing.T) {
+	os.Unsetenv("TRUST_PROXY_HEADERS")
+
+	cfg, _ := config.New()
+
+	assert.False(t, cfg.Server.TrustProxyHeaders)
+}
+
+func TestConfigServerTrustProxyHeadersFromEnv(t *testing.T) {
+	os.Setenv("TRUST_PROXY_HEADERS", "true")
+	defer os.Unsetenv("TRUST_PROXY_HEADERS")
+
+	cfg, _ := config.New()
+
+	assert.True(t, cfg.Server.TrustProxyHeaders)
+}
+
 func TestConfigCORSWithEnvVars(t *testing.T) {
 	os.Setenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:8080")
 	os.Setenv("CORS_ALLOW_CREDENTIALS", "false")

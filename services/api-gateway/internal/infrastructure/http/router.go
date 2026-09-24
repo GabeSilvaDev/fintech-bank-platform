@@ -30,7 +30,9 @@ func SetupRouter(router *chi.Mux, cfg *config.Config, deps Dependencies) {
 	router.Use(pkgmw.RequestID)
 	router.Use(tracing.EdgeMiddleware)
 	router.Use(deps.Metrics.Middleware)
-	router.Use(chiMiddleware.RealIP)
+	if cfg.Server.TrustProxyHeaders {
+		router.Use(chiMiddleware.RealIP)
+	}
 	router.Use(pkgmw.Logger(deps.Logger))
 	router.Use(pkgmw.Recovery(deps.Logger))
 	router.Use(middleware.CORS(cfg.CORS))

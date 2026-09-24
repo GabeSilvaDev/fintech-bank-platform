@@ -70,6 +70,57 @@ func TestSetupRouter(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
+func TestSetupRouterRateLimitSharesBucketAcrossForwardedForWhenUntrusted(t *testing.T) {
+	router := chi.NewRouter()
+	cfg := &config.Config{
+		CORS:      contracts.CORSConfig{AllowedOrigins: []string{"*"}, AllowedMethods: []string{"GET"}},
+		RateLimit: contracts.RateLimitConfig{Requests: 1, Window: time.Minute},
+	}
+
+	appHttp.SetupRouter(router, cfg, testDependencies())
+
+	req1 := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req1.RemoteAddr = "203.0.113.5:1111"
+	req1.Header.Set("X-Forwarded-For", "9.9.9.1")
+	rec1 := httptest.NewRecorder()
+	router.ServeHTTP(rec1, req1)
+	assert.Equal(t, http.StatusOK, rec1.Code)
+
+	req2 := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req2.RemoteAddr = "203.0.113.5:2222"
+	req2.Header.Set("X-Forwarded-For", "9.9.9.2")
+	rec2 := httptest.NewRecorder()
+	router.ServeHTTP(rec2, req2)
+
+	assert.Equal(t, http.StatusTooManyRequests, rec2.Code)
+}
+
+func TestSetupRouterRateLimitSeparatesBucketsByForwardedForWhenTrusted(t *testing.T) {
+	router := chi.NewRouter()
+	cfg := &config.Config{
+		Server:    contracts.ServerConfig{TrustProxyHeaders: true},
+		CORS:      contracts.CORSConfig{AllowedOrigins: []string{"*"}, AllowedMethods: []string{"GET"}},
+		RateLimit: contracts.RateLimitConfig{Requests: 1, Window: time.Minute},
+	}
+
+	appHttp.SetupRouter(router, cfg, testDependencies())
+
+	req1 := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req1.RemoteAddr = "203.0.113.5:1111"
+	req1.Header.Set("X-Forwarded-For", "9.9.9.1")
+	rec1 := httptest.NewRecorder()
+	router.ServeHTTP(rec1, req1)
+	assert.Equal(t, http.StatusOK, rec1.Code)
+
+	req2 := httptest.NewRequest(http.MethodGet, "/health", nil)
+	req2.RemoteAddr = "203.0.113.5:2222"
+	req2.Header.Set("X-Forwarded-For", "9.9.9.2")
+	rec2 := httptest.NewRecorder()
+	router.ServeHTTP(rec2, req2)
+
+	assert.Equal(t, http.StatusOK, rec2.Code)
+}
+
 func TestSetupRouterHealthEndpoint(t *testing.T) {
 	router := chi.NewRouter()
 	cfg := &config.Config{

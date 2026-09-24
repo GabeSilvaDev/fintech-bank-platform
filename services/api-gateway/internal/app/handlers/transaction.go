@@ -15,7 +15,7 @@ type createTransactionRequest struct {
 	Amount         float64 `json:"amount" validate:"required,gt=0"`
 	Currency       string  `json:"currency" validate:"required,currency"`
 	Description    string  `json:"description" validate:"max=255"`
-	IdempotencyKey string  `json:"idempotency_key" validate:"required,max=64"`
+	IdempotencyKey string  `json:"idempotency_key" validate:"required,idempotency_key"`
 }
 
 type transferRequest struct {
@@ -24,7 +24,7 @@ type transferRequest struct {
 	Amount         float64 `json:"amount" validate:"required,gt=0"`
 	Currency       string  `json:"currency" validate:"required,currency"`
 	Description    string  `json:"description" validate:"max=255"`
-	IdempotencyKey string  `json:"idempotency_key" validate:"required,max=64"`
+	IdempotencyKey string  `json:"idempotency_key" validate:"required,idempotency_key"`
 }
 
 type TransactionHandler struct {

@@ -39,12 +39,13 @@ func New() (*Config, error) {
 
 func loadServerConfig() contracts.ServerConfig {
 	return contracts.ServerConfig{
-		Host:            env.Get("SERVER_HOST", "0.0.0.0"),
-		Port:            env.Get("SERVER_PORT", "8080"),
-		ReadTimeout:     env.GetDuration("SERVER_READ_TIMEOUT", 30*time.Second),
-		WriteTimeout:    env.GetDuration("SERVER_WRITE_TIMEOUT", 30*time.Second),
-		IdleTimeout:     env.GetDuration("SERVER_IDLE_TIMEOUT", 120*time.Second),
-		ShutdownTimeout: env.GetDuration("SERVER_SHUTDOWN_TIMEOUT", 10*time.Second),
+		Host:              env.Get("SERVER_HOST", "0.0.0.0"),
+		Port:              env.Get("SERVER_PORT", "8080"),
+		ReadTimeout:       env.GetDuration("SERVER_READ_TIMEOUT", 30*time.Second),
+		WriteTimeout:      env.GetDuration("SERVER_WRITE_TIMEOUT", 30*time.Second),
+		IdleTimeout:       env.GetDuration("SERVER_IDLE_TIMEOUT", 120*time.Second),
+		ShutdownTimeout:   env.GetDuration("SERVER_SHUTDOWN_TIMEOUT", 10*time.Second),
+		TrustProxyHeaders: env.GetBool("TRUST_PROXY_HEADERS", false),
 	}
 }
 

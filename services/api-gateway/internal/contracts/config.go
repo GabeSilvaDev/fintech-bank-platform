@@ -3,12 +3,13 @@ package contracts
 import "time"
 
 type ServerConfig struct {
-	Host            string
-	Port            string
-	ReadTimeout     time.Duration
-	WriteTimeout    time.Duration
-	IdleTimeout     time.Duration
-	ShutdownTimeout time.Duration
+	Host              string
+	Port              string
+	ReadTimeout       time.Duration
+	WriteTimeout      time.Duration
+	IdleTimeout       time.Duration
+	ShutdownTimeout   time.Duration
+	TrustProxyHeaders bool
 }
 
 func (s ServerConfig) Address() string {

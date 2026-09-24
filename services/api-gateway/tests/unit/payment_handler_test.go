@@ -13,7 +13,8 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-const boletoCode = "23793381286000782713695000063305975520000010000"
+const boletoCode = "34191790010100000012334567812309500000000000000"
+const boletoCodeWithAmount = "34191790010100000012334567812309811000000015000"
 
 func paymentRouter(pub contracts.Publisher) http.Handler {
 	h := handlers.NewPaymentHandler(pub)
@@ -58,6 +59,28 @@ func TestProcessBoletoPaymentPublishesCommand(t *testing.T) {
 
 	assert.Equal(t, http.StatusAccepted, rec.Code)
 	assert.Equal(t, boletoCode, pub.Last().Event.Payload.(events.ProcessPaymentPayload).BoletoCode)
+}
+
+func TestProcessBoletoPaymentRejectsAmountMismatch(t *testing.T) {
+	pub := &tests.FakePublisher{}
+
+	rec, body := call(paymentRouter(pub), http.MethodPost, "/payments",
+		`{"account_id":"`+tests.UUID()+`","payment_method":"boleto","amount":10,"currency":"BRL","recipient":"Energia SA","idempotency_key":"bol-1","boleto_code":"`+boletoCodeWithAmount+`"}`)
+
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	assert.Equal(t, "VALIDATION_ERROR", errorCode(body))
+	assert.Equal(t, "boleto_amount", errorDetails(body)["amount"])
+	assert.Empty(t, pub.Published)
+}
+
+func TestProcessBoletoPaymentAcceptsMatchingAmount(t *testing.T) {
+	pub := &tests.FakePublisher{}
+
+	rec, _ := call(paymentRouter(pub), http.MethodPost, "/payments",
+		`{"account_id":"`+tests.UUID()+`","payment_method":"boleto","amount":150,"currency":"BRL","recipient":"Energia SA","idempotency_key":"bol-2","boleto_code":"`+boletoCodeWithAmount+`"}`)
+
+	assert.Equal(t, http.StatusAccepted, rec.Code)
+	assert.Equal(t, boletoCodeWithAmount, pub.Last().Event.Payload.(events.ProcessPaymentPayload).BoletoCode)
 }
 
 func TestProcessTedPaymentPublishesCommand(t *testing.T) {

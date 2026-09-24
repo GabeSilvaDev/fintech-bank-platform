@@ -2,6 +2,7 @@ package unit
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/fintech-bank-platform/api-gateway/internal/app/handlers"
@@ -67,6 +68,29 @@ func TestCreateTransactionValidatesFields(t *testing.T) {
 	assert.Equal(t, "required", details["amount"])
 	assert.Equal(t, "currency", details["currency"])
 	assert.Equal(t, "required", details["idempotency_key"])
+	assert.Empty(t, pub.Published)
+}
+
+func TestCreateTransactionValidatesIdempotencyKeyCharacters(t *testing.T) {
+	pub := &tests.FakePublisher{}
+	cases := []struct {
+		name string
+		key  string
+	}{
+		{"space", "abc def"},
+		{"unicode", "café"},
+		{"too_long", strings.Repeat("a", 65)},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec, body := call(transactionRouter(pub), http.MethodPost, "/transactions",
+				`{"account_id":"`+tests.UUID()+`","type":"deposit","amount":10,"currency":"BRL","idempotency_key":"`+tc.key+`"}`)
+
+			assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+			assert.Equal(t, "idempotency_key", errorDetails(body)["idempotency_key"])
+		})
+	}
 	assert.Empty(t, pub.Published)
 }
 

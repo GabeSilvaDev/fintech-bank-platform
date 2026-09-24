@@ -5,9 +5,11 @@ import (
 	"strings"
 
 	"github.com/fintech-bank-platform/api-gateway/internal/contracts"
+	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/fintech-bank-platform/pkg/errors"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/response"
+	"github.com/fintech-bank-platform/pkg/validation"
 )
 
 type tedRequest struct {
@@ -27,7 +29,7 @@ type paymentRequest struct {
 	BoletoCode     string      `json:"boleto_code" validate:"omitempty,boleto"`
 	TED            *tedRequest `json:"ted" validate:"omitempty"`
 	Description    string      `json:"description" validate:"max=255"`
-	IdempotencyKey string      `json:"idempotency_key" validate:"required,max=64"`
+	IdempotencyKey string      `json:"idempotency_key" validate:"required,idempotency_key"`
 }
 
 func (r paymentRequest) missingMethodField() string {
@@ -80,6 +82,14 @@ func (h *PaymentHandler) Process(w http.ResponseWriter, r *http.Request) {
 	if field := req.missingMethodField(); field != "" {
 		response.FromError(w, errors.UnprocessableEntity("VALIDATION_ERROR", "request validation failed").WithDetail(field, "required"))
 		return
+	}
+	if req.PaymentMethod == "boleto" {
+		if boletoCents, ok := validation.BoletoAmountCents(req.BoletoCode); ok && boletoCents > 0 {
+			if cents, err := domain.ToCents(req.Amount); err == nil && cents != boletoCents {
+				response.FromError(w, errors.UnprocessableEntity("VALIDATION_ERROR", "request validation failed").WithDetail("amount", "boleto_amount"))
+				return
+			}
+		}
 	}
 
 	event := events.NewPaymentCommand(events.EventTypes.ProcessPayment, events.ProcessPaymentPayload{
