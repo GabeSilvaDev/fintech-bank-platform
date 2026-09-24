@@ -11,13 +11,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func statementPage(t *testing.T, accountID, before string) ([]map[string]interface{}, string) {
+func statementPage(t *testing.T, c customer, before string) ([]map[string]interface{}, string) {
 	t.Helper()
-	path := "/api/v1/accounts/" + accountID + "/transactions?limit=2"
+	path := "/api/v1/accounts/" + c.accountID + "/transactions?limit=2"
 	if before != "" {
 		path += "&before=" + url.QueryEscape(before)
 	}
-	status, header, raw := exchange(t, http.MethodGet, gateway()+path, nil)
+	status, header, raw := exchange(t, http.MethodGet, gateway()+path, c.token, nil)
 	require.Equal(t, http.StatusOK, status, "GET %s: %s", path, raw)
 	out := decodeEnvelope(t, raw)
 	require.True(t, out.Success, "GET %s: %s", path, raw)
@@ -28,11 +28,11 @@ func statementPage(t *testing.T, accountID, before string) ([]map[string]interfa
 
 func TestStatementPagination(t *testing.T) {
 	t.Parallel()
-	_, accountID := newCustomer(t, "")
+	c := newCustomer(t, "")
 
 	deposits := make([]string, 0, 5)
 	for i := 0; i < 5; i++ {
-		tx := transaction(t, accountID, movement(t, accountID, "deposit", "10.00"))
+		tx := transaction(t, c, movement(t, c, "deposit", "10.00"))
 		require.Equal(t, "completed", tx["status"], "deposit: %v", tx)
 		deposits = append(deposits, tx["transaction_id"].(string))
 	}
@@ -41,7 +41,7 @@ func TestStatementPagination(t *testing.T) {
 	before := ""
 	for pages := 0; ; pages++ {
 		require.Less(t, pages, 5, "statement kept returning X-Next-Before: %v", seen)
-		items, next := statementPage(t, accountID, before)
+		items, next := statementPage(t, c, before)
 		require.LessOrEqual(t, len(items), 2)
 		for _, item := range items {
 			seen = append(seen, item["transaction_id"].(string))

@@ -6,9 +6,9 @@ import (
 	"testing"
 )
 
-func notificationSubjects(t *testing.T, userID string) []string {
+func notificationSubjects(t *testing.T, c customer) []string {
 	t.Helper()
-	items := list(t, "/api/v1/users/"+userID+"/notifications?limit=50")
+	items := list(t, c.token, "/api/v1/users/"+c.userID+"/notifications?limit=50")
 	subjects := make([]string, 0, len(items))
 	for _, item := range items {
 		if subject, ok := item["subject"].(string); ok {
@@ -29,24 +29,24 @@ func hasAll(subjects []string, wanted ...string) bool {
 
 func TestNotificationHistory(t *testing.T) {
 	t.Parallel()
-	senderUser, sender := newCustomer(t, "")
-	receiverUser, receiver := newCustomer(t, "")
+	sender := newCustomer(t, "")
+	receiver := newCustomer(t, "")
 
 	deposit(t, sender, "200.00")
-	tx := transaction(t, sender, transfer(t, sender, receiver, "80.00"))
+	tx := transaction(t, sender, transfer(t, sender, receiver.accountID, "80.00"))
 	if tx["status"] != "completed" {
 		t.Fatalf("transfer did not complete: %v", tx)
 	}
 
 	var senderSubjects []string
 	eventually(t, 0, func() bool {
-		senderSubjects = notificationSubjects(t, senderUser)
+		senderSubjects = notificationSubjects(t, sender)
 		return hasAll(senderSubjects, "Depósito concluído", "Transferência enviada")
 	}, "sender notifications: %v", &senderSubjects)
 
 	var receiverSubjects []string
 	eventually(t, 0, func() bool {
-		receiverSubjects = notificationSubjects(t, receiverUser)
+		receiverSubjects = notificationSubjects(t, receiver)
 		return hasAll(receiverSubjects, "Transferência recebida")
 	}, "receiver notifications: %v", &receiverSubjects)
 }

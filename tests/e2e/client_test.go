@@ -95,13 +95,13 @@ func retryAfter(header string) time.Duration {
 	return time.Second
 }
 
-func send(t *testing.T, method, url string, body interface{}) (int, []byte) {
+func send(t *testing.T, method, url, token string, body interface{}) (int, []byte) {
 	t.Helper()
-	status, _, raw := exchange(t, method, url, body)
+	status, _, raw := exchange(t, method, url, token, body)
 	return status, raw
 }
 
-func exchange(t *testing.T, method, url string, body interface{}) (int, http.Header, []byte) {
+func exchange(t *testing.T, method, url, token string, body interface{}) (int, http.Header, []byte) {
 	t.Helper()
 	var payload []byte
 	if body != nil {
@@ -120,6 +120,9 @@ func exchange(t *testing.T, method, url string, body interface{}) (int, http.Hea
 		if payload != nil {
 			req.Header.Set("Content-Type", "application/json")
 		}
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
 		resp, err := httpClient.Do(req)
 		require.NoError(t, err)
 		raw, err := io.ReadAll(resp.Body)
@@ -130,7 +133,7 @@ func exchange(t *testing.T, method, url string, body interface{}) (int, http.Hea
 		}
 		wait := retryAfter(resp.Header.Get("Retry-After"))
 		if time.Now().Add(wait).After(deadline) {
-			require.FailNow(t, fmt.Sprintf("%s %s was still rate limited (429) after retrying for %s; raise RATE_LIMIT_REQUESTS on the gateway", method, url, rateLimitBudget))
+			require.FailNow(t, fmt.Sprintf("%s %s was still rate limited (429) after retrying for %s; raise RATE_LIMIT_REQUESTS and AUTH_RATE_LIMIT_REQUESTS on the gateway", method, url, rateLimitBudget))
 		}
 		time.Sleep(wait)
 	}
@@ -143,9 +146,9 @@ func decodeEnvelope(t *testing.T, raw []byte) envelope {
 	return out
 }
 
-func post(t *testing.T, path string, body interface{}) (int, map[string]interface{}) {
+func post(t *testing.T, token, path string, body interface{}) (int, map[string]interface{}) {
 	t.Helper()
-	status, raw := send(t, http.MethodPost, gateway()+path, body)
+	status, raw := send(t, http.MethodPost, gateway()+path, token, body)
 	out := decodeEnvelope(t, raw)
 	var data map[string]interface{}
 	if len(out.Data) > 0 {
@@ -154,18 +157,28 @@ func post(t *testing.T, path string, body interface{}) (int, map[string]interfac
 	return status, data
 }
 
-func postRejected(t *testing.T, path string, body interface{}) (int, apiError) {
+func rejected(t *testing.T, method, token, path string, body interface{}) (int, apiError) {
 	t.Helper()
-	status, raw := send(t, http.MethodPost, gateway()+path, body)
+	status, raw := send(t, method, gateway()+path, token, body)
 	out := decodeEnvelope(t, raw)
-	require.False(t, out.Success, "POST %s unexpectedly succeeded: %s", path, raw)
-	require.NotNil(t, out.Error, "POST %s has no error: %s", path, raw)
+	require.False(t, out.Success, "%s %s unexpectedly succeeded: %s", method, path, raw)
+	require.NotNil(t, out.Error, "%s %s has no error: %s", method, path, raw)
 	return status, *out.Error
 }
 
-func get(t *testing.T, path string) (int, interface{}) {
+func postRejected(t *testing.T, token, path string, body interface{}) (int, apiError) {
 	t.Helper()
-	status, raw := send(t, http.MethodGet, gateway()+path, nil)
+	return rejected(t, http.MethodPost, token, path, body)
+}
+
+func getRejected(t *testing.T, token, path string) (int, apiError) {
+	t.Helper()
+	return rejected(t, http.MethodGet, token, path, nil)
+}
+
+func get(t *testing.T, token, path string) (int, interface{}) {
+	t.Helper()
+	status, raw := send(t, http.MethodGet, gateway()+path, token, nil)
 	out := decodeEnvelope(t, raw)
 	var data interface{}
 	if len(out.Data) > 0 {
@@ -174,9 +187,9 @@ func get(t *testing.T, path string) (int, interface{}) {
 	return status, data
 }
 
-func list(t *testing.T, path string) []map[string]interface{} {
+func list(t *testing.T, token, path string) []map[string]interface{} {
 	t.Helper()
-	status, data := get(t, path)
+	status, data := get(t, token, path)
 	require.Equal(t, http.StatusOK, status, "GET %s", path)
 	raw, ok := data.([]interface{})
 	require.True(t, ok, "GET %s did not return a list: %v", path, data)
@@ -187,9 +200,9 @@ func list(t *testing.T, path string) []map[string]interface{} {
 	return items
 }
 
-func accepted(t *testing.T, path string, body interface{}) {
+func accepted(t *testing.T, token, path string, body interface{}) {
 	t.Helper()
-	status, data := post(t, path, body)
+	status, data := post(t, token, path, body)
 	require.Equal(t, http.StatusAccepted, status, "POST %s", path)
 	require.NotEmpty(t, data["command_id"])
 }
@@ -215,43 +228,76 @@ func key() string {
 	return uuid.NewString()
 }
 
-func emailOf(userID string) string {
-	return userID + "@e2e.test"
+type customer struct {
+	userID    string
+	accountID string
+	token     string
+	email     string
+	password  string
 }
 
-func newCustomer(t *testing.T, phone string) (string, string) {
+func uniqueEmail() string {
+	return uuid.NewString() + "@e2e.test"
+}
+
+func strongPassword() string {
+	return "E2e-" + uuid.NewString()
+}
+
+func register(t *testing.T, email, password string) (int, map[string]interface{}) {
 	t.Helper()
-	userID := uuid.NewString()
+	return post(t, "", "/api/v1/auth/register", map[string]interface{}{"email": email, "password": password})
+}
+
+func login(t *testing.T, email, password string) (int, map[string]interface{}) {
+	t.Helper()
+	return post(t, "", "/api/v1/auth/login", map[string]interface{}{"email": email, "password": password})
+}
+
+func newUser(t *testing.T) customer {
+	t.Helper()
+	c := customer{email: uniqueEmail(), password: strongPassword()}
+	status, data := register(t, c.email, c.password)
+	require.Equal(t, http.StatusCreated, status, "register %s: %v", c.email, data)
+	require.Equal(t, "Bearer", data["token_type"])
+	c.userID, _ = data["user_id"].(string)
+	c.token, _ = data["access_token"].(string)
+	require.NotEmpty(t, c.userID, "register %s returned no user_id: %v", c.email, data)
+	require.NotEmpty(t, c.token, "register %s returned no access_token: %v", c.email, data)
+	return c
+}
+
+func newCustomer(t *testing.T, phone string) customer {
+	t.Helper()
+	c := newUser(t)
 	body := map[string]interface{}{
-		"user_id":      userID,
 		"account_type": "checking",
 		"name":         "Cliente E2E",
-		"email":        emailOf(userID),
+		"email":        c.email,
 		"document":     cpfs[cpfCursor.Add(1)%uint64(len(cpfs))],
 	}
 	if phone != "" {
 		body["phone"] = phone
 	}
-	accepted(t, "/api/v1/accounts", body)
+	accepted(t, c.token, "/api/v1/accounts", body)
 
-	var accountID string
 	eventually(t, 0, func() bool {
-		accounts := list(t, "/api/v1/users/"+userID+"/accounts")
+		accounts := list(t, c.token, "/api/v1/users/"+c.userID+"/accounts")
 		if len(accounts) != 1 {
 			return false
 		}
-		accountID = accounts[0]["account_id"].(string)
+		c.accountID = accounts[0]["account_id"].(string)
 		return true
-	}, "account for user %s was not created", userID)
-	return userID, accountID
+	}, "account for user %s was not created", c.userID)
+	return c
 }
 
-func balance(t *testing.T, accountID string) string {
+func balance(t *testing.T, c customer) string {
 	t.Helper()
-	status, data := get(t, "/api/v1/accounts/"+accountID)
+	status, data := get(t, c.token, "/api/v1/accounts/"+c.accountID)
 	require.Equal(t, http.StatusOK, status)
 	value, ok := data.(map[string]interface{})["balance"].(string)
-	require.True(t, ok, "account %s balance is not a decimal string: %v", accountID, data)
+	require.True(t, ok, "account %s balance is not a decimal string: %v", c.accountID, data)
 	return value
 }
 
@@ -264,11 +310,11 @@ func contains(values []string, value interface{}) bool {
 	return false
 }
 
-func settled(t *testing.T, timeout time.Duration, path, idempotencyKey string, final []string) map[string]interface{} {
+func settled(t *testing.T, timeout time.Duration, token, path, idempotencyKey string, final []string) map[string]interface{} {
 	t.Helper()
 	var last map[string]interface{}
 	eventually(t, timeout, func() bool {
-		for _, item := range list(t, path) {
+		for _, item := range list(t, token, path) {
 			if item["idempotency_key"] == idempotencyKey {
 				last = item
 				return contains(final, item["status"])
@@ -279,46 +325,54 @@ func settled(t *testing.T, timeout time.Duration, path, idempotencyKey string, f
 	return last
 }
 
-func transaction(t *testing.T, accountID, idempotencyKey string) map[string]interface{} {
+func transaction(t *testing.T, c customer, idempotencyKey string) map[string]interface{} {
 	t.Helper()
-	return settled(t, 0, "/api/v1/accounts/"+accountID+"/transactions", idempotencyKey, transactionFinal)
+	return settled(t, 0, c.token, "/api/v1/accounts/"+c.accountID+"/transactions", idempotencyKey, transactionFinal)
 }
 
-func payment(t *testing.T, accountID, idempotencyKey string) map[string]interface{} {
+func payment(t *testing.T, c customer, idempotencyKey string) map[string]interface{} {
 	t.Helper()
-	return settled(t, 60*time.Second, "/api/v1/accounts/"+accountID+"/payments", idempotencyKey, paymentFinal)
+	return settled(t, 60*time.Second, c.token, "/api/v1/accounts/"+c.accountID+"/payments", idempotencyKey, paymentFinal)
 }
 
-func movement(t *testing.T, accountID, kind, amount string) string {
-	t.Helper()
-	k := key()
-	accepted(t, "/api/v1/transactions", map[string]interface{}{
+func movementBody(accountID, kind, amount, idempotencyKey string) map[string]interface{} {
+	return map[string]interface{}{
 		"account_id":      accountID,
 		"type":            kind,
 		"amount":          amount,
 		"currency":        "BRL",
 		"description":     "e2e " + kind,
-		"idempotency_key": k,
-	})
+		"idempotency_key": idempotencyKey,
+	}
+}
+
+func movement(t *testing.T, c customer, kind, amount string) string {
+	t.Helper()
+	k := key()
+	accepted(t, c.token, "/api/v1/transactions", movementBody(c.accountID, kind, amount, k))
 	return k
 }
 
-func deposit(t *testing.T, accountID, amount string) {
+func deposit(t *testing.T, c customer, amount string) {
 	t.Helper()
-	tx := transaction(t, accountID, movement(t, accountID, "deposit", amount))
+	tx := transaction(t, c, movement(t, c, "deposit", amount))
 	require.Equal(t, "completed", tx["status"], "deposit: %v", tx)
 }
 
-func transfer(t *testing.T, fromAccountID, toAccountID, amount string) string {
-	t.Helper()
-	k := key()
-	accepted(t, "/api/v1/transfers", map[string]interface{}{
+func transferBody(fromAccountID, toAccountID, amount, idempotencyKey string) map[string]interface{} {
+	return map[string]interface{}{
 		"from_account_id": fromAccountID,
 		"to_account_id":   toAccountID,
 		"amount":          amount,
 		"currency":        "BRL",
 		"description":     "e2e transfer",
-		"idempotency_key": k,
-	})
+		"idempotency_key": idempotencyKey,
+	}
+}
+
+func transfer(t *testing.T, from customer, toAccountID, amount string) string {
+	t.Helper()
+	k := key()
+	accepted(t, from.token, "/api/v1/transfers", transferBody(from.accountID, toAccountID, amount, k))
 	return k
 }

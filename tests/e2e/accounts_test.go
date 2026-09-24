@@ -23,7 +23,7 @@ type mailpitSearch struct {
 func mailSubjects(t *testing.T, email string) []string {
 	t.Helper()
 	query := url.QueryEscape(`to:"` + email + `"`)
-	status, raw := send(t, http.MethodGet, mailpit()+"/api/v1/search?query="+query, nil)
+	status, raw := send(t, http.MethodGet, mailpit()+"/api/v1/search?query="+query, "", nil)
 	require.Equal(t, http.StatusOK, status, "mailpit search: %s", raw)
 	var result mailpitSearch
 	require.NoError(t, json.Unmarshal(raw, &result))
@@ -36,17 +36,17 @@ func mailSubjects(t *testing.T, email string) []string {
 
 func TestAccountCreationSendsWelcomeEmail(t *testing.T) {
 	t.Parallel()
-	userID, accountID := newCustomer(t, "11987654321")
+	c := newCustomer(t, "11987654321")
 
-	status, data := get(t, "/api/v1/accounts/"+accountID)
+	status, data := get(t, c.token, "/api/v1/accounts/"+c.accountID)
 	require.Equal(t, http.StatusOK, status)
 	account := data.(map[string]interface{})
-	require.Equal(t, userID, account["user_id"])
+	require.Equal(t, c.userID, account["user_id"])
 	require.Equal(t, "checking", account["type"])
 	require.Equal(t, "active", account["status"])
 	require.Equal(t, "0.00", account["balance"])
 
-	email := emailOf(userID)
+	email := c.email
 	var subjects []string
 	eventually(t, 0, func() bool {
 		subjects = mailSubjects(t, email)
