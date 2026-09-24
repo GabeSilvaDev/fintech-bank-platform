@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"strings"
 	"time"
@@ -317,6 +318,9 @@ func (s *AccountService) applyCredit(ctx context.Context, cmd events.CreditAccou
 
 	now := s.clock.Now()
 	for attempt := 0; attempt < maxBalanceAttempts; attempt++ {
+		if cents > math.MaxInt64-account.BalanceCents {
+			return creditRejected(cmd, cents, accountID, account.BalanceCents, "balance_limit_exceeded"), nil
+		}
 		next := account.BalanceCents + cents
 		applied, err := s.accounts.CompareAndSetBalance(ctx, accountID, account.BalanceCents, next, now)
 		if err != nil {

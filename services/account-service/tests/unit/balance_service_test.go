@@ -3,6 +3,7 @@ package unit
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 
 	"github.com/fintech-bank-platform/account-service/internal/app/models"
@@ -127,6 +128,50 @@ func TestCreditIsRefusedByRepositoryWhenAccountIsNotActive(t *testing.T) {
 	assert.Equal(t, "account_not_active", result.Rejected.Reason)
 	assert.Equal(t, 1, h.accounts.CASCalls)
 	assert.Equal(t, int64(100), h.accounts.Accounts[account.AccountID].BalanceCents)
+}
+
+func TestCreditRejectsBalanceOverflow(t *testing.T) {
+	h := newHarness()
+	account := h.activeAccount(math.MaxInt64 - 50)
+
+	result, err := h.service.Credit(context.Background(), credit(account.AccountID.String(), 51))
+
+	assert.NoError(t, err)
+	assert.Nil(t, result.Credited)
+	assert.Equal(t, "balance_limit_exceeded", result.Rejected.Reason)
+	assert.Equal(t, domain.AmountFromCents(math.MaxInt64-50), result.Rejected.Balance)
+	assert.Equal(t, domain.AmountFromCents(51), result.Rejected.Amount)
+	assert.Equal(t, "tx-1", result.Rejected.Reference)
+	assert.Equal(t, "k-1", result.Rejected.IdempotencyKey)
+	assert.Equal(t, 0, h.accounts.CASCalls)
+	assert.Equal(t, int64(math.MaxInt64-50), h.accounts.Accounts[account.AccountID].BalanceCents)
+}
+
+func TestCreditFillsBalanceUpToTheLimit(t *testing.T) {
+	h := newHarness()
+	account := h.activeAccount(math.MaxInt64 - 50)
+
+	result, err := h.service.Credit(context.Background(), credit(account.AccountID.String(), 50))
+
+	assert.NoError(t, err)
+	assert.Nil(t, result.Rejected)
+	assert.Equal(t, domain.AmountFromCents(math.MaxInt64), result.Credited.BalanceAfter)
+	assert.Equal(t, int64(math.MaxInt64), h.accounts.Accounts[account.AccountID].BalanceCents)
+}
+
+func TestCreditRechecksBalanceLimitAfterConflict(t *testing.T) {
+	h := newHarness()
+	account := h.activeAccount(100)
+	h.accounts.CASResults = []tests.CASResult{{Applied: false}}
+	h.accounts.OnCAS = func() { h.accounts.Accounts[account.AccountID].BalanceCents = math.MaxInt64 - 10 }
+
+	result, err := h.service.Credit(context.Background(), credit(account.AccountID.String(), 100))
+
+	assert.NoError(t, err)
+	assert.Nil(t, result.Credited)
+	assert.Equal(t, "balance_limit_exceeded", result.Rejected.Reason)
+	assert.Equal(t, domain.AmountFromCents(math.MaxInt64-10), result.Rejected.Balance)
+	assert.Equal(t, 1, h.accounts.CASCalls)
 }
 
 func TestCreditPropagatesRepositoryErrors(t *testing.T) {
