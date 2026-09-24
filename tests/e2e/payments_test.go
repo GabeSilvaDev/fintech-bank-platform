@@ -77,8 +77,26 @@ func TestPaymentSandboxPaths(t *testing.T) {
 
 	require.InDelta(t, 1707.50, balance(t, accountID), 0.001)
 
-	invalidBoleto := settledBoleto[:len(settledBoleto)-1] + "1"
+	tedPayment := payment(t, accountID, tedSettled)
+	tedDetails, ok := tedPayment["ted"].(map[string]interface{})
+	require.True(t, ok, "ted payment has no ted details: %v", tedPayment)
+	require.Equal(t, "*********25", tedDetails["document"])
+
 	status, rejection := postRejected(t, "/api/v1/payments", map[string]interface{}{
+		"account_id":      accountID,
+		"payment_method":  "boleto",
+		"amount":          149.99,
+		"currency":        "BRL",
+		"recipient":       "Destinatário E2E",
+		"boleto_code":     settledBoleto,
+		"idempotency_key": key(),
+	})
+	require.Equal(t, http.StatusUnprocessableEntity, status)
+	require.Equal(t, "VALIDATION_ERROR", rejection.Code)
+	require.Equal(t, map[string]string{"amount": "boleto_amount"}, rejection.Details)
+
+	invalidBoleto := settledBoleto[:len(settledBoleto)-1] + "1"
+	status, rejection = postRejected(t, "/api/v1/payments", map[string]interface{}{
 		"account_id":      accountID,
 		"payment_method":  "boleto",
 		"amount":          150,

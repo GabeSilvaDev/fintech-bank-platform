@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"net/http"
 	"testing"
 
 	"github.com/google/uuid"
@@ -18,6 +19,13 @@ func find(t *testing.T, accountID, idempotencyKey string) map[string]interface{}
 	}
 	require.FailNow(t, "transaction not listed", "account %s has no transaction %s", accountID, idempotencyKey)
 	return nil
+}
+
+func byID(t *testing.T, transactionID string) map[string]interface{} {
+	t.Helper()
+	status, data := get(t, "/api/v1/transactions/"+transactionID)
+	require.Equal(t, http.StatusOK, status, "GET transaction %s", transactionID)
+	return data.(map[string]interface{})
 }
 
 func TestDepositWithdrawalAndTransfer(t *testing.T) {
@@ -39,13 +47,24 @@ func TestDepositWithdrawalAndTransfer(t *testing.T) {
 	require.Equal(t, "transfer", sent["type"])
 	require.Equal(t, receiver, sent["counterparty_id"])
 	require.InDelta(t, 550, sent["from_balance_after"].(float64), 0.001)
-	require.InDelta(t, 300, sent["to_balance_after"].(float64), 0.001)
+	require.NotContains(t, sent, "to_balance_after")
 
 	received := find(t, receiver, transferKey)
 	require.Equal(t, sent["transaction_id"], received["transaction_id"])
 	require.Equal(t, "completed", received["status"])
-	require.InDelta(t, 550, received["from_balance_after"].(float64), 0.001)
 	require.InDelta(t, 300, received["to_balance_after"].(float64), 0.001)
+	require.NotContains(t, received, "from_balance_after")
+
+	detail := byID(t, sent["transaction_id"].(string))
+	require.Equal(t, "completed", detail["status"])
+	require.Equal(t, receiver, detail["counterparty_id"])
+	require.NotContains(t, detail, "from_balance_after")
+	require.NotContains(t, detail, "to_balance_after")
+
+	withdrawalDetail := byID(t, withdrawal["transaction_id"].(string))
+	require.Equal(t, "completed", withdrawalDetail["status"])
+	require.NotContains(t, withdrawalDetail, "from_balance_after")
+	require.NotContains(t, withdrawalDetail, "to_balance_after")
 
 	require.InDelta(t, 550, balance(t, sender), 0.001)
 	require.InDelta(t, 300, balance(t, receiver), 0.001)
@@ -95,4 +114,58 @@ func TestTransferToUnknownAccountIsReversed(t *testing.T) {
 	require.Equal(t, "account_not_found", tx["failure_reason"])
 	require.Equal(t, unknown, tx["counterparty_id"])
 	require.InDelta(t, 500, balance(t, sender), 0.001)
+}
+
+func TestIdempotencyKeysArePerAccount(t *testing.T) {
+	t.Parallel()
+	_, first := newCustomer(t, "")
+	_, second := newCustomer(t, "")
+
+	shared := key()
+	body := func(accountID string, amount float64) map[string]interface{} {
+		return map[string]interface{}{
+			"account_id":      accountID,
+			"type":            "deposit",
+			"amount":          amount,
+			"currency":        "BRL",
+			"description":     "e2e shared key",
+			"idempotency_key": shared,
+		}
+	}
+
+	accepted(t, "/api/v1/transactions", body(first, 10))
+	accepted(t, "/api/v1/transactions", body(second, 20))
+
+	firstTx := transaction(t, first, shared)
+	secondTx := transaction(t, second, shared)
+	require.Equal(t, "completed", firstTx["status"], "first: %v", firstTx)
+	require.Equal(t, "completed", secondTx["status"], "second: %v", secondTx)
+	require.NotEqual(t, firstTx["transaction_id"], secondTx["transaction_id"])
+	require.Equal(t, first, firstTx["account_id"])
+	require.Equal(t, second, secondTx["account_id"])
+	require.InDelta(t, 10, balance(t, first), 0.001)
+	require.InDelta(t, 20, balance(t, second), 0.001)
+
+	accepted(t, "/api/v1/transactions", body(first, 10))
+	deposit(t, first, 1)
+
+	require.Len(t, list(t, "/api/v1/accounts/"+first+"/transactions"), 2)
+	require.Len(t, list(t, "/api/v1/accounts/"+second+"/transactions"), 1)
+	require.Equal(t, firstTx["transaction_id"], find(t, first, shared)["transaction_id"])
+	require.InDelta(t, 11, balance(t, first), 0.001)
+	require.InDelta(t, 20, balance(t, second), 0.001)
+}
+
+func TestIdempotencyKeyWithSpaceIsRejected(t *testing.T) {
+	t.Parallel()
+	status, rejection := postRejected(t, "/api/v1/transactions", map[string]interface{}{
+		"account_id":      uuid.NewString(),
+		"type":            "deposit",
+		"amount":          10,
+		"currency":        "BRL",
+		"idempotency_key": "e2e key",
+	})
+	require.Equal(t, http.StatusUnprocessableEntity, status)
+	require.Equal(t, "VALIDATION_ERROR", rejection.Code)
+	require.Equal(t, map[string]string{"idempotency_key": "idempotency_key"}, rejection.Details)
 }
