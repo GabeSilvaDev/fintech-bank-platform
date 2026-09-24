@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/apache/cassandra-gocql-driver/v2"
 	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/fintech-bank-platform/transaction-service/internal/app/models"
 	"github.com/fintech-bank-platform/transaction-service/internal/infrastructure/database"
@@ -163,4 +164,61 @@ func TestProcessedEventStore(t *testing.T) {
 	again, err := store.MarkProcessed(context.Background(), id)
 	require.NoError(t, err)
 	require.False(t, again)
+}
+
+func TestTransactionRepositoryListByAccountOrdersAndSkipsMissing(t *testing.T) {
+	session, _ := throwawayKeyspace(t)
+	repo := database.NewTransactionRepository(session)
+	ctx := context.Background()
+	account := uuid.New()
+	base := time.Now().UTC().Truncate(time.Millisecond)
+
+	created := make([]*models.Transaction, 3)
+	for i := 0; i < 3; i++ {
+		tx := &models.Transaction{ID: uuid.New(), Type: models.TypeDeposit, Status: models.StatusPending, AccountID: account, AmountCents: int64(100 + i), Currency: "BRL", IdempotencyKey: uuid.NewString(), CreatedAt: base.Add(time.Duration(i) * time.Second), UpdatedAt: base.Add(time.Duration(i) * time.Second)}
+		require.NoError(t, repo.Create(ctx, tx))
+		created[i] = tx
+	}
+
+	missing := uuid.New()
+	require.NoError(t, session.Query("INSERT INTO transactions_by_account (account_id, created_at, transaction_id) VALUES (?, ?, ?)", gocql.UUID(account), base.Add(4*time.Second), gocql.UUID(missing)).WithContext(ctx).Exec())
+
+	list, err := repo.ListByAccount(ctx, account, 10)
+	require.NoError(t, err)
+	require.Len(t, list, 3)
+	require.Equal(t, created[2].ID, list[0].ID)
+	require.Equal(t, created[1].ID, list[1].ID)
+	require.Equal(t, created[0].ID, list[2].ID)
+}
+
+func TestTransactionRepositoryListByAccountChunksBeyondHundred(t *testing.T) {
+	session, _ := throwawayKeyspace(t)
+	repo := database.NewTransactionRepository(session)
+	ctx := context.Background()
+	account := uuid.New()
+	base := time.Now().UTC().Truncate(time.Millisecond)
+
+	ids := make([]uuid.UUID, 150)
+	for i := 0; i < 150; i++ {
+		tx := &models.Transaction{ID: uuid.New(), Type: models.TypeDeposit, Status: models.StatusPending, AccountID: account, AmountCents: int64(i), Currency: "BRL", IdempotencyKey: uuid.NewString(), CreatedAt: base.Add(time.Duration(i) * time.Millisecond), UpdatedAt: base.Add(time.Duration(i) * time.Millisecond)}
+		require.NoError(t, repo.Create(ctx, tx))
+		ids[i] = tx.ID
+	}
+
+	list, err := repo.ListByAccount(ctx, account, 200)
+	require.NoError(t, err)
+	require.Len(t, list, 150)
+	for i, tx := range list {
+		require.Equal(t, ids[149-i], tx.ID)
+	}
+}
+
+func TestTransactionRepositoryListByAccountEmpty(t *testing.T) {
+	session, _ := throwawayKeyspace(t)
+	repo := database.NewTransactionRepository(session)
+
+	list, err := repo.ListByAccount(context.Background(), uuid.New(), 10)
+	require.NoError(t, err)
+	require.NotNil(t, list)
+	require.Empty(t, list)
 }

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/apache/cassandra-gocql-driver/v2"
 	"github.com/fintech-bank-platform/payment-service/internal/app/models"
 	"github.com/fintech-bank-platform/payment-service/internal/infrastructure/database"
 	"github.com/fintech-bank-platform/pkg/domain"
@@ -147,4 +148,61 @@ func TestProcessedEventStore(t *testing.T) {
 	again, err := store.MarkProcessed(context.Background(), id)
 	require.NoError(t, err)
 	require.False(t, again)
+}
+
+func TestPaymentRepositoryListByAccountOrdersAndSkipsMissing(t *testing.T) {
+	session, _ := throwawayKeyspace(t)
+	repo := database.NewPaymentRepository(session)
+	ctx := context.Background()
+	account := uuid.New()
+	base := time.Now().UTC().Truncate(time.Millisecond)
+
+	created := make([]*models.Payment, 3)
+	for i := 0; i < 3; i++ {
+		p := &models.Payment{ID: uuid.New(), AccountID: account, Method: models.MethodPix, Status: models.StatusPending, AmountCents: int64(100 + i), Currency: "BRL", Recipient: "Ana", PixKey: "ana@example.com", IdempotencyKey: uuid.NewString(), CreatedAt: base.Add(time.Duration(i) * time.Second), UpdatedAt: base.Add(time.Duration(i) * time.Second)}
+		require.NoError(t, repo.Create(ctx, p))
+		created[i] = p
+	}
+
+	missing := uuid.New()
+	require.NoError(t, session.Query("INSERT INTO payments_by_account (account_id, created_at, payment_id) VALUES (?, ?, ?)", gocql.UUID(account), base.Add(4*time.Second), gocql.UUID(missing)).WithContext(ctx).Exec())
+
+	list, err := repo.ListByAccount(ctx, account, 10)
+	require.NoError(t, err)
+	require.Len(t, list, 3)
+	require.Equal(t, created[2].ID, list[0].ID)
+	require.Equal(t, created[1].ID, list[1].ID)
+	require.Equal(t, created[0].ID, list[2].ID)
+}
+
+func TestPaymentRepositoryListByAccountChunksBeyondHundred(t *testing.T) {
+	session, _ := throwawayKeyspace(t)
+	repo := database.NewPaymentRepository(session)
+	ctx := context.Background()
+	account := uuid.New()
+	base := time.Now().UTC().Truncate(time.Millisecond)
+
+	ids := make([]uuid.UUID, 150)
+	for i := 0; i < 150; i++ {
+		p := &models.Payment{ID: uuid.New(), AccountID: account, Method: models.MethodPix, Status: models.StatusPending, AmountCents: int64(i), Currency: "BRL", Recipient: "Ana", PixKey: "ana@example.com", IdempotencyKey: uuid.NewString(), CreatedAt: base.Add(time.Duration(i) * time.Millisecond), UpdatedAt: base.Add(time.Duration(i) * time.Millisecond)}
+		require.NoError(t, repo.Create(ctx, p))
+		ids[i] = p.ID
+	}
+
+	list, err := repo.ListByAccount(ctx, account, 200)
+	require.NoError(t, err)
+	require.Len(t, list, 150)
+	for i, p := range list {
+		require.Equal(t, ids[149-i], p.ID)
+	}
+}
+
+func TestPaymentRepositoryListByAccountEmpty(t *testing.T) {
+	session, _ := throwawayKeyspace(t)
+	repo := database.NewPaymentRepository(session)
+
+	list, err := repo.ListByAccount(context.Background(), uuid.New(), 10)
+	require.NoError(t, err)
+	require.NotNil(t, list)
+	require.Empty(t, list)
 }

@@ -23,6 +23,8 @@ func NewTransactionRepository(session *gocql.Session) *TransactionRepository {
 
 const transactionColumns = "transaction_id, type, status, account_id, counterparty_id, amount_cents, currency, description, idempotency_key, failure_reason, from_balance_cents, to_balance_cents, created_at, updated_at, completed_at"
 
+const transactionIDChunkSize = 100
+
 func (r *TransactionRepository) Create(ctx context.Context, tx *models.Transaction) error {
 	var counterparty *gocql.UUID
 	if tx.CounterpartyID != nil {
@@ -67,17 +69,34 @@ func (r *TransactionRepository) ListByAccount(ctx context.Context, accountID uui
 	if err := iter.Close(); err != nil {
 		return nil, err
 	}
+	if len(ids) == 0 {
+		return []*models.Transaction{}, nil
+	}
+
+	byID := make(map[gocql.UUID]*models.Transaction, len(ids))
+	for start := 0; start < len(ids); start += transactionIDChunkSize {
+		end := start + transactionIDChunkSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunkIter := r.session.Query("SELECT "+transactionColumns+" FROM transactions WHERE transaction_id IN ?", ids[start:end]).WithContext(ctx).Iter()
+		for {
+			tx, ok := scanTransactionIter(chunkIter)
+			if !ok {
+				break
+			}
+			byID[gocql.UUID(tx.ID)] = tx
+		}
+		if err := chunkIter.Close(); err != nil {
+			return nil, err
+		}
+	}
 
 	txns := make([]*models.Transaction, 0, len(ids))
 	for _, id := range ids {
-		tx, err := r.Get(ctx, uuid.UUID(id))
-		if errors.Is(err, domain.ErrNotFound) {
-			continue
+		if tx, ok := byID[id]; ok {
+			txns = append(txns, tx)
 		}
-		if err != nil {
-			return nil, err
-		}
-		txns = append(txns, tx)
 	}
 	return txns, nil
 }

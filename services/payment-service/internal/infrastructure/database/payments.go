@@ -23,6 +23,8 @@ func NewPaymentRepository(session *gocql.Session) *PaymentRepository {
 
 const paymentColumns = "payment_id, account_id, method, status, amount_cents, currency, recipient, pix_key, boleto_code, ted_bank_code, ted_branch, ted_account, ted_document, description, idempotency_key, external_id, failure_reason, balance_after_cents, created_at, updated_at, completed_at"
 
+const paymentIDChunkSize = 100
+
 func (r *PaymentRepository) Create(ctx context.Context, p *models.Payment) error {
 	ted := p.TED
 	if ted == nil {
@@ -64,17 +66,34 @@ func (r *PaymentRepository) ListByAccount(ctx context.Context, accountID uuid.UU
 	if err := iter.Close(); err != nil {
 		return nil, err
 	}
+	if len(ids) == 0 {
+		return []*models.Payment{}, nil
+	}
+
+	byID := make(map[gocql.UUID]*models.Payment, len(ids))
+	for start := 0; start < len(ids); start += paymentIDChunkSize {
+		end := start + paymentIDChunkSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunkIter := r.session.Query("SELECT "+paymentColumns+" FROM payments WHERE payment_id IN ?", ids[start:end]).WithContext(ctx).Iter()
+		for {
+			payment, ok := scanPaymentIter(chunkIter)
+			if !ok {
+				break
+			}
+			byID[gocql.UUID(payment.ID)] = payment
+		}
+		if err := chunkIter.Close(); err != nil {
+			return nil, err
+		}
+	}
 
 	payments := make([]*models.Payment, 0, len(ids))
 	for _, id := range ids {
-		payment, err := r.Get(ctx, uuid.UUID(id))
-		if errors.Is(err, domain.ErrNotFound) {
-			continue
+		if payment, ok := byID[id]; ok {
+			payments = append(payments, payment)
 		}
-		if err != nil {
-			return nil, err
-		}
-		payments = append(payments, payment)
 	}
 	return payments, nil
 }
