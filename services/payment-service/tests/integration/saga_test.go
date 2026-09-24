@@ -72,6 +72,7 @@ func ensureTopic(t *testing.T, broker, topic string) {
 }
 
 func newReader(t *testing.T, addrs []string, topic string) *kafka.Reader {
+	t.Helper()
 	return kafka.NewReader(kafka.ReaderConfig{Brokers: addrs, GroupID: groupAtTail(t, addrs, topic), Topic: topic, StartOffset: kafka.LastOffset, MinBytes: 1, MaxBytes: 1 << 20})
 }
 
@@ -214,7 +215,7 @@ func TestPaymentsEndToEnd(t *testing.T) {
 
 	created := awaitEvent(t, ctx, results, events.EventTypes.PaymentCreated, tedTrace, storedIn(ctx, repo))
 	tedID := uuid.MustParse(field(created, "payment_id"))
-	debit := awaitEvent(t, ctx, accountCommands, events.EventTypes.DebitAccount, tedTrace, withField("idempotency_key", models.StepKey(tedID, models.StepDebit)))
+	debit := awaitEvent(t, ctx, accountCommands, events.EventTypes.DebitAccount, tedTrace, withField("reference", models.Reference(tedID)))
 	require.Equal(t, models.StepKey(tedID, models.StepDebit), field(debit, "idempotency_key"))
 	require.NoError(t, producer.Publish(ctx, replies, account, answer(debit, events.EventTypes.AccountDebited, 9000)))
 
@@ -262,9 +263,10 @@ func TestPaymentsEndToEnd(t *testing.T) {
 	}).WithTraceID(pixTrace)
 	require.NoError(t, producer.Publish(ctx, events.Topics.PaymentCommands, account, pix))
 	pixID := uuid.MustParse(field(awaitEvent(t, ctx, results, events.EventTypes.PaymentCreated, pixTrace, storedIn(ctx, repo)), "payment_id"))
-	pixDebit := awaitEvent(t, ctx, accountCommands, events.EventTypes.DebitAccount, pixTrace, withField("idempotency_key", models.StepKey(pixID, models.StepDebit)))
+	pixDebit := awaitEvent(t, ctx, accountCommands, events.EventTypes.DebitAccount, pixTrace, withField("reference", models.Reference(pixID)))
+	require.Equal(t, models.StepKey(pixID, models.StepDebit), field(pixDebit, "idempotency_key"))
 	require.NoError(t, producer.Publish(ctx, replies, account, answer(pixDebit, events.EventTypes.AccountDebited, 8980)))
-	refund := awaitEvent(t, ctx, accountCommands, events.EventTypes.CreditAccount, pixTrace, withField("idempotency_key", models.StepKey(pixID, models.StepRefund)))
+	refund := awaitEvent(t, ctx, accountCommands, events.EventTypes.CreditAccount, pixTrace, withField("reference", models.Reference(pixID)))
 	require.Equal(t, models.StepKey(pixID, models.StepRefund), field(refund, "idempotency_key"))
 	require.NoError(t, producer.Publish(ctx, replies, account, answer(refund, events.EventTypes.AccountCredited, 9000)))
 

@@ -65,6 +65,7 @@ func ensureTopic(t *testing.T, broker, topic string) {
 }
 
 func newReader(t *testing.T, addrs []string, topic string) *kafka.Reader {
+	t.Helper()
 	return kafka.NewReader(kafka.ReaderConfig{Brokers: addrs, GroupID: groupAtTail(t, addrs, topic), Topic: topic, StartOffset: kafka.LastOffset, MinBytes: 1, MaxBytes: 1 << 20})
 }
 
