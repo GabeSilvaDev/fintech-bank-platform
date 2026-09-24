@@ -37,7 +37,7 @@ func parsePayment(cmd events.ProcessPaymentPayload) (*models.Payment, error) {
 		return nil, domain.Invalid("invalid_recipient", "recipient must have between 1 and 120 characters")
 	}
 	if !validation.IsValidIdempotencyKey(cmd.IdempotencyKey) {
-		return nil, domain.Invalid("invalid_idempotency_key", "idempotency_key must have between 1 and 64 characters")
+		return nil, domain.Invalid("invalid_idempotency_key", "idempotency_key must be 1 to 64 printable ASCII characters with no spaces")
 	}
 	if len(cmd.Description) > maxDescriptionLen {
 		return nil, domain.Invalid("invalid_description", "description must have at most 255 characters")

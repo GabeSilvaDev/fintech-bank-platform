@@ -141,6 +141,7 @@ func TestCreateValidation(t *testing.T) {
 		build("invalid_recipient", pix(account), func(c *events.ProcessPaymentPayload) { c.Recipient = "   " }),
 		build("invalid_recipient", pix(account), func(c *events.ProcessPaymentPayload) { c.Recipient = strings.Repeat("é", 121) }),
 		build("invalid_idempotency_key", pix(account), func(c *events.ProcessPaymentPayload) { c.IdempotencyKey = strings.Repeat("k", 65) }),
+		build("invalid_idempotency_key", pix(account), func(c *events.ProcessPaymentPayload) { c.IdempotencyKey = "pay 1" }),
 		build("invalid_description", pix(account), func(c *events.ProcessPaymentPayload) { c.Description = strings.Repeat("d", 256) }),
 		build("invalid_pix_key", pix(account), func(c *events.ProcessPaymentPayload) { c.PixKey = "not a key" }),
 		build("invalid_boleto", boleto(account, boletoBad, 150), func(c *events.ProcessPaymentPayload) {}),
