@@ -14,7 +14,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const maxIdentityBodyBytes = 16 << 10
+const maxBodyBytes = 16 << 10
 
 var errTrailingData = errors.New("unexpected data after the JSON object")
 
@@ -42,7 +42,7 @@ type identityResponse struct {
 
 func (h *IdentityHandler) Register(w http.ResponseWriter, r *http.Request) {
 	var req credentialsRequest
-	if err := decodeCredentials(w, r, &req); err != nil {
+	if err := decodeBody(w, r, &req); err != nil {
 		response.FromError(w, err)
 		return
 	}
@@ -58,7 +58,7 @@ func (h *IdentityHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 func (h *IdentityHandler) Verify(w http.ResponseWriter, r *http.Request) {
 	var req credentialsRequest
-	if err := decodeCredentials(w, r, &req); err != nil {
+	if err := decodeBody(w, r, &req); err != nil {
 		response.FromError(w, err)
 		return
 	}
@@ -72,8 +72,8 @@ func (h *IdentityHandler) Verify(w http.ResponseWriter, r *http.Request) {
 	response.OK(w, identityResponse{UserID: userID.String()})
 }
 
-func decodeCredentials(w http.ResponseWriter, r *http.Request, dst *credentialsRequest) error {
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxIdentityBodyBytes))
+func decodeBody(w http.ResponseWriter, r *http.Request, dst interface{}) error {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	decoder.DisallowUnknownFields()
 
 	err := decoder.Decode(dst)

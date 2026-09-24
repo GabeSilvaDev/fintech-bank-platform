@@ -25,6 +25,8 @@ type TestCase struct {
 	Service    *services.AccountService
 	Identities *FakeIdentityRepo
 	Hasher     *FakeHasher
+	Tokens     *FakeRefreshTokenRepo
+	Clock      *FakeClock
 	PingErr    error
 	headers    map[string]string
 }
@@ -38,6 +40,8 @@ func (tc *TestCase) SetupTest() {
 	tc.Hasher = &FakeHasher{}
 	identityService, err := services.NewIdentityService(tc.Identities, tc.Hasher, FakeClock{T: time.Now().UTC()})
 	tc.Require().NoError(err)
+	tc.Tokens = NewFakeRefreshTokenRepo()
+	tc.Clock = &FakeClock{T: time.Now().UTC()}
 	tc.PingErr = nil
 	tc.headers = map[string]string{}
 
@@ -45,6 +49,7 @@ func (tc *TestCase) SetupTest() {
 	appHttp.SetupRouter(tc.Router, appHttp.Dependencies{
 		Reads:      handlers.NewReadHandler(tc.Service),
 		Identities: handlers.NewIdentityHandler(identityService),
+		Sessions:   handlers.NewSessionHandler(services.NewSessionService(tc.Tokens, tc.Clock, time.Hour)),
 		Ping:       func(context.Context) error { return tc.PingErr },
 		Logger:     logger.New(logger.Config{Output: io.Discard}),
 	})

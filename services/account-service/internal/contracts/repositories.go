@@ -40,6 +40,13 @@ type IdentityRepository interface {
 	GetByEmail(ctx context.Context, email string) (*models.Identity, error)
 }
 
+type RefreshTokenRepository interface {
+	Create(ctx context.Context, token *models.RefreshToken, ttl time.Duration) error
+	Get(ctx context.Context, tokenHash string) (*models.RefreshToken, error)
+	MarkRotated(ctx context.Context, tokenHash string) (bool, error)
+	RevokeFamily(ctx context.Context, familyID uuid.UUID) error
+}
+
 type Hasher interface {
 	Hash(password string) (string, error)
 	Compare(hash, password string) error

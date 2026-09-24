@@ -435,3 +435,78 @@ func (f *FakeHasher) Compare(hash, password string) error {
 	}
 	return nil
 }
+
+type FakeRefreshTokenRepo struct {
+	Tokens          map[string]*models.RefreshToken
+	Families        map[uuid.UUID][]string
+	Created         []*models.RefreshToken
+	TTLs            []time.Duration
+	RevokedFamilies []uuid.UUID
+	CreateErr       error
+	GetErr          error
+	MarkErr         error
+	RevokeErr       error
+	MarkApplied     *bool
+	OnMark          func()
+}
+
+func NewFakeRefreshTokenRepo() *FakeRefreshTokenRepo {
+	return &FakeRefreshTokenRepo{Tokens: map[string]*models.RefreshToken{}, Families: map[uuid.UUID][]string{}}
+}
+
+func (f *FakeRefreshTokenRepo) Create(_ context.Context, token *models.RefreshToken, ttl time.Duration) error {
+	if f.CreateErr != nil {
+		return f.CreateErr
+	}
+	copied := *token
+	f.Tokens[token.TokenHash] = &copied
+	f.Families[token.FamilyID] = append(f.Families[token.FamilyID], token.TokenHash)
+	f.Created = append(f.Created, token)
+	f.TTLs = append(f.TTLs, ttl)
+	return nil
+}
+
+func (f *FakeRefreshTokenRepo) Get(_ context.Context, tokenHash string) (*models.RefreshToken, error) {
+	if f.GetErr != nil {
+		return nil, f.GetErr
+	}
+	token, ok := f.Tokens[tokenHash]
+	if !ok {
+		return nil, domain.ErrNotFound
+	}
+	copied := *token
+	return &copied, nil
+}
+
+func (f *FakeRefreshTokenRepo) MarkRotated(_ context.Context, tokenHash string) (bool, error) {
+	if f.OnMark != nil {
+		f.OnMark()
+	}
+	if f.MarkErr != nil {
+		return false, f.MarkErr
+	}
+	if f.MarkApplied != nil {
+		return *f.MarkApplied, nil
+	}
+	token, ok := f.Tokens[tokenHash]
+	if !ok || token.Status != models.RefreshTokenActive {
+		return false, nil
+	}
+	token.Status = models.RefreshTokenRotated
+	return true, nil
+}
+
+func (f *FakeRefreshTokenRepo) RevokeFamily(_ context.Context, familyID uuid.UUID) error {
+	if f.RevokeErr != nil {
+		return f.RevokeErr
+	}
+	f.RevokedFamilies = append(f.RevokedFamilies, familyID)
+	for _, hash := range f.Families[familyID] {
+		f.Tokens[hash].Status = models.RefreshTokenRevoked
+	}
+	return nil
+}
+
+func (f *FakeRefreshTokenRepo) StatusOf(hash string) models.RefreshTokenStatus {
+	return f.Tokens[hash].Status
+}

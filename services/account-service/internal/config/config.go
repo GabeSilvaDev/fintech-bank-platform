@@ -18,6 +18,7 @@ type Config struct {
 	Startup       contracts.StartupConfig
 	Observability contracts.ObservabilityConfig
 	Identity      contracts.IdentityConfig
+	Session       contracts.SessionConfig
 }
 
 func New() (*Config, error) {
@@ -63,6 +64,9 @@ func New() (*Config, error) {
 		Observability: loadObservabilityConfig(),
 		Identity: contracts.IdentityConfig{
 			HashConcurrency: env.GetIntMin("IDENTITY_HASH_CONCURRENCY", 2*runtime.GOMAXPROCS(0), 1),
+		},
+		Session: contracts.SessionConfig{
+			RefreshTokenTTL: positiveDuration(env.GetDuration("REFRESH_TOKEN_TTL", 720*time.Hour), 720*time.Hour),
 		},
 	}, nil
 }

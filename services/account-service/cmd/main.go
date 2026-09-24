@@ -77,6 +77,7 @@ func main() {
 		log.Fatal().Err(err).Msg("Failed to initialize identity service")
 	}
 	identities.WithHashConcurrency(cfg.Identity.HashConcurrency, services.HashWait)
+	sessions := services.NewSessionService(database.NewRefreshTokenRepository(session), services.SystemClock{}, cfg.Session.RefreshTokenTTL)
 
 	producer := messaging.NewProducer(messaging.ProducerConfig{
 		Brokers:        cfg.Kafka.Brokers,
@@ -109,6 +110,7 @@ func main() {
 	http.SetupRouter(router, http.Dependencies{
 		Reads:      handlers.NewReadHandler(service),
 		Identities: handlers.NewIdentityHandler(identities),
+		Sessions:   handlers.NewSessionHandler(sessions),
 		Ping:       database.Ping(session),
 		Logger:     log,
 		Metrics:    m,

@@ -15,6 +15,7 @@ import (
 type Dependencies struct {
 	Reads      *handlers.ReadHandler
 	Identities *handlers.IdentityHandler
+	Sessions   *handlers.SessionHandler
 	Ping       func(context.Context) error
 	Logger     *logger.Logger
 	Metrics    *metrics.Metrics
@@ -39,4 +40,7 @@ func SetupRouter(router *chi.Mux, deps Dependencies) {
 	router.Get("/users/{user_id}/accounts", deps.Reads.ListUserAccounts)
 	router.Post("/identities", deps.Identities.Register)
 	router.Post("/identities/verify", deps.Identities.Verify)
+	router.Post("/sessions", deps.Sessions.Start)
+	router.Post("/sessions/rotate", deps.Sessions.Rotate)
+	router.Post("/sessions/revoke", deps.Sessions.Revoke)
 }

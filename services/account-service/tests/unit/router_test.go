@@ -33,6 +33,7 @@ func testDependencies() appHttp.Dependencies {
 	return appHttp.Dependencies{
 		Reads:      handlers.NewReadHandler(service),
 		Identities: handlers.NewIdentityHandler(identities),
+		Sessions:   handlers.NewSessionHandler(services.NewSessionService(tests.NewFakeRefreshTokenRepo(), tests.FakeClock{T: time.Now().UTC()}, time.Hour)),
 		Ping:       func(context.Context) error { return nil },
 		Logger:     logger.New(logger.Config{Output: io.Discard}),
 	}

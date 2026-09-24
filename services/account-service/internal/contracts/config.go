@@ -57,3 +57,7 @@ type ObservabilityConfig struct {
 type IdentityConfig struct {
 	HashConcurrency int
 }
+
+type SessionConfig struct {
+	RefreshTokenTTL time.Duration
+}

@@ -33,6 +33,7 @@ func TestConfigDefaults(t *testing.T) {
 	assert.Equal(t, 30, cfg.Startup.Attempts)
 	assert.Equal(t, 2*time.Second, cfg.Startup.Delay)
 	assert.Equal(t, 2*runtime.GOMAXPROCS(0), cfg.Identity.HashConcurrency)
+	assert.Equal(t, 720*time.Hour, cfg.Session.RefreshTokenTTL)
 }
 
 func TestConfigFromEnv(t *testing.T) {
@@ -126,5 +127,24 @@ func TestConfigIdentityHashConcurrencyBelowOneFallsBack(t *testing.T) {
 		cfg, _ := config.New()
 
 		assert.Equal(t, 2*runtime.GOMAXPROCS(0), cfg.Identity.HashConcurrency, value)
+	}
+}
+
+func TestConfigRefreshTokenTTLFromEnv(t *testing.T) {
+	t.Setenv("REFRESH_TOKEN_TTL", "36h")
+
+	cfg, err := config.New()
+
+	assert.NoError(t, err)
+	assert.Equal(t, 36*time.Hour, cfg.Session.RefreshTokenTTL)
+}
+
+func TestConfigRefreshTokenTTLInvalidValuesFallBack(t *testing.T) {
+	for _, value := range []string{"0", "-1h", "forever"} {
+		t.Setenv("REFRESH_TOKEN_TTL", value)
+
+		cfg, _ := config.New()
+
+		assert.Equal(t, 720*time.Hour, cfg.Session.RefreshTokenTTL, value)
 	}
 }
