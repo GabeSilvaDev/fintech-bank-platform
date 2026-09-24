@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
+	"errors"
 	"mime"
 	"net"
 	"net/mail"
@@ -54,8 +55,17 @@ func (s *SMTP) Send(ctx context.Context, message models.Message) error {
 
 func (s *SMTP) deliver(ctx context.Context, to string, msg []byte) error {
 	err := s.converse(ctx, to, msg)
-	if err != nil && ctx.Err() != nil {
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() != nil {
 		return ctx.Err()
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		if deadline, ok := ctx.Deadline(); ok && !time.Now().Before(deadline) {
+			return context.DeadlineExceeded
+		}
 	}
 	return err
 }
