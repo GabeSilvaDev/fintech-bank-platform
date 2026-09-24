@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/fintech-bank-platform/payment-service/internal/app/models"
@@ -144,11 +145,18 @@ func toResponse(payment *models.Payment) paymentResponse {
 		CompletedAt:    payment.CompletedAt,
 	}
 	if payment.TED != nil {
-		out.TED = &tedResponse{BankCode: payment.TED.BankCode, Branch: payment.TED.Branch, Account: payment.TED.Account, Document: payment.TED.Document}
+		out.TED = &tedResponse{BankCode: payment.TED.BankCode, Branch: payment.TED.Branch, Account: payment.TED.Account, Document: maskDocument(payment.TED.Document)}
 	}
 	if payment.BalanceAfterCents != nil {
 		balance := domain.FromCents(*payment.BalanceAfterCents)
 		out.BalanceAfter = &balance
 	}
 	return out
+}
+
+func maskDocument(document string) string {
+	if len(document) <= 2 {
+		return strings.Repeat("*", len(document))
+	}
+	return strings.Repeat("*", len(document)-2) + document[len(document)-2:]
 }

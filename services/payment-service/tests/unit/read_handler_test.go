@@ -49,7 +49,7 @@ func TestGetPayment(t *testing.T) {
 	assert.Equal(t, 42.5, data["amount"])
 	assert.Equal(t, "BRL", data["currency"])
 	assert.Equal(t, "Ana", data["recipient"])
-	assert.Equal(t, map[string]interface{}{"bank_code": "341", "branch": "0001", "account": "123456", "document": "52998224725"}, data["ted"])
+	assert.Equal(t, map[string]interface{}{"bank_code": "341", "branch": "0001", "account": "123456", "document": "*********25"}, data["ted"])
 	assert.Equal(t, "rent", data["description"])
 	assert.Equal(t, "k", data["idempotency_key"])
 	assert.Equal(t, "ted_1", data["external_id"])
@@ -82,6 +82,27 @@ func TestGetPayment(t *testing.T) {
 	h.repo.Err = errors.New("db down")
 	rec, _ = get(readRouter(h), "/payments/"+payment.ID.String())
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+}
+
+func TestGetPaymentMasksShortTedDocuments(t *testing.T) {
+	h := newHarness()
+	payment := h.stored(models.MethodTED, models.StatusCompleted)
+	payment.TED.Document = "1"
+	h.repo.Put(payment)
+
+	_, body := get(readRouter(h), "/payments/"+payment.ID.String())
+	data := body["data"].(map[string]interface{})
+	ted := data["ted"].(map[string]interface{})
+	assert.Equal(t, "*", ted["document"])
+
+	payment = h.stored(models.MethodTED, models.StatusCompleted)
+	payment.TED.Document = "12"
+	h.repo.Put(payment)
+
+	_, body = get(readRouter(h), "/payments/"+payment.ID.String())
+	data = body["data"].(map[string]interface{})
+	ted = data["ted"].(map[string]interface{})
+	assert.Equal(t, "**", ted["document"])
 }
 
 func TestListAccountPayments(t *testing.T) {

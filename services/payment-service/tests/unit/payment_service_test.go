@@ -38,7 +38,7 @@ func newHarness() *harness {
 }
 
 func pix(accountID string) events.ProcessPaymentPayload {
-	return events.ProcessPaymentPayload{AccountID: accountID, PaymentMethod: "pix", Amount: 42.5, Currency: "brl", Recipient: "  Ana Souza  ", PixKey: "ana@example.com", Description: "lunch", IdempotencyKey: " pay-1 "}
+	return events.ProcessPaymentPayload{AccountID: accountID, PaymentMethod: "pix", Amount: 42.5, Currency: "brl", Recipient: "  Ana Souza  ", PixKey: "ana@example.com", Description: "lunch", IdempotencyKey: "pay-1"}
 }
 
 func boleto(accountID, code string, amount float64) events.ProcessPaymentPayload {

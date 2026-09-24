@@ -12,7 +12,6 @@ import (
 )
 
 const (
-	maxKeyLength      = 64
 	maxRecipientRunes = 120
 	maxDescriptionLen = 255
 )
@@ -37,15 +36,14 @@ func parsePayment(cmd events.ProcessPaymentPayload) (*models.Payment, error) {
 	if recipient == "" || utf8.RuneCountInString(recipient) > maxRecipientRunes {
 		return nil, domain.Invalid("invalid_recipient", "recipient must have between 1 and 120 characters")
 	}
-	key := strings.TrimSpace(cmd.IdempotencyKey)
-	if key == "" || len(key) > maxKeyLength {
+	if !validation.IsValidIdempotencyKey(cmd.IdempotencyKey) {
 		return nil, domain.Invalid("invalid_idempotency_key", "idempotency_key must have between 1 and 64 characters")
 	}
 	if len(cmd.Description) > maxDescriptionLen {
 		return nil, domain.Invalid("invalid_description", "description must have at most 255 characters")
 	}
 
-	payment := &models.Payment{AccountID: accountID, Method: method, AmountCents: cents, Recipient: recipient, Description: cmd.Description, IdempotencyKey: key}
+	payment := &models.Payment{AccountID: accountID, Method: method, AmountCents: cents, Recipient: recipient, Description: cmd.Description, IdempotencyKey: cmd.IdempotencyKey}
 	switch method {
 	case models.MethodPix:
 		if !validation.IsValidPixKey(cmd.PixKey) {

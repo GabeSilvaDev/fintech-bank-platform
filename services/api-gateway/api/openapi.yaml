@@ -1280,6 +1280,8 @@ components:
           type: string
         document:
           type: string
+          description: CPF or CNPJ with every character but the last two replaced by `*`.
+          examples: ['*********25']
     Payment:
       type: object
       required: [payment_id, account_id, payment_method, status, amount, currency, recipient, idempotency_key, created_at, updated_at]
