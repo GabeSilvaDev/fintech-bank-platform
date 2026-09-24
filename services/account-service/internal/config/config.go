@@ -67,6 +67,7 @@ func New() (*Config, error) {
 		},
 		Session: contracts.SessionConfig{
 			RefreshTokenTTL: positiveDuration(env.GetDuration("REFRESH_TOKEN_TTL", 720*time.Hour), 720*time.Hour),
+			FamilyMaxAge:    positiveDuration(env.GetDuration("REFRESH_FAMILY_MAX_AGE", 2160*time.Hour), 2160*time.Hour),
 		},
 	}, nil
 }

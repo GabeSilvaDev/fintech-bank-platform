@@ -15,10 +15,11 @@ const (
 )
 
 type RefreshToken struct {
-	TokenHash string
-	UserID    uuid.UUID
-	FamilyID  uuid.UUID
-	Status    RefreshTokenStatus
-	ExpiresAt time.Time
-	CreatedAt time.Time
+	TokenHash       string
+	UserID          uuid.UUID
+	FamilyID        uuid.UUID
+	Status          RefreshTokenStatus
+	ExpiresAt       time.Time
+	CreatedAt       time.Time
+	FamilyCreatedAt time.Time
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/fintech-bank-platform/account-service/internal/app/handlers"
 	"github.com/fintech-bank-platform/account-service/internal/app/services"
+	"github.com/fintech-bank-platform/account-service/internal/contracts"
 	appHttp "github.com/fintech-bank-platform/account-service/internal/infrastructure/http"
 	"github.com/fintech-bank-platform/account-service/tests"
 	"github.com/fintech-bank-platform/pkg/logger"
@@ -33,7 +34,7 @@ func testDependencies() appHttp.Dependencies {
 	return appHttp.Dependencies{
 		Reads:      handlers.NewReadHandler(service),
 		Identities: handlers.NewIdentityHandler(identities),
-		Sessions:   handlers.NewSessionHandler(services.NewSessionService(tests.NewFakeRefreshTokenRepo(), tests.FakeClock{T: time.Now().UTC()}, time.Hour)),
+		Sessions:   handlers.NewSessionHandler(services.NewSessionService(tests.NewFakeRefreshTokenRepo(), tests.FakeClock{T: time.Now().UTC()}, contracts.SessionConfig{RefreshTokenTTL: time.Hour})),
 		Ping:       func(context.Context) error { return nil },
 		Logger:     logger.New(logger.Config{Output: io.Discard}),
 	}

@@ -10,6 +10,7 @@ import (
 
 	"github.com/fintech-bank-platform/account-service/internal/app/handlers"
 	"github.com/fintech-bank-platform/account-service/internal/app/services"
+	"github.com/fintech-bank-platform/account-service/internal/contracts"
 	appHttp "github.com/fintech-bank-platform/account-service/internal/infrastructure/http"
 	"github.com/fintech-bank-platform/pkg/logger"
 	"github.com/go-chi/chi/v5"
@@ -49,7 +50,7 @@ func (tc *TestCase) SetupTest() {
 	appHttp.SetupRouter(tc.Router, appHttp.Dependencies{
 		Reads:      handlers.NewReadHandler(tc.Service),
 		Identities: handlers.NewIdentityHandler(identityService),
-		Sessions:   handlers.NewSessionHandler(services.NewSessionService(tc.Tokens, tc.Clock, time.Hour)),
+		Sessions:   handlers.NewSessionHandler(services.NewSessionService(tc.Tokens, tc.Clock, contracts.SessionConfig{RefreshTokenTTL: time.Hour})),
 		Ping:       func(context.Context) error { return tc.PingErr },
 		Logger:     logger.New(logger.Config{Output: io.Discard}),
 	})

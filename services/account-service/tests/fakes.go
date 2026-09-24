@@ -437,21 +437,27 @@ func (f *FakeHasher) Compare(hash, password string) error {
 }
 
 type FakeRefreshTokenRepo struct {
-	Tokens          map[string]*models.RefreshToken
-	Families        map[uuid.UUID][]string
-	Created         []*models.RefreshToken
-	TTLs            []time.Duration
-	RevokedFamilies []uuid.UUID
-	CreateErr       error
-	GetErr          error
-	MarkErr         error
-	RevokeErr       error
-	MarkApplied     *bool
-	OnMark          func()
+	Tokens            map[string]*models.RefreshToken
+	Families          map[uuid.UUID][]string
+	Markers           map[uuid.UUID]bool
+	Created           []*models.RefreshToken
+	TTLs              []time.Duration
+	MarkTTLs          []time.Duration
+	RevokeTTLs        []time.Duration
+	RevokedFamilies   []uuid.UUID
+	CreateErr         error
+	GetErr            error
+	MarkErr           error
+	RevokeErr         error
+	FamilyRevokedErrs []error
+	MarkApplied       *bool
+	OnCreate          func()
+	OnMark            func()
+	AfterMark         func()
 }
 
 func NewFakeRefreshTokenRepo() *FakeRefreshTokenRepo {
-	return &FakeRefreshTokenRepo{Tokens: map[string]*models.RefreshToken{}, Families: map[uuid.UUID][]string{}}
+	return &FakeRefreshTokenRepo{Tokens: map[string]*models.RefreshToken{}, Families: map[uuid.UUID][]string{}, Markers: map[uuid.UUID]bool{}}
 }
 
 func (f *FakeRefreshTokenRepo) Create(_ context.Context, token *models.RefreshToken, ttl time.Duration) error {
@@ -463,6 +469,9 @@ func (f *FakeRefreshTokenRepo) Create(_ context.Context, token *models.RefreshTo
 	f.Families[token.FamilyID] = append(f.Families[token.FamilyID], token.TokenHash)
 	f.Created = append(f.Created, token)
 	f.TTLs = append(f.TTLs, ttl)
+	if f.OnCreate != nil {
+		f.OnCreate()
+	}
 	return nil
 }
 
@@ -478,9 +487,13 @@ func (f *FakeRefreshTokenRepo) Get(_ context.Context, tokenHash string) (*models
 	return &copied, nil
 }
 
-func (f *FakeRefreshTokenRepo) MarkRotated(_ context.Context, tokenHash string) (bool, error) {
+func (f *FakeRefreshTokenRepo) MarkRotated(_ context.Context, tokenHash string, ttl time.Duration) (bool, error) {
+	f.MarkTTLs = append(f.MarkTTLs, ttl)
 	if f.OnMark != nil {
 		f.OnMark()
+	}
+	if f.AfterMark != nil {
+		defer f.AfterMark()
 	}
 	if f.MarkErr != nil {
 		return false, f.MarkErr
@@ -496,17 +509,46 @@ func (f *FakeRefreshTokenRepo) MarkRotated(_ context.Context, tokenHash string) 
 	return true, nil
 }
 
-func (f *FakeRefreshTokenRepo) RevokeFamily(_ context.Context, familyID uuid.UUID) error {
+func (f *FakeRefreshTokenRepo) RevokeFamily(_ context.Context, familyID uuid.UUID, ttl time.Duration) error {
 	if f.RevokeErr != nil {
 		return f.RevokeErr
 	}
+	f.Markers[familyID] = true
 	f.RevokedFamilies = append(f.RevokedFamilies, familyID)
-	for _, hash := range f.Families[familyID] {
-		f.Tokens[hash].Status = models.RefreshTokenRevoked
-	}
+	f.RevokeTTLs = append(f.RevokeTTLs, ttl)
+	f.RevokeHashes(f.Families[familyID])
 	return nil
+}
+
+func (f *FakeRefreshTokenRepo) RevokeHashes(hashes []string) {
+	for _, hash := range hashes {
+		if token := f.Tokens[hash]; token.Status == models.RefreshTokenActive {
+			token.Status = models.RefreshTokenRevoked
+		}
+	}
+}
+
+func (f *FakeRefreshTokenRepo) FamilyRevoked(_ context.Context, familyID uuid.UUID) (bool, error) {
+	if len(f.FamilyRevokedErrs) > 0 {
+		err := f.FamilyRevokedErrs[0]
+		f.FamilyRevokedErrs = f.FamilyRevokedErrs[1:]
+		if err != nil {
+			return false, err
+		}
+	}
+	return f.Markers[familyID], nil
 }
 
 func (f *FakeRefreshTokenRepo) StatusOf(hash string) models.RefreshTokenStatus {
 	return f.Tokens[hash].Status
+}
+
+func (f *FakeRefreshTokenRepo) ActiveIn(familyID uuid.UUID) []string {
+	active := []string{}
+	for _, hash := range f.Families[familyID] {
+		if f.Tokens[hash].Status == models.RefreshTokenActive {
+			active = append(active, hash)
+		}
+	}
+	return active
 }

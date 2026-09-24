@@ -17,6 +17,7 @@ import (
 
 const (
 	DefaultRefreshTokenTTL = 720 * time.Hour
+	DefaultFamilyMaxAge    = 2160 * time.Hour
 	refreshTokenBytes      = 32
 )
 
@@ -31,17 +32,22 @@ type SessionService struct {
 	tokens contracts.RefreshTokenRepository
 	clock  contracts.Clock
 	ttl    time.Duration
+	maxAge time.Duration
 }
 
-func NewSessionService(tokens contracts.RefreshTokenRepository, clock contracts.Clock, ttl time.Duration) *SessionService {
-	if ttl <= 0 {
-		ttl = DefaultRefreshTokenTTL
+func NewSessionService(tokens contracts.RefreshTokenRepository, clock contracts.Clock, cfg contracts.SessionConfig) *SessionService {
+	service := &SessionService{tokens: tokens, clock: clock, ttl: cfg.RefreshTokenTTL, maxAge: cfg.FamilyMaxAge}
+	if service.ttl <= 0 {
+		service.ttl = DefaultRefreshTokenTTL
 	}
-	return &SessionService{tokens: tokens, clock: clock, ttl: ttl}
+	if service.maxAge <= 0 {
+		service.maxAge = DefaultFamilyMaxAge
+	}
+	return service
 }
 
 func (s *SessionService) Start(ctx context.Context, userID uuid.UUID) (Session, error) {
-	return s.issue(ctx, userID, uuid.New())
+	return s.issue(ctx, userID, uuid.New(), s.now())
 }
 
 func (s *SessionService) Rotate(ctx context.Context, token string) (uuid.UUID, Session, error) {
@@ -49,23 +55,37 @@ func (s *SessionService) Rotate(ctx context.Context, token string) (uuid.UUID, S
 	if err != nil {
 		return uuid.Nil, Session{}, err
 	}
-	if !s.clock.Now().Before(current.ExpiresAt) {
+	now := s.now()
+	if !now.Before(current.ExpiresAt) {
 		return uuid.Nil, Session{}, ErrInvalidSession
 	}
-	if current.Status != models.RefreshTokenActive {
+	if err := s.ensureFamilyActive(ctx, current.FamilyID); err != nil {
+		return uuid.Nil, Session{}, err
+	}
+	familyStart := current.FamilyCreatedAt
+	if familyStart.IsZero() {
+		familyStart = current.CreatedAt
+	}
+	if current.Status != models.RefreshTokenActive || !now.Before(familyStart.Add(s.maxAge)) {
 		return uuid.Nil, Session{}, s.revokeFamily(ctx, current.FamilyID)
 	}
 
-	next, err := s.issue(ctx, current.UserID, current.FamilyID)
+	next, err := s.issue(ctx, current.UserID, current.FamilyID, familyStart)
 	if err != nil {
 		return uuid.Nil, Session{}, err
 	}
-	rotated, err := s.tokens.MarkRotated(ctx, current.TokenHash)
+	rotated, err := s.tokens.MarkRotated(ctx, current.TokenHash, current.ExpiresAt.Sub(now))
 	if err != nil {
 		return uuid.Nil, Session{}, err
 	}
 	if !rotated {
 		return uuid.Nil, Session{}, s.revokeFamily(ctx, current.FamilyID)
+	}
+	if err := s.ensureFamilyActive(ctx, current.FamilyID); err != nil {
+		if errors.Is(err, ErrInvalidSession) {
+			return uuid.Nil, Session{}, s.revokeFamily(ctx, current.FamilyID)
+		}
+		return uuid.Nil, Session{}, err
 	}
 	return current.UserID, next, nil
 }
@@ -78,7 +98,11 @@ func (s *SessionService) Revoke(ctx context.Context, token string) error {
 	if err != nil {
 		return err
 	}
-	return s.tokens.RevokeFamily(ctx, current.FamilyID)
+	return s.tokens.RevokeFamily(ctx, current.FamilyID, s.ttl)
+}
+
+func (s *SessionService) now() time.Time {
+	return s.clock.Now().UTC().Truncate(time.Millisecond)
 }
 
 func (s *SessionService) lookup(ctx context.Context, token string) (*models.RefreshToken, error) {
@@ -93,25 +117,41 @@ func (s *SessionService) lookup(ctx context.Context, token string) (*models.Refr
 	return current, err
 }
 
-func (s *SessionService) issue(ctx context.Context, userID, familyID uuid.UUID) (Session, error) {
-	token := newRefreshToken()
-	now := s.clock.Now().UTC().Truncate(time.Millisecond)
-	record := &models.RefreshToken{
-		TokenHash: digestRefreshToken(token),
-		UserID:    userID,
-		FamilyID:  familyID,
-		Status:    models.RefreshTokenActive,
-		ExpiresAt: now.Add(s.ttl),
-		CreatedAt: now,
+func (s *SessionService) ensureFamilyActive(ctx context.Context, familyID uuid.UUID) error {
+	revoked, err := s.tokens.FamilyRevoked(ctx, familyID)
+	if err != nil {
+		return err
 	}
-	if err := s.tokens.Create(ctx, record, s.ttl); err != nil {
+	if revoked {
+		return ErrInvalidSession
+	}
+	return nil
+}
+
+func (s *SessionService) issue(ctx context.Context, userID, familyID uuid.UUID, familyStart time.Time) (Session, error) {
+	token := newRefreshToken()
+	now := s.now()
+	expiresAt := now.Add(s.ttl)
+	if familyEnd := familyStart.Add(s.maxAge); familyEnd.Before(expiresAt) {
+		expiresAt = familyEnd
+	}
+	record := &models.RefreshToken{
+		TokenHash:       digestRefreshToken(token),
+		UserID:          userID,
+		FamilyID:        familyID,
+		Status:          models.RefreshTokenActive,
+		ExpiresAt:       expiresAt,
+		CreatedAt:       now,
+		FamilyCreatedAt: familyStart,
+	}
+	if err := s.tokens.Create(ctx, record, expiresAt.Sub(now)); err != nil {
 		return Session{}, err
 	}
-	return Session{Token: token, ExpiresAt: record.ExpiresAt}, nil
+	return Session{Token: token, ExpiresAt: expiresAt}, nil
 }
 
 func (s *SessionService) revokeFamily(ctx context.Context, familyID uuid.UUID) error {
-	if err := s.tokens.RevokeFamily(ctx, familyID); err != nil {
+	if err := s.tokens.RevokeFamily(ctx, familyID, s.ttl); err != nil {
 		return err
 	}
 	return ErrInvalidSession

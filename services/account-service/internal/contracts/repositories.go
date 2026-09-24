@@ -43,8 +43,9 @@ type IdentityRepository interface {
 type RefreshTokenRepository interface {
 	Create(ctx context.Context, token *models.RefreshToken, ttl time.Duration) error
 	Get(ctx context.Context, tokenHash string) (*models.RefreshToken, error)
-	MarkRotated(ctx context.Context, tokenHash string) (bool, error)
-	RevokeFamily(ctx context.Context, familyID uuid.UUID) error
+	MarkRotated(ctx context.Context, tokenHash string, ttl time.Duration) (bool, error)
+	RevokeFamily(ctx context.Context, familyID uuid.UUID, ttl time.Duration) error
+	FamilyRevoked(ctx context.Context, familyID uuid.UUID) (bool, error)
 }
 
 type Hasher interface {

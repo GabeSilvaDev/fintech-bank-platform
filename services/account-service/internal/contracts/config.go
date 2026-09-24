@@ -60,4 +60,5 @@ type IdentityConfig struct {
 
 type SessionConfig struct {
 	RefreshTokenTTL time.Duration
+	FamilyMaxAge    time.Duration
 }

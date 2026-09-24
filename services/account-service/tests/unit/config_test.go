@@ -34,6 +34,7 @@ func TestConfigDefaults(t *testing.T) {
 	assert.Equal(t, 2*time.Second, cfg.Startup.Delay)
 	assert.Equal(t, 2*runtime.GOMAXPROCS(0), cfg.Identity.HashConcurrency)
 	assert.Equal(t, 720*time.Hour, cfg.Session.RefreshTokenTTL)
+	assert.Equal(t, 2160*time.Hour, cfg.Session.FamilyMaxAge)
 }
 
 func TestConfigFromEnv(t *testing.T) {
@@ -146,5 +147,24 @@ func TestConfigRefreshTokenTTLInvalidValuesFallBack(t *testing.T) {
 		cfg, _ := config.New()
 
 		assert.Equal(t, 720*time.Hour, cfg.Session.RefreshTokenTTL, value)
+	}
+}
+
+func TestConfigRefreshFamilyMaxAgeFromEnv(t *testing.T) {
+	t.Setenv("REFRESH_FAMILY_MAX_AGE", "240h")
+
+	cfg, err := config.New()
+
+	assert.NoError(t, err)
+	assert.Equal(t, 240*time.Hour, cfg.Session.FamilyMaxAge)
+}
+
+func TestConfigRefreshFamilyMaxAgeInvalidValuesFallBack(t *testing.T) {
+	for _, value := range []string{"0", "-1h", "forever"} {
+		t.Setenv("REFRESH_FAMILY_MAX_AGE", value)
+
+		cfg, _ := config.New()
+
+		assert.Equal(t, 2160*time.Hour, cfg.Session.FamilyMaxAge, value)
 	}
 }

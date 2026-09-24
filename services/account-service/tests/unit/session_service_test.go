@@ -12,13 +12,17 @@ import (
 
 	"github.com/fintech-bank-platform/account-service/internal/app/models"
 	"github.com/fintech-bank-platform/account-service/internal/app/services"
+	"github.com/fintech-bank-platform/account-service/internal/contracts"
 	"github.com/fintech-bank-platform/account-service/tests"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-const sessionTTL = 2 * time.Hour
+const (
+	sessionTTL    = 2 * time.Hour
+	sessionMaxAge = 24 * time.Hour
+)
 
 type sessionHarness struct {
 	repo    *tests.FakeRefreshTokenRepo
@@ -28,8 +32,12 @@ type sessionHarness struct {
 
 func newSessionHarness() *sessionHarness {
 	h := &sessionHarness{repo: tests.NewFakeRefreshTokenRepo(), clock: &tests.FakeClock{T: now}}
-	h.service = services.NewSessionService(h.repo, h.clock, sessionTTL)
+	h.service = services.NewSessionService(h.repo, h.clock, contracts.SessionConfig{RefreshTokenTTL: sessionTTL, FamilyMaxAge: sessionMaxAge})
 	return h
+}
+
+func (h *sessionHarness) familyOf(token string) uuid.UUID {
+	return h.repo.Tokens[digest(token)].FamilyID
 }
 
 func digest(token string) string {
@@ -62,6 +70,7 @@ func TestStartIssuesOpaqueTokenAndStoresOnlyItsHash(t *testing.T) {
 	assert.Equal(t, models.RefreshTokenActive, stored.Status)
 	assert.Equal(t, now.Add(sessionTTL), stored.ExpiresAt)
 	assert.Equal(t, now, stored.CreatedAt)
+	assert.Equal(t, now, stored.FamilyCreatedAt)
 	assert.Equal(t, []time.Duration{sessionTTL}, h.repo.TTLs)
 }
 
@@ -96,16 +105,23 @@ func TestStartFailsWhenTheTokenCannotBeStored(t *testing.T) {
 	assert.Empty(t, session.Token)
 }
 
-func TestNewSessionServiceFallsBackToDefaultTTL(t *testing.T) {
-	for _, ttl := range []time.Duration{0, -time.Hour} {
+func TestNewSessionServiceFallsBackToDefaults(t *testing.T) {
+	for _, value := range []time.Duration{0, -time.Hour} {
 		repo := tests.NewFakeRefreshTokenRepo()
-		service := services.NewSessionService(repo, tests.FakeClock{T: now}, ttl)
+		clock := &tests.FakeClock{T: now}
+		service := services.NewSessionService(repo, clock, contracts.SessionConfig{RefreshTokenTTL: value, FamilyMaxAge: value})
 
 		session, err := service.Start(context.Background(), uuid.New())
 
 		require.NoError(t, err)
 		assert.Equal(t, now.Add(services.DefaultRefreshTokenTTL), session.ExpiresAt)
 		assert.Equal(t, []time.Duration{720 * time.Hour}, repo.TTLs)
+
+		clock.T = now.Add(services.DefaultFamilyMaxAge - time.Hour)
+		repo.Tokens[repo.Created[0].TokenHash].ExpiresAt = clock.T.Add(time.Hour)
+		_, next, err := service.Rotate(context.Background(), session.Token)
+		require.NoError(t, err)
+		assert.Equal(t, now.Add(2160*time.Hour), next.ExpiresAt)
 	}
 }
 
@@ -126,6 +142,8 @@ func TestRotateIssuesANewTokenInTheSameFamily(t *testing.T) {
 	assert.Equal(t, userID, h.repo.Created[1].UserID)
 	assert.Equal(t, models.RefreshTokenRotated, h.repo.StatusOf(digest(first.Token)))
 	assert.Equal(t, models.RefreshTokenActive, h.repo.StatusOf(digest(next.Token)))
+	assert.Equal(t, now, h.repo.Created[1].FamilyCreatedAt)
+	assert.Equal(t, []time.Duration{sessionTTL - time.Hour}, h.repo.MarkTTLs)
 	assert.Empty(t, h.repo.RevokedFamilies)
 
 	_, third, err := h.service.Rotate(context.Background(), next.Token)
@@ -209,7 +227,20 @@ func TestRotateReusingARotatedTokenRevokesTheFamily(t *testing.T) {
 	assert.ErrorIs(t, err, services.ErrInvalidSession)
 }
 
-func TestRotateRevokedTokenRevokesTheFamilyAgain(t *testing.T) {
+func TestRotateStopsEarlyWhenTheFamilyIsRevoked(t *testing.T) {
+	h := newSessionHarness()
+	first := h.start(t, uuid.New())
+	h.repo.Markers[h.familyOf(first.Token)] = true
+
+	_, _, err := h.service.Rotate(context.Background(), first.Token)
+
+	assert.ErrorIs(t, err, services.ErrInvalidSession)
+	assert.Empty(t, h.repo.RevokedFamilies)
+	assert.Empty(t, h.repo.MarkTTLs)
+	assert.Len(t, h.repo.Created, 1)
+}
+
+func TestRotateRevokedTokenIsRejected(t *testing.T) {
 	h := newSessionHarness()
 	first := h.start(t, uuid.New())
 	require.NoError(t, h.service.Revoke(context.Background(), first.Token))
@@ -217,7 +248,30 @@ func TestRotateRevokedTokenRevokesTheFamilyAgain(t *testing.T) {
 	_, _, err := h.service.Rotate(context.Background(), first.Token)
 
 	assert.ErrorIs(t, err, services.ErrInvalidSession)
-	assert.Len(t, h.repo.RevokedFamilies, 2)
+	assert.Len(t, h.repo.RevokedFamilies, 1)
+	assert.Len(t, h.repo.Created, 1)
+}
+
+func TestRotateRevokedStatusWithoutMarkerRevokesTheFamily(t *testing.T) {
+	h := newSessionHarness()
+	first := h.start(t, uuid.New())
+	h.repo.Tokens[digest(first.Token)].Status = models.RefreshTokenRevoked
+
+	_, _, err := h.service.Rotate(context.Background(), first.Token)
+
+	assert.ErrorIs(t, err, services.ErrInvalidSession)
+	assert.Equal(t, []uuid.UUID{h.familyOf(first.Token)}, h.repo.RevokedFamilies)
+	assert.Equal(t, []time.Duration{sessionTTL}, h.repo.RevokeTTLs)
+}
+
+func TestRotatePropagatesMarkerLookupErrors(t *testing.T) {
+	h := newSessionHarness()
+	first := h.start(t, uuid.New())
+	h.repo.FamilyRevokedErrs = []error{errors.New("marker down")}
+
+	_, _, err := h.service.Rotate(context.Background(), first.Token)
+
+	assert.EqualError(t, err, "marker down")
 	assert.Len(t, h.repo.Created, 1)
 }
 
@@ -272,7 +326,8 @@ func TestRotateLosingTheCompareAndSetRevokesTheFamilyIncludingTheNewToken(t *tes
 	assert.Empty(t, session.Token)
 	require.Len(t, h.repo.Created, 2)
 	assert.Equal(t, models.RefreshTokenRevoked, h.repo.StatusOf(h.repo.Created[1].TokenHash))
-	assert.Equal(t, models.RefreshTokenRevoked, h.repo.StatusOf(firstHash))
+	assert.Equal(t, models.RefreshTokenRotated, h.repo.StatusOf(firstHash))
+	assert.Empty(t, h.repo.ActiveIn(h.familyOf(first.Token)))
 }
 
 func TestRotateNotAppliedReportsFamilyRevocationFailures(t *testing.T) {
@@ -297,9 +352,12 @@ func TestRevokeRevokesEveryTokenInTheFamily(t *testing.T) {
 	require.NoError(t, h.service.Revoke(context.Background(), next.Token))
 
 	assert.Equal(t, []uuid.UUID{h.repo.Created[0].FamilyID}, h.repo.RevokedFamilies)
-	assert.Equal(t, models.RefreshTokenRevoked, h.repo.StatusOf(digest(first.Token)))
+	assert.Equal(t, []time.Duration{sessionTTL}, h.repo.RevokeTTLs)
+	assert.True(t, h.repo.Markers[h.repo.Created[0].FamilyID])
+	assert.Equal(t, models.RefreshTokenRotated, h.repo.StatusOf(digest(first.Token)))
 	assert.Equal(t, models.RefreshTokenRevoked, h.repo.StatusOf(digest(next.Token)))
 	assert.Equal(t, models.RefreshTokenActive, h.repo.StatusOf(digest(other.Token)))
+	assert.False(t, h.repo.Markers[h.familyOf(other.Token)])
 
 	_, _, err = h.service.Rotate(context.Background(), next.Token)
 	assert.ErrorIs(t, err, services.ErrInvalidSession)
@@ -344,4 +402,140 @@ func TestRevokePropagatesRepositoryErrors(t *testing.T) {
 	h.repo.GetErr = nil
 	h.repo.RevokeErr = errors.New("revoke failed")
 	assert.EqualError(t, h.service.Revoke(context.Background(), first.Token), "revoke failed")
+}
+
+func TestRevocationBetweenInsertAndCompareAndSetWins(t *testing.T) {
+	h := newSessionHarness()
+	first := h.start(t, uuid.New())
+	family := h.familyOf(first.Token)
+	h.repo.OnMark = func() {
+		h.repo.OnMark = nil
+		require.NoError(t, h.repo.RevokeFamily(context.Background(), family, sessionTTL))
+	}
+
+	_, session, err := h.service.Rotate(context.Background(), first.Token)
+
+	assert.ErrorIs(t, err, services.ErrInvalidSession)
+	assert.Empty(t, session.Token)
+	assert.Len(t, h.repo.Created, 2)
+	assert.Empty(t, h.repo.ActiveIn(family))
+}
+
+func TestRevocationRightAfterTheCompareAndSetWins(t *testing.T) {
+	h := newSessionHarness()
+	first := h.start(t, uuid.New())
+	family := h.familyOf(first.Token)
+	h.repo.AfterMark = func() {
+		h.repo.AfterMark = nil
+		require.NoError(t, h.repo.RevokeFamily(context.Background(), family, sessionTTL))
+	}
+
+	_, session, err := h.service.Rotate(context.Background(), first.Token)
+
+	assert.ErrorIs(t, err, services.ErrInvalidSession)
+	assert.Empty(t, session.Token)
+	assert.Equal(t, models.RefreshTokenRotated, h.repo.StatusOf(digest(first.Token)))
+	assert.Empty(t, h.repo.ActiveIn(family))
+}
+
+func TestRevocationWithAStaleFamilySnapshotStillWins(t *testing.T) {
+	h := newSessionHarness()
+	first := h.start(t, uuid.New())
+	family := h.familyOf(first.Token)
+	var snapshot []string
+	h.repo.OnCreate = func() {
+		h.repo.OnCreate = nil
+		h.repo.Markers[family] = true
+		snapshot = append([]string{}, h.repo.Families[family][:1]...)
+	}
+
+	_, session, err := h.service.Rotate(context.Background(), first.Token)
+	h.repo.RevokeHashes(snapshot)
+
+	assert.ErrorIs(t, err, services.ErrInvalidSession)
+	assert.Empty(t, session.Token)
+	assert.Equal(t, models.RefreshTokenRotated, h.repo.StatusOf(digest(first.Token)))
+	assert.Empty(t, h.repo.ActiveIn(family))
+}
+
+func TestRotateReportsMarkerErrorsAfterTheCompareAndSet(t *testing.T) {
+	h := newSessionHarness()
+	first := h.start(t, uuid.New())
+	h.repo.FamilyRevokedErrs = []error{nil, errors.New("marker down")}
+
+	_, session, err := h.service.Rotate(context.Background(), first.Token)
+
+	assert.EqualError(t, err, "marker down")
+	assert.Empty(t, session.Token)
+}
+
+func TestRotateReportsRevocationFailuresAfterTheCompareAndSet(t *testing.T) {
+	h := newSessionHarness()
+	first := h.start(t, uuid.New())
+	h.repo.AfterMark = func() {
+		h.repo.Markers[h.familyOf(first.Token)] = true
+		h.repo.RevokeErr = errors.New("revoke failed")
+	}
+
+	_, _, err := h.service.Rotate(context.Background(), first.Token)
+
+	assert.EqualError(t, err, "revoke failed")
+}
+
+func TestRotateRejectsFamiliesOlderThanTheMaximumAge(t *testing.T) {
+	h := newSessionHarness()
+	first := h.start(t, uuid.New())
+	stored := h.repo.Tokens[digest(first.Token)]
+	stored.FamilyCreatedAt = now.Add(-sessionMaxAge)
+
+	_, session, err := h.service.Rotate(context.Background(), first.Token)
+
+	assert.ErrorIs(t, err, services.ErrInvalidSession)
+	assert.Empty(t, session.Token)
+	assert.Equal(t, []uuid.UUID{stored.FamilyID}, h.repo.RevokedFamilies)
+	assert.Len(t, h.repo.Created, 1)
+}
+
+func TestRotateFallsBackToCreatedAtForRowsWithoutFamilyStart(t *testing.T) {
+	h := newSessionHarness()
+	first := h.start(t, uuid.New())
+	stored := h.repo.Tokens[digest(first.Token)]
+	stored.FamilyCreatedAt = time.Time{}
+	stored.CreatedAt = now.Add(-sessionMaxAge + time.Hour)
+
+	_, next, err := h.service.Rotate(context.Background(), first.Token)
+
+	require.NoError(t, err)
+	assert.Equal(t, stored.CreatedAt, h.repo.Created[1].FamilyCreatedAt)
+	assert.Equal(t, now.Add(time.Hour), next.ExpiresAt)
+	assert.Equal(t, time.Hour, h.repo.TTLs[1])
+
+	second := h.start(t, uuid.New())
+	old := h.repo.Tokens[digest(second.Token)]
+	old.FamilyCreatedAt = time.Time{}
+	old.CreatedAt = now.Add(-sessionMaxAge)
+
+	_, _, err = h.service.Rotate(context.Background(), second.Token)
+	assert.ErrorIs(t, err, services.ErrInvalidSession)
+	assert.Equal(t, []uuid.UUID{old.FamilyID}, h.repo.RevokedFamilies)
+}
+
+func TestSessionsNeverOutliveTheFamilyMaximumAge(t *testing.T) {
+	repo := tests.NewFakeRefreshTokenRepo()
+	clock := &tests.FakeClock{T: now}
+	service := services.NewSessionService(repo, clock, contracts.SessionConfig{RefreshTokenTTL: sessionTTL, FamilyMaxAge: 3 * time.Hour})
+
+	first, err := service.Start(context.Background(), uuid.New())
+	require.NoError(t, err)
+	assert.Equal(t, now.Add(sessionTTL), first.ExpiresAt)
+
+	clock.T = now.Add(90 * time.Minute)
+	_, second, err := service.Rotate(context.Background(), first.Token)
+	require.NoError(t, err)
+	assert.Equal(t, now.Add(3*time.Hour), second.ExpiresAt)
+	assert.Equal(t, 90*time.Minute, repo.TTLs[1])
+
+	clock.T = now.Add(3 * time.Hour)
+	_, _, err = service.Rotate(context.Background(), second.Token)
+	assert.ErrorIs(t, err, services.ErrInvalidSession)
 }
