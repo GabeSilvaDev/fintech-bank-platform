@@ -23,6 +23,7 @@ func NewReadProxy(upstream *url.URL, serviceName string) *ReadProxy {
 	proxy.Director = func(req *http.Request) {
 		director(req)
 		req.Host = upstream.Host
+		req.Header.Del("Authorization")
 		req.Header.Set(middleware.RequestIDHeader, middleware.GetRequestID(req.Context()))
 	}
 	proxy.ModifyResponse = func(resp *http.Response) error {

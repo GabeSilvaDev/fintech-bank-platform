@@ -16,6 +16,7 @@ import (
 	"github.com/fintech-bank-platform/pkg/logger"
 	"github.com/fintech-bank-platform/pkg/metrics"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -285,12 +286,14 @@ func TestSetupRouterMountsCommandRoutes(t *testing.T) {
 	cfg := &config.Config{
 		CORS:      contracts.CORSConfig{AllowedOrigins: []string{"*"}, AllowedMethods: []string{"POST"}},
 		RateLimit: contracts.RateLimitConfig{Requests: 1000, Window: time.Minute},
+		Auth:      tests.AuthConfig(),
 	}
 
 	appHttp.SetupRouter(router, cfg, testDependencies())
 
 	for _, path := range []string{"/api/v1/accounts", "/api/v1/transactions", "/api/v1/transfers", "/api/v1/payments"} {
 		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader("{}"))
+		req.Header.Set("Authorization", tests.BearerToken(uuid.New()))
 		rec := httptest.NewRecorder()
 		router.ServeHTTP(rec, req)
 
@@ -298,6 +301,7 @@ func TestSetupRouterMountsCommandRoutes(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/x", nil)
+	req.Header.Set("Authorization", tests.BearerToken(uuid.New()))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -351,6 +355,7 @@ func TestSetupRouterRecordsRoutePatternForProxiedReads(t *testing.T) {
 		CORS:      contracts.CORSConfig{AllowedOrigins: []string{"*"}, AllowedMethods: []string{"GET"}},
 		RateLimit: contracts.RateLimitConfig{Requests: 1000, Window: time.Minute},
 	}
+	cfg.Auth = tests.AuthConfig()
 	deps := testDependencies()
 	m := metrics.New("test-router-route-label")
 	deps.Metrics = m
@@ -360,6 +365,7 @@ func TestSetupRouterRecordsRoutePatternForProxiedReads(t *testing.T) {
 	appHttp.SetupRouter(router, cfg, deps)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/abc", nil)
+	req.Header.Set("Authorization", tests.BearerToken(uuid.New()))
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
@@ -385,6 +391,7 @@ func TestSetupRouterStartsNewTraceForClientTraceContext(t *testing.T) {
 		CORS:      contracts.CORSConfig{AllowedOrigins: []string{"*"}, AllowedMethods: []string{"GET"}},
 		RateLimit: contracts.RateLimitConfig{Requests: 1000, Window: time.Minute},
 	}
+	cfg.Auth = tests.AuthConfig()
 	deps := testDependencies()
 	accountService, _ := url.Parse(upstream.URL)
 	deps.AccountService = accountService
@@ -392,6 +399,7 @@ func TestSetupRouterStartsNewTraceForClientTraceContext(t *testing.T) {
 	appHttp.SetupRouter(router, cfg, deps)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/abc", nil)
+	req.Header.Set("Authorization", tests.BearerToken(uuid.New()))
 	req.Header.Set("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
 	req.Header.Set("tracestate", "vendor=value")
 	req.Header.Set("baggage", "user_id=attacker")

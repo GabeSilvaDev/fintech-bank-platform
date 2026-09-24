@@ -14,6 +14,7 @@ import (
 	appHttp "github.com/fintech-bank-platform/api-gateway/internal/infrastructure/http"
 	"github.com/fintech-bank-platform/pkg/logger"
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/suite"
 )
@@ -24,6 +25,7 @@ type TestCase struct {
 	Config    *config.Config
 	Logger    zerolog.Logger
 	Publisher *FakePublisher
+	UserID    uuid.UUID
 	headers   map[string]string
 }
 
@@ -33,19 +35,27 @@ func (tc *TestCase) SetupSuite() {
 	tc.Publisher = &FakePublisher{}
 	tc.headers = make(map[string]string)
 
-	tc.Router = chi.NewRouter()
-	appHttp.SetupRouter(tc.Router, tc.Config, appHttp.Dependencies{
+	tc.Rebuild(func(*config.Config, *appHttp.Dependencies) {})
+}
+
+func (tc *TestCase) Rebuild(configure func(*config.Config, *appHttp.Dependencies)) {
+	deps := appHttp.Dependencies{
 		Publisher:           tc.Publisher,
 		Logger:              logger.New(logger.Config{Output: io.Discard}),
-		AccountService:      mustURL("http://127.0.0.1:1"),
-		TransactionService:  mustURL("http://127.0.0.1:1"),
-		PaymentService:      mustURL("http://127.0.0.1:1"),
-		NotificationService: mustURL("http://127.0.0.1:1"),
-	})
+		AccountService:      MustURL("http://127.0.0.1:1"),
+		TransactionService:  MustURL("http://127.0.0.1:1"),
+		PaymentService:      MustURL("http://127.0.0.1:1"),
+		NotificationService: MustURL("http://127.0.0.1:1"),
+	}
+	configure(tc.Config, &deps)
+
+	tc.Router = chi.NewRouter()
+	appHttp.SetupRouter(tc.Router, tc.Config, deps)
 }
 
 func (tc *TestCase) SetupTest() {
 	tc.headers = make(map[string]string)
+	tc.ActingAs(uuid.New())
 	tc.Publisher.Err = nil
 	tc.Publisher.Published = nil
 }
@@ -104,6 +114,16 @@ func (tc *TestCase) WithToken(token string) *TestCase {
 	return tc.WithHeader("Authorization", "Bearer "+token)
 }
 
+func (tc *TestCase) ActingAs(userID uuid.UUID) *TestCase {
+	tc.UserID = userID
+	return tc.WithToken(AccessToken(userID))
+}
+
+func (tc *TestCase) WithoutToken() *TestCase {
+	delete(tc.headers, "Authorization")
+	return tc
+}
+
 func (tc *TestCase) WithContentType(contentType string) *TestCase {
 	return tc.WithHeader("Content-Type", contentType)
 }
@@ -145,9 +165,11 @@ func (tc *TestCase) applyHeaders(req *http.Request) {
 
 func testConfig() *config.Config {
 	return &config.Config{
-		Server:    testServerConfig(),
-		CORS:      testCORSConfig(),
-		RateLimit: testRateLimitConfig(),
+		Server:        testServerConfig(),
+		CORS:          testCORSConfig(),
+		RateLimit:     testRateLimitConfig(),
+		Auth:          AuthConfig(),
+		AuthRateLimit: testRateLimitConfig(),
 	}
 }
 
@@ -180,7 +202,7 @@ func testRateLimitConfig() contracts.RateLimitConfig {
 	}
 }
 
-func mustURL(s string) *url.URL {
+func MustURL(s string) *url.URL {
 	u, _ := url.Parse(s)
 	return u
 }

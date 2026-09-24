@@ -263,3 +263,21 @@ func TestReadProxyForwardsTraceParentToUpstream(t *testing.T) {
 	require.NotNil(t, clientSpan)
 	assert.Contains(t, gotTraceParent, clientSpan.SpanContext().SpanID().String())
 }
+
+func TestReadProxyDoesNotForwardTheAccessToken(t *testing.T) {
+	var authorization []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authorization = r.Header.Values("Authorization")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"success":true,"data":{}}`))
+	}))
+	defer upstream.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/abc", nil)
+	req.Header.Set("Authorization", "Bearer secret-token")
+	rec := httptest.NewRecorder()
+	proxyRouter(upstream.URL, "account service").ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Empty(t, authorization)
+}

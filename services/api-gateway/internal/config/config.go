@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"time"
 
 	"github.com/fintech-bank-platform/api-gateway/internal/contracts"
@@ -16,10 +17,21 @@ type Config struct {
 	Log           contracts.LogConfig
 	Upstreams     contracts.UpstreamConfig
 	Observability contracts.ObservabilityConfig
+	Auth          contracts.AuthConfig
+	AuthRateLimit contracts.RateLimitConfig
 }
+
+const minJWTSecretBytes = 32
+
+var ErrWeakJWTSecret = errors.New("JWT_SECRET must be set to at least 32 bytes")
 
 func New() (*Config, error) {
 	_ = godotenv.Load()
+
+	auth, err := loadAuthConfig()
+	if err != nil {
+		return nil, err
+	}
 
 	return &Config{
 		Server:        loadServerConfig(),
@@ -28,6 +40,8 @@ func New() (*Config, error) {
 		Kafka:         loadKafkaConfig(),
 		Log:           loadLogConfig(),
 		Observability: loadObservabilityConfig(),
+		Auth:          auth,
+		AuthRateLimit: loadAuthRateLimitConfig(),
 		Upstreams: contracts.UpstreamConfig{
 			AccountService:      env.Get("ACCOUNT_SERVICE_URL", "http://localhost:8082"),
 			TransactionService:  env.Get("TRANSACTION_SERVICE_URL", "http://localhost:8083"),
@@ -93,4 +107,31 @@ func loadObservabilityConfig() contracts.ObservabilityConfig {
 		OTLPEndpoint:   env.Get("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
 		SampleRatio:    env.GetFloat("OTEL_SAMPLER_RATIO", 1.0),
 	}
+}
+
+func loadAuthConfig() (contracts.AuthConfig, error) {
+	secret := env.Get("JWT_SECRET", "")
+	if len(secret) < minJWTSecretBytes {
+		return contracts.AuthConfig{}, ErrWeakJWTSecret
+	}
+
+	return contracts.AuthConfig{
+		JWTSecret:     secret,
+		TokenTTL:      positiveDuration("JWT_TTL", time.Hour),
+		OwnerCacheTTL: positiveDuration("OWNER_CACHE_TTL", time.Minute),
+	}, nil
+}
+
+func loadAuthRateLimitConfig() contracts.RateLimitConfig {
+	return contracts.RateLimitConfig{
+		Requests: env.GetIntMin("AUTH_RATE_LIMIT_REQUESTS", 10, 1),
+		Window:   positiveDuration("AUTH_RATE_LIMIT_WINDOW", time.Minute),
+	}
+}
+
+func positiveDuration(key string, defaultValue time.Duration) time.Duration {
+	if value := env.GetDuration(key, defaultValue); value > 0 {
+		return value
+	}
+	return defaultValue
 }

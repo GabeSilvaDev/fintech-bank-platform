@@ -25,6 +25,8 @@ servers:
     description: Local development stack
 security: []
 tags:
+  - name: Authentication
+    description: Registration and login. Both issue a bearer access token.
   - name: Accounts
     description: Account lifecycle commands and account reads.
   - name: Transactions
@@ -75,6 +77,145 @@ paths:
                 type: string
         '429':
           $ref: '#/components/responses/TooManyRequests'
+  /api/v1/auth/register:
+    post:
+      tags: [Authentication]
+      operationId: register
+      summary: Register a user
+      description: |
+        Creates an identity in the account service and returns an access token for the new user. The e-mail is trimmed
+        and lower-cased; it must not be registered yet. The password must have between 8 and 72 bytes. This endpoint
+        and the login share a stricter per-client-IP rate limit (10 requests per minute by default) on top of the
+        global one.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: The user was registered.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisteredEnvelope'
+        '400':
+          $ref: '#/components/responses/InvalidJSON'
+        '409':
+          description: The e-mail is already registered (`EMAIL_TAKEN`).
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                success: false
+                error:
+                  code: EMAIL_TAKEN
+                  message: e-mail already registered
+        '413':
+          $ref: '#/components/responses/AuthPayloadTooLarge'
+        '422':
+          description: |
+            The body failed validation (`VALIDATION_ERROR`). `details` has `email` set to `required`, `email` or `max`
+            (more than 254 characters) and `password` set to `required` or `length` (not between 8 and 72 bytes).
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                success: false
+                error:
+                  code: VALIDATION_ERROR
+                  message: request validation failed
+                  details:
+                    password: length
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/UpstreamUnavailable'
+        default:
+          $ref: '#/components/responses/InternalError'
+  /api/v1/auth/login:
+    post:
+      tags: [Authentication]
+      operationId: login
+      summary: Log in
+      description: |
+        Checks the e-mail and password with the account service and returns an access token. There are no refresh
+        tokens: log in again when the token expires. Shares the stricter authentication rate limit with the
+        registration.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: The credentials are valid.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccessTokenEnvelope'
+        '400':
+          $ref: '#/components/responses/InvalidJSON'
+        '401':
+          description: |
+            The e-mail is not registered or the password does not match (`INVALID_CREDENTIALS`). Both cases answer the
+            same way.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                success: false
+                error:
+                  code: INVALID_CREDENTIALS
+                  message: invalid e-mail or password
+        '413':
+          $ref: '#/components/responses/AuthPayloadTooLarge'
+        '422':
+          description: The `email` or the `password` is missing (`VALIDATION_ERROR`, `details` maps it to `required`).
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                success: false
+                error:
+                  code: VALIDATION_ERROR
+                  message: request validation failed
+                  details:
+                    password: required
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/UpstreamUnavailable'
+        default:
+          $ref: '#/components/responses/InternalError'
   /api/v1/accounts:
     post:
       tags: [Accounts]
@@ -727,6 +868,20 @@ components:
             error:
               code: PAYLOAD_TOO_LARGE
               message: request body exceeds 1 MiB
+    AuthPayloadTooLarge:
+      description: The body exceeds 16 KiB (`PAYLOAD_TOO_LARGE`).
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            success: false
+            error:
+              code: PAYLOAD_TOO_LARGE
+              message: request body exceeds 16 KiB
     ValidationError:
       description: |
         The body failed validation (`VALIDATION_ERROR`). `details` maps each invalid field to the rule it broke, such
@@ -941,6 +1096,77 @@ components:
           const: true
         data:
           $ref: '#/components/schemas/Health'
+    RegisterRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+          examples: [ana.souza@example.com]
+        password:
+          type: string
+          format: password
+          description: Between 8 and 72 bytes.
+          minLength: 8
+          maxLength: 72
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          minLength: 1
+          examples: [ana.souza@example.com]
+        password:
+          type: string
+          format: password
+          minLength: 1
+    AccessToken:
+      type: object
+      required: [access_token, token_type, expires_in]
+      properties:
+        access_token:
+          type: string
+          description: 'HS256 JWT to send as `Authorization: Bearer <access_token>`.'
+        token_type:
+          type: string
+          const: Bearer
+        expires_in:
+          type: integer
+          description: Seconds until the token expires.
+          examples: [3600]
+    Registered:
+      allOf:
+        - $ref: '#/components/schemas/AccessToken'
+        - type: object
+          required: [user_id]
+          properties:
+            user_id:
+              type: string
+              format: uuid
+              description: Id of the new user.
+    AccessTokenEnvelope:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          $ref: '#/components/schemas/AccessToken'
+    RegisteredEnvelope:
+      type: object
+      required: [success, data]
+      properties:
+        success:
+          type: boolean
+          const: true
+        data:
+          $ref: '#/components/schemas/Registered'
     Currency:
       type: string
       pattern: '^[A-Za-z]{3}$'

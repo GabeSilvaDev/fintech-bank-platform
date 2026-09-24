@@ -3,11 +3,14 @@ package http
 import (
 	nethttp "net/http"
 	"net/url"
+	"time"
 
 	"github.com/fintech-bank-platform/api-gateway/internal/app/handlers"
 	"github.com/fintech-bank-platform/api-gateway/internal/config"
 	"github.com/fintech-bank-platform/api-gateway/internal/contracts"
+	"github.com/fintech-bank-platform/api-gateway/internal/infrastructure/auth"
 	"github.com/fintech-bank-platform/api-gateway/internal/infrastructure/http/middleware"
+	"github.com/fintech-bank-platform/api-gateway/internal/infrastructure/identity"
 	"github.com/fintech-bank-platform/pkg/logger"
 	"github.com/fintech-bank-platform/pkg/metrics"
 	pkgmw "github.com/fintech-bank-platform/pkg/middleware"
@@ -15,6 +18,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 )
+
+const identityTimeout = 5 * time.Second
 
 type Dependencies struct {
 	Publisher           contracts.Publisher
@@ -59,20 +64,37 @@ func SetupRouter(router *chi.Mux, cfg *config.Config, deps Dependencies) {
 	paymentReads := nethttp.StripPrefix("/api/v1", handlers.NewReadProxy(deps.PaymentService, "payment service"))
 	notificationReads := nethttp.StripPrefix("/api/v1", handlers.NewReadProxy(deps.NotificationService, "notification service"))
 
+	authentication := handlers.NewAuthHandler(
+		identity.NewClient(deps.AccountService, identityTimeout),
+		auth.NewIssuer(cfg.Auth.JWTSecret, cfg.Auth.TokenTTL),
+	)
+	authLimit := middleware.RateLimit(cfg.AuthRateLimit)
+	requireAuth := auth.RequireAuth(auth.NewVerifier(cfg.Auth.JWTSecret))
+
 	router.Route("/api/v1", func(r chi.Router) {
 		r.Get("/openapi.yaml", handlers.OpenAPI)
-		r.Post("/accounts", account.Create)
-		r.Patch("/accounts/{id}", account.Update)
-		r.Delete("/accounts/{id}", account.Delete)
-		r.Get("/accounts/{id}", accountReads.ServeHTTP)
-		r.Get("/users/{user_id}/accounts", accountReads.ServeHTTP)
-		r.Get("/accounts/{account_id}/transactions", transactionReads.ServeHTTP)
-		r.Post("/transactions", transaction.Create)
-		r.Post("/transfers", transaction.Transfer)
-		r.Get("/transactions/{id}", transactionReads.ServeHTTP)
-		r.Get("/accounts/{account_id}/payments", paymentReads.ServeHTTP)
-		r.Post("/payments", payment.Process)
-		r.Get("/payments/{id}", paymentReads.ServeHTTP)
-		r.Get("/users/{user_id}/notifications", notificationReads.ServeHTTP)
+
+		r.Group(func(r chi.Router) {
+			r.Use(authLimit)
+			r.Post("/auth/register", authentication.Register)
+			r.Post("/auth/login", authentication.Login)
+		})
+
+		r.Group(func(r chi.Router) {
+			r.Use(requireAuth)
+			r.Post("/accounts", account.Create)
+			r.Patch("/accounts/{id}", account.Update)
+			r.Delete("/accounts/{id}", account.Delete)
+			r.Get("/accounts/{id}", accountReads.ServeHTTP)
+			r.Get("/users/{user_id}/accounts", accountReads.ServeHTTP)
+			r.Get("/accounts/{account_id}/transactions", transactionReads.ServeHTTP)
+			r.Post("/transactions", transaction.Create)
+			r.Post("/transfers", transaction.Transfer)
+			r.Get("/transactions/{id}", transactionReads.ServeHTTP)
+			r.Get("/accounts/{account_id}/payments", paymentReads.ServeHTTP)
+			r.Post("/payments", payment.Process)
+			r.Get("/payments/{id}", paymentReads.ServeHTTP)
+			r.Get("/users/{user_id}/notifications", notificationReads.ServeHTTP)
+		})
 	})
 }

@@ -20,7 +20,11 @@ const maxBodyBytes = 1 << 20
 const maxAmountCents = 999999999999999
 
 func decode(r *http.Request, dst interface{}) error {
-	r.Body = http.MaxBytesReader(nil, r.Body, maxBodyBytes)
+	return decodeLimited(r, dst, maxBodyBytes, "request body exceeds 1 MiB")
+}
+
+func decodeLimited(r *http.Request, dst interface{}, limit int64, tooLargeMessage string) error {
+	r.Body = http.MaxBytesReader(nil, r.Body, limit)
 
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
@@ -28,7 +32,7 @@ func decode(r *http.Request, dst interface{}) error {
 	if err := decoder.Decode(dst); err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
-			return apperrors.New("PAYLOAD_TOO_LARGE", "request body exceeds 1 MiB", http.StatusRequestEntityTooLarge).Wrap(err)
+			return apperrors.New("PAYLOAD_TOO_LARGE", tooLargeMessage, http.StatusRequestEntityTooLarge).Wrap(err)
 		}
 		if domain.InvalidCode(err) == "invalid_amount" {
 			return apperrors.UnprocessableEntity("VALIDATION_ERROR", "request validation failed").WithDetail("amount", "amount")

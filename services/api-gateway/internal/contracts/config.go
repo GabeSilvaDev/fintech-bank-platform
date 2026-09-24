@@ -58,3 +58,9 @@ type ObservabilityConfig struct {
 	OTLPEndpoint   string
 	SampleRatio    float64
 }
+
+type AuthConfig struct {
+	JWTSecret     string
+	TokenTTL      time.Duration
+	OwnerCacheTTL time.Duration
+}
