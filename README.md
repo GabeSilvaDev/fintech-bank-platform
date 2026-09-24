@@ -17,7 +17,7 @@
 
 </div>
 
-> **Work in progress.** Infrastructure, shared packages and all five services — the API gateway, the account service, the transaction service, the payment service and the notification service — are in place: commands flow from HTTP to Kafka to Cassandra, deposits, withdrawals and transfers settle as sagas over the account service, PIX, TED and boleto payments settle the same way through a sandbox provider with signed webhooks, and result events turn into e-mail, SMS and push through the notification service, with reads coming back through the gateway. Every service retries its Cassandra or Redis connection at start-up, account credits and debits are idempotent per key, a reconciliation sweeper recovers stuck transactions and payments, and the platform is exercised end to end and under k6 load, on top of its unit, feature and integration tests. Every service exposes Prometheus metrics and OpenTelemetry traces, with a Grafana dashboard, alert rules and Jaeger in an optional compose profile, and the public API is described in OpenAPI. See the [roadmap](#roadmap) for what is done.
+> **Work in progress.** Infrastructure, shared packages and all five services — the API gateway, the account service, the transaction service, the payment service and the notification service — are in place: commands flow from HTTP to Kafka to Cassandra, deposits, withdrawals and transfers settle as sagas over the account service, PIX, TED and boleto payments settle the same way through a sandbox provider with signed webhooks, and result events turn into e-mail, SMS and push through the notification service, with reads coming back through the gateway. Money is exact: amounts travel as decimal strings through the API and the events and are handled as integer cents inside every service. Every service retries its Cassandra or Redis connection at start-up, account credits and debits are idempotent per key, a reconciliation sweeper recovers stuck transactions and payments, and the platform is exercised end to end and under k6 load, on top of its unit, feature and integration tests. Every service exposes Prometheus metrics and OpenTelemetry traces, with a Grafana dashboard, alert rules and Jaeger in an optional compose profile, and the public API is described in OpenAPI. See the [roadmap](#roadmap) for what is done.
 
 ## Architecture
 
@@ -47,7 +47,7 @@ The cross-service design — components, the topics table, sequence diagrams for
 |---|---|---|
 | Infrastructure | `docker-compose.yml` | Kafka 3.7.1 (KRaft), Cassandra 4.1, Redis 7.2, Mailpit, optional Kafka UI and Cassandra Web (profile `ui`), optional Prometheus, Grafana and Jaeger (profile `observability`, configured in `observability/`) |
 | Shared packages | `pkg/` | `logger`, `errors`, `response`, `validation`, `events`, `env`, `middleware`, `messaging`, `domain`, `cassandra`, `processor`, `retry`, `metrics`, `tracing` — 100 % test coverage, enforced in CI |
-| API Gateway | `services/api-gateway/` | Chi router with request-id, tracing, metrics, real-IP (only with `TRUST_PROXY_HEADERS=true`), logging, recovery, CORS and rate-limit middleware; `GET /health`; command endpoints publishing to Kafka through a circuit-breaker-guarded producer; typed config from env; OpenAPI 3.1 document served at `GET /api/v1/openapi.yaml` and linted with Redocly in CI; unit + feature tests at 100 % coverage, Kafka integration test in CI; read routes proxied to the domain services |
+| API Gateway | `services/api-gateway/` | Chi router with request-id, tracing, metrics, client IP (the connection address, or a trusted `X-Forwarded-For` hop with `TRUST_PROXY_HEADERS=true`), logging, recovery, CORS and rate-limit middleware; `GET /health`; command endpoints publishing to Kafka through a circuit-breaker-guarded producer; typed config from env; OpenAPI 3.1 document served at `GET /api/v1/openapi.yaml` and linted with Redocly in CI; unit + feature tests at 100 % coverage, Kafka integration test in CI; read routes proxied to the domain services |
 | Account Service | `services/account-service/` | Consumes `account.commands`, retries its Cassandra bootstrap, migrations and keyspace session at start-up (`STARTUP_RETRY_*`), persists customers and accounts in Cassandra (`fintech_accounts`), owns balances with compare-and-set credits/debits that require an `idempotency_key` and apply at most once (`balance_operations`, 30-day TTL), publishes results — including `account.credit_rejected` — on `account.events` and failures on `account.dlq`; read API on `:8082`; unit + feature tests at 100 % of `internal/app`, Cassandra and Kafka integration tests in CI |
 | Transaction Service | `services/transaction-service/` | Consumes `transaction.commands` and the account service's replies on `account.events`, retries its Cassandra bootstrap at start-up (`STARTUP_RETRY_*`), records deposits, withdrawals and transfers in Cassandra (`fintech_transactions`), orchestrates each one as a saga over `account.commands` (debit → credit → compensating credit on failure) with per-step idempotency keys, runs a reconciliation sweeper that re-sends the next step of stale non-terminal transactions (`SWEEPER_*`), publishes `transaction.created/completed/failed` and `transaction.transfer_completed/transfer_failed` on `transaction.events`, dead-letters on `transaction.dlq`; read API on `:8083`; unit + feature tests at 100 % of `internal/app`, Cassandra and Kafka integration tests in CI |
 | Payment Service | `services/payment-service/` | Consumes `payment.commands` and the account service's replies on `account.events`, retries its Cassandra bootstrap at start-up (`STARTUP_RETRY_*`), stores PIX, TED and boleto payments in Cassandra (`fintech_payments`), reserves funds with `account.debit`, submits to a sandbox provider — PIX settles at once, TED and boleto settle through a signed webhook — refunds rejections with `account.credit`, runs a reconciliation sweeper that re-sends the next step of stale non-terminal payments (`SWEEPER_*`), publishes `payment.created/processed/completed/failed` on `payment.events`, dead-letters on `payment.dlq`; read API and webhook on `:8084`; unit + feature tests at 100 % of `internal/app`, Cassandra and Kafka integration tests in CI |
@@ -67,7 +67,7 @@ Every service also serves Prometheus metrics on `GET /metrics` of its HTTP port 
 | `env` | typed getters for environment variables |
 | `middleware` | request-id, request logging and panic recovery for chi; `Recovery(log)` logs the panic and answers the JSON error envelope with `500 INTERNAL_ERROR` |
 | `messaging` | kafka-go producer with publish timeout and a consumer loop with per-message commit that finishes the in-flight message on shutdown (`DrainTimeout`) and restarts with backoff (`RunWithRestart`) |
-| `domain` | Shared domain errors (`ErrNotFound`, `ErrConflict`, `ErrAmbiguousWrite`, `Invalid`/`IsInvalid`/`InvalidCode`) and money helpers (`ToCents`, `FromCents`, `Cents`) |
+| `domain` | Shared domain errors (`ErrNotFound`, `ErrConflict`, `ErrAmbiguousWrite`, `Invalid`/`IsInvalid`/`InvalidCode`) and the exact money type `Amount` (int64 cents, JSON as a two-decimal string, `ParseAmount`, `AmountFromCents`) |
 | `cassandra` | `Migrator` that runs the keyspace file first, then every other `.cql` file in order over an `Executor` seam, tracking versions in `schema_migrations`; `MapWriteError` maps ambiguous Cassandra failures to `domain.ErrAmbiguousWrite` |
 | `processor` | Idempotent Kafka command processor: dedupes by event id, retries transient errors with backoff, dead-letters the rest, and publishes a dispatcher's reply events |
 | `retry` | `Do(ctx, attempts, delay, fn)` retries `fn` with a fixed delay between attempts until it succeeds, the attempts run out or the context is cancelled; used by the four domain services (account, transaction, payment and notification) to wait for Cassandra or Redis at start-up; the API gateway has nothing to wait for |
@@ -116,9 +116,9 @@ docker compose up -d                  # hot reload with Air, published on :8081
 curl http://localhost:8081/health
 ```
 
-Or natively: `make run` (listens on `SERVER_PORT`, default 8080). Configuration is read from the environment: `SERVER_*` (host, port, timeouts), `CORS_*`, `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW`, `KAFKA_BROKERS` / `KAFKA_WRITE_TIMEOUT` / `KAFKA_BATCH_TIMEOUT` / `KAFKA_PUBLISH_TIMEOUT` / `KAFKA_MAX_ATTEMPTS` / `KAFKA_BREAKER_*`, `TRUST_PROXY_HEADERS`, `METRICS_ENABLED` / `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_SAMPLER_RATIO` and `LOG_LEVEL` / `LOG_PRETTY`.
+Or natively: `make run` (listens on `SERVER_PORT`, default 8080). Configuration is read from the environment: `SERVER_*` (host, port, timeouts), `CORS_*`, `RATE_LIMIT_REQUESTS` / `RATE_LIMIT_WINDOW`, `KAFKA_BROKERS` / `KAFKA_WRITE_TIMEOUT` / `KAFKA_BATCH_TIMEOUT` / `KAFKA_PUBLISH_TIMEOUT` / `KAFKA_MAX_ATTEMPTS` / `KAFKA_BREAKER_*`, `TRUST_PROXY_HEADERS` / `TRUSTED_PROXY_HOPS`, `METRICS_ENABLED` / `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_SAMPLER_RATIO` and `LOG_LEVEL` / `LOG_PRETTY`.
 
-The rate limit (`RATE_LIMIT_REQUESTS` per `RATE_LIMIT_WINDOW`) is counted per client address. By default (`TRUST_PROXY_HEADERS=false`) that is the address of the TCP connection, and `True-Client-IP`, `X-Real-IP` and `X-Forwarded-For` are ignored, so a client can't pick its own rate-limit bucket by sending them. Set `TRUST_PROXY_HEADERS=true` only when the gateway sits behind a proxy that overwrites `X-Forwarded-For` (rather than appending to it) and strips any client-supplied `True-Client-IP` and `X-Real-IP` before forwarding; the client address is then taken from the first of those headers present, in that order (chi's `RealIP` trusts `True-Client-IP` first, then the leftmost entry of `X-Forwarded-For`), so a proxy that merely appends to `X-Forwarded-For` or passes through client-set `True-Client-IP`/`X-Real-IP` would let a client pick its own rate-limit bucket.
+The rate limit (`RATE_LIMIT_REQUESTS` per `RATE_LIMIT_WINDOW`) is counted per client address. By default (`TRUST_PROXY_HEADERS=false`) that is the address of the TCP connection, and `X-Forwarded-For`, `X-Real-IP` and `True-Client-IP` are ignored, so a client can't pick its own rate-limit bucket by sending them. Set `TRUST_PROXY_HEADERS=true` only when the gateway is reachable exclusively through your reverse proxies, and set `TRUSTED_PROXY_HOPS` (default `1`; values below `1` fall back to `1`) to the number of proxies between the internet and the gateway. The client address is then the `X-Forwarded-For` entry appended by the outermost of those proxies: the gateway counts `TRUSTED_PROXY_HOPS` entries from the right of the header (every `X-Forwarded-For` header merged in order) and takes that one, so with one proxy it is the rightmost entry — the address that proxy saw — and anything a client put further left is never read. `X-Real-IP` and `True-Client-IP` are ignored in this mode too. When `X-Forwarded-For` is missing, has fewer entries than `TRUSTED_PROXY_HOPS`, or the chosen entry is not an IP, the request is keyed on the connection address instead (the nearest proxy's, so those requests share one bucket). Set the exact count: one too low keys every client on a proxy's address, and one too high reads an entry the client wrote itself (or, when there is none, falls back to that shared bucket). The gateway never rewrites the request's remote address, so request logs (`remote_addr`) always show the TCP peer — the proxy, behind one — rather than the resolved client address.
 
 The public API is described in OpenAPI 3.1 in `services/api-gateway/api/openapi.yaml`, embedded in the binary and served by the gateway itself (`curl http://localhost:8081/api/v1/openapi.yaml`); CI lints it with Redocly using the root `redocly.yaml`.
 
@@ -175,7 +175,7 @@ Re-sending stops once a transaction is older than `SWEEPER_MAX_AGE` (measured fr
 
 Idempotency keys must be 1 to 64 printable ASCII characters (`0x21`–`0x7E`), with no spaces or control characters; the gateway already rejects anything else, and a command that still carries such a key is dead-lettered as `invalid_idempotency_key`.
 
-**Upgrading to this release.** Client idempotency keys moved from `transactions_by_key`, one namespace shared by every account, to `transactions_by_account_key` (`migrations/006_transactions_by_account_key.cql`), keyed by account and key. Keys reserved in the old table before the upgrade are not seen by the new one, so a client that sends a request before the deploy and retries it after could create a second transaction. Stop or drain client retries across the deploy: let the requests sent before it settle, and don't retry them afterwards. The old table is no longer read or written.
+**Upgrading from a release before Sprint 8.** Client idempotency keys moved from `transactions_by_key`, one namespace shared by every account, to `transactions_by_account_key` (`migrations/006_transactions_by_account_key.cql`), keyed by account and key. Keys reserved in the old table before the upgrade are not seen by the new one, so a client that sends a request before the deploy and retries it after could create a second transaction. Stop or drain client retries across the deploy: let the requests sent before it settle, and don't retry them afterwards. The old table is no longer read or written.
 
 **Upgrading from a release before Sprint 6.** Transactions that were already stuck before `balance_operations` existed may have had their balance change applied without a key being recorded, so the account service would apply a re-send again. Resolve them by hand before enabling the sweeper (deploy with `SWEEPER_ENABLED=false` until they are).
 
@@ -252,7 +252,7 @@ Routing renders one of eight Portuguese templates and turns each result event in
 
 Transient routing and delivery failures are retried with `CONSUMER_RETRY_BACKOFF` and then dead-lettered as `notification.command_failed` on `notification.dlq`. Contacts come from the account service's internal `GET /accounts/{id}/owner` (`{account_id, user_id, name, email, phone?}`, `404 ACCOUNT_NOT_FOUND`) — not exposed by the gateway — cached in memory for `ACCOUNT_DIRECTORY_TTL`. The cache holds at most `ACCOUNT_DIRECTORY_MAX_ENTRIES` accounts: when it is full, expired entries are dropped first and then the one closest to expiring. Concurrent lookups of the same account share a single request, and a failed lookup, a `404` included, is not cached, so the next one asks the account service again.
 
-Delivery sends e-mail over SMTP — Mailpit in development, with its web UI at http://localhost:8025 — and SMS and push through sandbox providers that just log the message; amounts in templates render as `R$ 1.234,56`. A malformed e-mail recipient is dead-lettered instead of retried, and every SMTP delivery — dial and whole conversation — is bounded by `SMTP_TIMEOUT`. Each event is processed at most once across crashes, because the processed marker is written before delivery: a crash mid-delivery can drop a notification, while an in-process retry after an ambiguous provider error, or a lost dedupe marker (Redis eviction), can repeat one.
+Delivery sends e-mail over SMTP — Mailpit in development, with its web UI at http://localhost:8025 — and SMS and push through sandbox providers that just log the message; amounts in templates render as `R$ 1.234,56`, formatted from the event's exact amount. A malformed e-mail recipient is dead-lettered instead of retried, and every SMTP delivery — dial and whole conversation — is bounded by `SMTP_TIMEOUT`. Each event is processed at most once across crashes, because the processed marker is written before delivery: a crash mid-delivery can drop a notification, while an in-process retry after an ambiguous provider error, or a lost dedupe marker (Redis eviction), can repeat one.
 
 Redis keeps a `notification:processed:<event id>` marker for 7 days to dedupe deliveries and a `notification:history:<user id>` list, newest first, capped at `NOTIFICATION_HISTORY_SIZE` and expiring 90 days after the latest notification; the root compose runs Redis with `allkeys-lru` and 128 MB, so deduplication is best-effort once memory pressure evicts old keys. History API: `GET /users/{user_id}/notifications?limit=` (default 20, 1–100, `422` otherwise) → `[{id, channel, recipient, subject?, body, source_event_id?, sent_at}]`, with the recipient masked (`a***@example.com`, `+55*******7766`; push keeps the user id).
 
@@ -288,13 +288,50 @@ Errors: `400 INVALID_JSON`, `413 PAYLOAD_TOO_LARGE` (body over 1 MiB), `422 VALI
 
 **Payment flow**: `POST /payments` requires a `ted` object (`bank_code`, `branch`, `account`, `document`) for TED payments — rejected on any other method (`422 ted: excluded`) — and validates `boleto_code`'s check digits (`422 boleto_code: boleto`) and, when the code encodes a nonzero amount, that `amount` matches it to the cent (`422 amount: boleto_amount`); the payment service debits the account, submits to a sandbox provider, and settles as `completed` (PIX right away, TED and boleto after a signed webhook) or refunds the debit and settles as `failed`. The same `idempotency_key` never creates a second payment on the same account.
 
+#### Amounts
+
+Money is exact end to end. Every `amount` in a request, every money field in a response and every money field in a Kafka event is a decimal string in BRL with two decimal places (`"1234.50"`); inside the services it is a `domain.Amount`, an integer number of cents, and Cassandra keeps the same cents in `bigint` columns. No amount is ever a binary floating-point number, so three deposits of `"0.10"` followed by a withdrawal of `"0.30"` leave the balance at exactly `"0.00"`.
+
+Requests should send `amount` as a string with up to two decimal places (`"1234.5"` and `"1234.50"` are the same amount). A JSON number is still accepted for compatibility and is read from its literal text, so `1234.56` is exactly 123456 cents; send strings anyway, since the client's own JSON encoder may already have rounded a number. The rules, on `POST /transactions`, `/transfers` and `/payments`:
+
+| Amount | Answer |
+|---|---|
+| Not a decimal with at most two decimal places — `"1.234"`, `1.234`, `"1,00"`, `"abc"` | `422 VALIDATION_ERROR`, `details` `{"amount":"amount"}`, reported on its own, before any other field is checked |
+| Missing, zero or negative | `422`, `{"amount":"gt"}` |
+| Above `9999999999999.99` | `422`, `{"amount":"lte"}` |
+| A boleto whose code encodes a different amount | `422`, `{"amount":"boleto_amount"}`, compared in cents |
+
+The `gt` and `lte` checks run after the per-field tag validation, so a request that also has other invalid fields reports those instead and is rejected either way.
+
+```bash
+curl -s -X POST localhost:8081/api/v1/transactions \
+  -H 'Content-Type: application/json' \
+  -d '{"account_id":"7e47434d-40d8-4288-afc8-358b73999896","type":"deposit","amount":"1234.50","currency":"BRL","description":"Salary","idempotency_key":"salary-2026-09"}'
+# {"success":true,"data":{"command_id":"…","trace_id":"…"}}
+
+curl -s localhost:8081/api/v1/accounts/7e47434d-40d8-4288-afc8-358b73999896
+# {"success":true,"data":{"account_id":"7e47434d-…","status":"active","currency":"BRL","balance":"1234.50",…}}
+
+curl -s localhost:8081/api/v1/accounts/7e47434d-40d8-4288-afc8-358b73999896/transactions
+# {"success":true,"data":[{"transaction_id":"f7c4b83f-…","type":"deposit","status":"completed","amount":"1234.50","currency":"BRL","to_balance_after":"1234.50",…}]}
+
+curl -s -X POST localhost:8081/api/v1/transactions \
+  -H 'Content-Type: application/json' \
+  -d '{"account_id":"7e47434d-40d8-4288-afc8-358b73999896","type":"deposit","amount":"1.234","currency":"BRL","idempotency_key":"too-precise"}'
+# {"success":false,"error":{"code":"VALIDATION_ERROR","message":"request validation failed","details":{"amount":"amount"}}}
+```
+
+Responses carry `balance` (accounts), `amount`, `from_balance_after` and `to_balance_after` (transactions), and `amount` and `balance_after` (payments) as strings. Events on Kafka carry every money field (`amount`, `balance`, `balance_after`) the same way; consumers also accept a JSON number, and an event whose amount has more than two decimal places or does not fit in 64-bit cents is dead-lettered as `bad_payload`.
+
+**Upgrading to this release.** Read responses used to return money as JSON numbers and now return decimal strings, so clients must parse `balance`, `amount`, `balance_after`, `from_balance_after` and `to_balance_after` as strings; requests with numeric amounts keep working. Events written by older releases carry numbers and remain readable, as do the replies stored in `balance_operations` before the upgrade, and nothing in Cassandra changes. Older services can't decode the string amounts this release publishes, though, so deploy the gateway and all four domain services together rather than one at a time.
+
 #### Read endpoints
 
 Reads are proxied to the account service via `ACCOUNT_SERVICE_URL`, to the transaction service via `TRANSACTION_SERVICE_URL`, to the payment service via `PAYMENT_SERVICE_URL` and to the notification service via `NOTIFICATION_SERVICE_URL` (default `http://localhost:8085`); `502 UPSTREAM_UNAVAILABLE` when the upstream is down.
 
 | Method | Path | Upstream |
 |---|---|---|
-| `GET` | `/api/v1/accounts/{id}` | `GET /accounts/{id}` → `200` account (`balance` in BRL), `404 ACCOUNT_NOT_FOUND`, `422` |
+| `GET` | `/api/v1/accounts/{id}` | `GET /accounts/{id}` → `200` account (`balance` as a decimal string in BRL), `404 ACCOUNT_NOT_FOUND`, `422` |
 | `GET` | `/api/v1/users/{user_id}/accounts` | `GET /users/{user_id}/accounts` → `200` list |
 | `GET` | `/api/v1/transactions/{id}` | `GET /transactions/{id}` → `200` transaction (`status` pending/debited/completed/failed/reversing/reversed/reversal_failed, no balances), `404 TRANSACTION_NOT_FOUND`, `422` |
 | `GET` | `/api/v1/accounts/{account_id}/transactions` | `GET /accounts/{account_id}/transactions?limit=50` → `200` newest first (`limit` 1–200), with the balances seen from `account_id` |
@@ -303,6 +340,8 @@ Reads are proxied to the account service via `ACCOUNT_SERVICE_URL`, to the trans
 | `GET` | `/api/v1/users/{user_id}/notifications` | `GET /users/{user_id}/notifications?limit=20` → `200` newest first (`limit` 1–100), `422` |
 
 Balances after a transaction are only shown to the account they belong to. In an account's transaction list, a deposit carries `to_balance_after` and a withdrawal `from_balance_after` once the balance has moved; a transfer carries `from_balance_after` in the sender's list and `to_balance_after` in the recipient's list, never both, so neither side sees the other's balance. `GET /transactions/{id}` returns no balances at all. A TED payment's `document` (CPF or CNPJ) is returned with every character but the last two replaced by `*` (`*********25`), both by id and in lists.
+
+An account's transaction or payment list reads the newest ids from the account's index table (`transactions_by_account`, `payments_by_account`) and then fetches the records themselves with batched `IN` queries of at most 100 ids each, so a full 200-item page costs three Cassandra queries instead of one read per row; the page keeps the index's newest-first order, and an id whose record is missing is skipped.
 
 ## Observability
 
@@ -394,7 +433,7 @@ scripts/stack.sh up
 STACK_TIMEOUT=900 scripts/stack.sh wait
 ```
 
-`tests/e2e` is a separate Go module (build tag `e2e`) that drives the running stack through the gateway: account creation, deposits/withdrawals/transfers (including a transfer that gets reversed, which balances each side sees, and idempotency keys scoped per account), payments (including sandbox rejections, webhook settlement, TED document masking and a boleto whose amount doesn't match its code), key format validation and the notifications they trigger. `TestMain` skips the suite if the gateway isn't healthy, unless `E2E_REQUIRED=1` makes that a hard failure instead; `GATEWAY_URL` and `MAILPIT_URL` point it at the stack. The suite fires enough requests to hit the gateway's default rate limit, so `services/api-gateway/docker-compose.yml` now passes `RATE_LIMIT_REQUESTS` through from the environment — raise it when starting the stack (the suite defaults to `GATEWAY_URL=http://localhost:8081` and `MAILPIT_URL=http://localhost:8025`):
+`tests/e2e` is a separate Go module (build tag `e2e`) that drives the running stack through the gateway: account creation, deposits/withdrawals/transfers (including a transfer that gets reversed, which balances each side sees, and idempotency keys scoped per account), payments (including sandbox rejections, webhook settlement, TED document masking and a boleto whose amount doesn't match its code), exact decimal amounts (string amounts compared exactly, a numeric amount still accepted, three `"0.10"` deposits and a `"0.30"` withdrawal leaving `"0.00"`, and the `amount` and `lte` rejections), key format validation and the notifications they trigger. `TestMain` skips the suite if the gateway isn't healthy, unless `E2E_REQUIRED=1` makes that a hard failure instead; `GATEWAY_URL` and `MAILPIT_URL` point it at the stack. The suite fires enough requests to hit the gateway's default rate limit, so `services/api-gateway/docker-compose.yml` now passes `RATE_LIMIT_REQUESTS` through from the environment — raise it when starting the stack (the suite defaults to `GATEWAY_URL=http://localhost:8081` and `MAILPIT_URL=http://localhost:8025`):
 
 ```bash
 RATE_LIMIT_REQUESTS=100000 scripts/stack.sh up
@@ -527,6 +566,7 @@ Each future service follows the same layout: `cmd/`, `internal/{config,contracts
 - [x] **Sprint 6** — end-to-end tests, k6 load tests, idempotent balance operations and a reconciliation sweeper for stuck transactions and payments
 - [x] **Sprint 7** — observability (Prometheus metrics, Grafana dashboard and alerts, OpenTelemetry traces in Jaeger), OpenAPI and architecture docs
 - [x] **Sprint 8** — hardening: rate-limit key spoofing, panic handling, per-account idempotency, validation alignment and read privacy
+- [x] **Sprint 9** — exact decimal money in the API and events, batched statements and trusted proxy hops
 
 ## License
 
