@@ -306,7 +306,7 @@ Todo serviço expõe métricas Prometheus em `GET /metrics` na sua própria port
 
 **Métricas**, todas com o label `service`: `http_requests_total{method,route,status}` e `http_request_duration_seconds{method,route}` em todo router; `messages_processed_total{type,outcome}` (`ok`, `duplicate`, `dead_lettered`), `message_processing_duration_seconds{type}` e `message_retries_total{type}` de todo processador de mensagens; `messages_published_total{topic,outcome}` (`ok`, `error`) de todo producer; `kafka_consumer_lag{topic,group}` (lag da última partição lida) de todo consumer; `circuit_breaker_state` no gateway (`0` fechado, `1` meio-aberto, `2` aberto); `reconciliation_resent_total{status}` e `reconciliation_exhausted_total` dos sweepers do transaction e do payment service; `notifications_sent_total{channel,outcome}` da entrega de notificações; mais os collectors de runtime do Go e de processo.
 
-**Traces.** Cada requisição HTTP ganha um span de servidor com o nome da sua rota, o proxy de leitura do gateway propaga o `traceparent` para os serviços de domínio, toda publicação no Kafka injeta o `traceparent` nos headers da mensagem e todo consumer o continua num span `process <tipo do evento>`, então um comando é um único trace por todos os serviços que ele toca. As linhas de log de requisição e do processador trazem `otel_trace_id` e `otel_span_id`. O `trace_id` do envelope (o `X-Request-ID` do gateway) é um id de correlação de negócio à parte.
+**Traces.** Cada requisição HTTP ganha um span de servidor com o nome da sua rota, o proxy de leitura do gateway propaga o `traceparent` para os serviços de domínio, toda publicação no Kafka injeta o `traceparent` nos headers da mensagem e todo consumer o continua num span `process <tipo do evento>`, então um comando é um único trace por todos os serviços que ele toca. O próprio gateway começa esse trace: o `traceparent` de um cliente só fica registrado como link e o `baggage` dele é descartado. `/health` e `/metrics` não geram traces. As linhas de log de requisição e do processador trazem `otel_trace_id` e `otel_span_id`. O `trace_id` do envelope (o `X-Request-ID` do gateway) é um id de correlação de negócio à parte.
 
 **Como rodar.** O profile `observability` do compose raiz adiciona Prometheus, Grafana e Jaeger, configurados a partir de `observability/`. O jeito mais simples de ligar tudo é o script da stack, que sobe o profile e exporta `OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318` para os serviços (a menos que já esteja definida):
 
@@ -321,7 +321,7 @@ Subir os serviços um a um também funciona: `docker compose --profile observabi
 |---|---|---|
 | Prometheus | http://localhost:9090 (`PROMETHEUS_PORT`) | Cinco jobs de coleta a cada 15 s, regras de alerta na página Alerts |
 | Grafana | http://localhost:3000 (`GRAFANA_PORT`) | Acesso anônimo somente leitura; `admin` / `GRAFANA_ADMIN_PASSWORD` (padrão `admin`) para editar. Dashboard inicial "Platform overview" (uid `fintech-overview`): saúde, taxa HTTP, proporção de 5xx e latência p95, mensagens por resultado, dead letters, lag dos consumers, reconciliação e notificações, com um link para os traces do serviço |
-| Jaeger | http://localhost:16686 (`JAEGER_UI_PORT`) | `jaegertracing/jaeger:2.20.0`; OTLP em 4317/4318 só dentro da rede do compose |
+| Jaeger | http://localhost:16686 (`JAEGER_UI_PORT`) | `jaegertracing/jaeger:2.20.0` (a 2.21 removeu a API de consulta `/api/*` que a fonte de dados Jaeger do Grafana usa); OTLP em 4317/4318 só dentro da rede do compose |
 
 **Alertas** (`observability/prometheus/alerts.yml`, avaliados pelo Prometheus, sem Alertmanager configurado):
 
@@ -334,7 +334,7 @@ Subir os serviços um a um também funciona: `docker compose --profile observabi
 | `ReconciliationExhausted` | um sweeper desistiu de uma transação ou pagamento nos últimos 15 minutos | critical |
 | `CircuitBreakerOpen` | o circuit breaker do gateway fica aberto por 1 minuto | critical |
 
-A tabela completa de métricas, a estrutura dos spans, os painéis do dashboard e os saltos que começam um trace novo (reenvios do sweeper, o webhook do sandbox, a busca do titular pelo notification service) estão em [`docs/architecture.md`](docs/architecture.md#observability).
+A tabela completa de métricas, a estrutura dos spans, os painéis do dashboard e os dois saltos que começam um trace novo (reenvios do sweeper e o webhook do sandbox) estão em [`docs/architecture.md`](docs/architecture.md#observability).
 
 ## Desenvolvimento
 

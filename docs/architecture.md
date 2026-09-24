@@ -293,14 +293,14 @@ All series carry a `service` label (`api-gateway`, `account-service`, `transacti
 
 | Metric | Type | Labels | Recorded by |
 |---|---|---|---|
-| `http_requests_total` | counter | `method`, `route`, `status` | `pkg/metrics` middleware on every service; `route` is the chi pattern or `unmatched` |
+| `http_requests_total` | counter | `method`, `route`, `status` | `pkg/metrics` middleware on every service; `route` is the chi pattern or `unmatched`; `method` is one of the nine standard methods or `OTHER` |
 | `http_request_duration_seconds` | histogram | `method`, `route` | same |
-| `messages_processed_total` | counter | `type`, `outcome` (`ok`, `duplicate`, `dead_lettered`) | `pkg/processor`; undecodable messages use type `unknown` |
+| `messages_processed_total` | counter | `type`, `outcome` (`ok`, `duplicate`, `dead_lettered`) | `pkg/processor`; undecodable messages, events without a valid uuid id and commands no handler knows use type `unknown` |
 | `message_processing_duration_seconds` | histogram | `type` | `pkg/processor` |
 | `message_retries_total` | counter | `type` | `pkg/processor`, dispatch attempts beyond the first |
 | `messages_published_total` | counter | `topic`, `outcome` (`ok`, `error`) | `pkg/messaging` producer on every service |
 | `kafka_consumer_lag` | gauge | `topic`, `group` | `pkg/messaging` consumer after every fetch: the lag of the partition the latest message came from, not a sum over partitions |
-| `circuit_breaker_state` | gauge | — | `api-gateway` producer breaker: `0` closed, `1` half-open, `2` open |
+| `circuit_breaker_state` | gauge | — | `api-gateway` producer breaker, read at scrape time: `0` closed, `1` half-open, `2` open; an open breaker reports half-open once its timeout passes, even without traffic |
 | `reconciliation_resent_total` | counter | `status` | `transaction-service` and `payment-service` sweepers |
 | `reconciliation_exhausted_total` | counter | — | same sweepers |
 | `notifications_sent_total` | counter | `channel`, `outcome` (`ok`, `error`) | `notification-service` delivery |
@@ -311,12 +311,12 @@ A result publish that fails still counts the processed message as `ok`; the fail
 
 `tracing.Init` installs the W3C `traceparent`/`tracestate` and `baggage` propagators. The spans a request produces:
 
-- **HTTP server** — `tracing.Middleware` on every router continues an incoming `traceparent` and names the span after the route (`POST /api/v1/transactions`).
+- **HTTP server** — `tracing.Middleware` on every domain service router continues an incoming `traceparent` and names the span after the route (`POST /api/v1/transactions`). The gateway uses `tracing.EdgeMiddleware` instead: it starts a new root span, records a client's `traceparent` only as a span link, and strips `traceparent`, `tracestate` and `baggage` from the request so none of them reaches the services. Neither traces `/health` or `/metrics`. A method outside the nine standard ones is recorded as `_OTHER` (span name `HTTP`), with the raw value in `http.request.method_original`.
 - **HTTP client** — the gateway's read proxy uses `tracing.Transport`, so proxied reads continue into the domain service's server span.
 - **Kafka publish** — `Producer.Publish` starts a `publish <topic>` producer span and injects `traceparent` into the message headers, next to the `event_type` and `trace_id` headers.
-- **Kafka consume** — the consumer hands the handler a context extracted from those headers, and `Processor.Process` runs in a `process <event type>` consumer span; the store, the dispatcher and every publish use that span's context, so results and dead letters stay on the same trace.
+- **Kafka consume** — the consumer hands the handler a context extracted from those headers, and `Processor.Process` runs in a `process <event type>` consumer span; the store, the dispatcher and every publish use that span's context, so results and dead letters stay on the same trace. Events labelled `unknown` (see the metrics table) get `process unknown`, with their own type in `messaging.message.type_original`.
 
-A deposit is therefore one trace from the gateway's HTTP span through the transaction service, the account service, back to the transaction service and on to the notification service's routing and delivery. Three hops start a new trace instead: sweeper re-sends (they are not triggered by a message), the sandbox provider's webhook call and the notification service's owner lookup (both use a plain HTTP client, so the receiving server span is a new root).
+A deposit is therefore one trace from the gateway's HTTP span through the transaction service, the account service, back to the transaction service and on to the notification service's routing, owner lookup and delivery. Two hops start a new trace by design: sweeper re-sends (they are not triggered by a message) and the sandbox provider's webhook call (fired from a timer without request context, like a real provider's callback).
 
 Request log lines (`pkg/middleware.Logger`) and the processor's own log lines carry `otel_trace_id` and `otel_span_id`, so a log entry leads to its trace in Jaeger.
 
@@ -328,7 +328,7 @@ The root compose's `observability` profile adds:
 |---|---|---|---|
 | Prometheus | `prom/prometheus:v3.14.0` | `127.0.0.1:${PROMETHEUS_PORT:-9090}` | `observability/prometheus/prometheus.yml`: 15 s scrape and evaluation, one job per service at its compose hostname (`api-gateway:8080`, `account-service:8082`, `transaction-service:8083`, `payment-service:8084`, `notification-service:8085`); rules in `alerts.yml` |
 | Grafana | `grafana/grafana:13.2.2` | `127.0.0.1:${GRAFANA_PORT:-3000}` | Anonymous Viewer access; `admin` / `GRAFANA_ADMIN_PASSWORD` (default `admin`) to edit. Provisioned Prometheus (default) and Jaeger data sources and the dashboard below as the home dashboard |
-| Jaeger | `jaegertracing/jaeger:2.20.0` | `127.0.0.1:${JAEGER_UI_PORT:-16686}` | OTLP on 4317 (gRPC) and 4318 (HTTP), reachable only on the compose network as `jaeger` |
+| Jaeger | `jaegertracing/jaeger:2.20.0` | `127.0.0.1:${JAEGER_UI_PORT:-16686}` | OTLP on 4317 (gRPC) and 4318 (HTTP), reachable only on the compose network as `jaeger`. Pinned to 2.20.0 because 2.21 removed the legacy `/api/*` query API that Grafana 13.2.2's Jaeger data source uses |
 
 `STACK_OBSERVABILITY=1 scripts/stack.sh up` starts the profile and exports `OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318` (unless already set) before starting the services, whose compose files pass the variable through; `wait` then also polls the three UIs. Prometheus reaches the services by their compose hostnames, so they must run in their compose stacks on the shared `fintech-bank-platform_fintech-network`.
 

@@ -284,9 +284,11 @@ queueDepth.WithLabelValues("account.commands").Set(12)
 
 publishLatency := m.HistogramVec("publish_latency_seconds", "Kafka publish latency", prometheus.DefBuckets, "topic")
 publishLatency.WithLabelValues("account.commands").Observe(0.042)
+
+m.GaugeFunc("circuit_breaker_state", "Circuit breaker state", func() float64 { return stateValue(breaker.State()) }) // read at scrape time
 ```
 
-Every method is nil-safe, so a service can pass a `*metrics.Metrics` obtained from optional configuration straight through: a `nil` receiver makes the factories return a fresh, unregistered collector, `Middleware` returns `next` unchanged, and `Handler` returns a 404. Calling a factory twice with the same name and labels returns the already-registered collector instead of panicking.
+Every method is nil-safe, so a service can pass a `*metrics.Metrics` obtained from optional configuration straight through: a `nil` receiver makes the factories return a fresh, unregistered collector, `Middleware` returns `next` unchanged, and `Handler` returns a 404. Calling a factory twice with the same name and labels returns the already-registered collector instead of panicking. The middleware's `method` label is one of the nine standard methods or `OTHER`, so arbitrary method tokens cannot create new series.
 
 ## tracing
 
@@ -300,7 +302,8 @@ shutdown, err := tracing.Init(ctx, tracing.Config{
 })
 defer shutdown(context.Background()) // flushes the batch span processor
 
-router.Use(tracing.Middleware) // server span per request, continued from an incoming traceparent, renamed "GET /accounts/{id}" after routing
+router.Use(tracing.Middleware)     // server span per request, continued from an incoming traceparent, renamed "GET /accounts/{id}" after routing
+router.Use(tracing.EdgeMiddleware) // public edge: new root span, incoming traceparent kept only as a link, traceparent/tracestate/baggage stripped from the request
 
 client := &http.Client{Transport: tracing.Transport(nil)} // client span "GET host" and traceparent on every outgoing request
 
@@ -313,7 +316,7 @@ ctx = tracing.Extract(ctx, msg.Headers)     // continues the producer's trace on
 traceID, spanID, ok := tracing.IDs(ctx) // hex ids of the current span, ok only when the span context is valid
 ```
 
-`Init` always installs the W3C `traceparent`/`tracestate` and `baggage` propagators as the global text map propagator, so `Middleware`, `Transport`, `Inject` and `Extract` use the same format everywhere. Without an endpoint, spans still get real ids, so trace ids propagate through HTTP and Kafka and show up in logs, but nothing is exported. The resource carries `service.name`; server and client spans record `http.request.method`, `url.path` and `http.response.status_code` (plus `http.route` on the server and `server.address` on the client), and a status of 500 or more, or a transport error, marks the span as an error.
+`Init` always installs the W3C `traceparent`/`tracestate` and `baggage` propagators as the global text map propagator, so `Middleware`, `Transport`, `Inject` and `Extract` use the same format everywhere. Without an endpoint, spans still get real ids, so trace ids propagate through HTTP and Kafka and show up in logs, but nothing is exported. The resource carries `service.name`; server and client spans record `http.request.method`, `url.path` and `http.response.status_code` (plus `http.route` on the server and `server.address` on the client), and a status of 500 or more, or a transport error, marks the span as an error. A method outside the nine standard ones is recorded as `_OTHER` (span name `HTTP`) with the raw value in `http.request.method_original`. Neither middleware traces `/health` or `/metrics`.
 
 ## Tests
 

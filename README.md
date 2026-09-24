@@ -306,7 +306,7 @@ Every service exposes Prometheus metrics on `GET /metrics` of its own HTTP port 
 
 **Metrics**, all labelled with `service`: `http_requests_total{method,route,status}` and `http_request_duration_seconds{method,route}` on every router; `messages_processed_total{type,outcome}` (`ok`, `duplicate`, `dead_lettered`), `message_processing_duration_seconds{type}` and `message_retries_total{type}` from every message processor; `messages_published_total{topic,outcome}` (`ok`, `error`) from every producer; `kafka_consumer_lag{topic,group}` (lag of the latest fetched partition) from every consumer; `circuit_breaker_state` on the gateway (`0` closed, `1` half-open, `2` open); `reconciliation_resent_total{status}` and `reconciliation_exhausted_total` from the transaction and payment sweepers; `notifications_sent_total{channel,outcome}` from notification delivery; plus the Go runtime and process collectors.
 
-**Traces.** Each HTTP request gets a server span named after its route, the gateway's read proxy propagates `traceparent` to the domain services, every Kafka publish injects `traceparent` into the message headers and every consumer continues it in a `process <event type>` span, so one command is one trace across the services it touches. Request and processor log lines carry `otel_trace_id` and `otel_span_id`. The envelope's `trace_id` (the gateway's `X-Request-ID`) is a separate business correlation id.
+**Traces.** Each HTTP request gets a server span named after its route, the gateway's read proxy propagates `traceparent` to the domain services, every Kafka publish injects `traceparent` into the message headers and every consumer continues it in a `process <event type>` span, so one command is one trace across the services it touches. The gateway starts that trace itself: a client's `traceparent` is only recorded as a link and its `baggage` is dropped. `/health` and `/metrics` are not traced. Request and processor log lines carry `otel_trace_id` and `otel_span_id`. The envelope's `trace_id` (the gateway's `X-Request-ID`) is a separate business correlation id.
 
 **Running it.** The root compose's `observability` profile adds Prometheus, Grafana and Jaeger, configured from `observability/`. The simplest way to get everything wired is the stack script, which starts the profile and exports `OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318` to the services (unless already set):
 
@@ -321,7 +321,7 @@ Starting services one by one works too: `docker compose --profile observability 
 |---|---|---|
 | Prometheus | http://localhost:9090 (`PROMETHEUS_PORT`) | Five scrape jobs every 15 s, alert rules on the Alerts page |
 | Grafana | http://localhost:3000 (`GRAFANA_PORT`) | Anonymous read-only access; `admin` / `GRAFANA_ADMIN_PASSWORD` (default `admin`) to edit. Home dashboard "Platform overview" (uid `fintech-overview`): health, HTTP rate, 5xx ratio and p95 latency, messages by outcome, dead letters, consumer lag, reconciliation and notifications, with a link to the service's traces |
-| Jaeger | http://localhost:16686 (`JAEGER_UI_PORT`) | `jaegertracing/jaeger:2.20.0`; OTLP on 4317/4318 inside the compose network only |
+| Jaeger | http://localhost:16686 (`JAEGER_UI_PORT`) | `jaegertracing/jaeger:2.20.0` (2.21 removed the `/api/*` query API that Grafana's Jaeger data source uses); OTLP on 4317/4318 inside the compose network only |
 
 **Alerts** (`observability/prometheus/alerts.yml`, evaluated by Prometheus, no Alertmanager configured):
 
@@ -334,7 +334,7 @@ Starting services one by one works too: `docker compose --profile observability 
 | `ReconciliationExhausted` | a sweeper gave up on a transaction or payment in the last 15 minutes | critical |
 | `CircuitBreakerOpen` | the gateway's circuit breaker is open for 1 minute | critical |
 
-The full metric table, span layout, dashboard panels and the hops that start a new trace (sweeper re-sends, the sandbox webhook, the notification owner lookup) are in [`docs/architecture.md`](docs/architecture.md#observability).
+The full metric table, span layout, dashboard panels and the two hops that start a new trace (sweeper re-sends and the sandbox webhook) are in [`docs/architecture.md`](docs/architecture.md#observability).
 
 ## Development
 
