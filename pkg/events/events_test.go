@@ -69,14 +69,28 @@ func TestFromJSON_Invalid(t *testing.T) {
 	assert.Nil(t, event)
 }
 
-func TestFromJSON_TrailingData(t *testing.T) {
+func TestFromJSON_RejectsTrailingData(t *testing.T) {
 	original := NewEvent("test.event", "test-service", map[string]string{"key": "value"})
 	jsonData, _ := original.ToJSON()
 
-	event, err := FromJSON(append(jsonData, []byte(`{}`)...))
+	for _, trailing := range []string{"}", "]", "{}", "x"} {
+		event, err := FromJSON(append(append([]byte(nil), jsonData...), []byte(trailing)...))
 
-	assert.Error(t, err)
-	assert.Nil(t, event)
+		assert.Error(t, err, trailing)
+		assert.Nil(t, event, trailing)
+	}
+}
+
+func TestFromJSON_AcceptsTrailingWhitespace(t *testing.T) {
+	original := NewEvent("test.event", "test-service", map[string]string{"key": "value"})
+	jsonData, _ := original.ToJSON()
+
+	for _, trailing := range []string{" ", "\n", "\t\n  "} {
+		event, err := FromJSON(append(append([]byte(nil), jsonData...), []byte(trailing)...))
+
+		assert.NoError(t, err, trailing)
+		assert.NotNil(t, event, trailing)
+	}
 }
 
 func TestFromJSON_KeepsNumericLiteralsExact(t *testing.T) {

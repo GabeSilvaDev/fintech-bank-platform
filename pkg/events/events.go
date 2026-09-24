@@ -3,7 +3,9 @@ package events
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/fintech-bank-platform/pkg/domain"
@@ -63,8 +65,12 @@ func FromJSON(data []byte) (*Event, error) {
 	if err := dec.Decode(&event); err != nil {
 		return nil, err
 	}
-	if dec.More() {
-		return nil, fmt.Errorf("invalid character after top-level value")
+	var trailing json.RawMessage
+	if err := dec.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return nil, fmt.Errorf("invalid character after top-level value")
+		}
+		return nil, err
 	}
 	return &event, nil
 }
