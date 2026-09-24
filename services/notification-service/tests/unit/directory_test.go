@@ -309,6 +309,51 @@ func TestDirectoryLookupConcurrentCallsCollapseIntoOneRequest(t *testing.T) {
 	assert.Equal(t, int32(1), atomic.LoadInt32(&calls))
 }
 
+func TestDirectoryLookupCancelledCallerDoesNotAffectOthers(t *testing.T) {
+	accountID := uuid.New()
+	var calls int32
+	requestStarted := make(chan struct{})
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		close(requestStarted)
+		<-release
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"data": map[string]string{
+				"account_id": accountID.String(),
+				"user_id":    uuid.New().String(),
+			},
+		})
+	}))
+	defer server.Close()
+
+	client := directory.NewClient(server.URL, 5*time.Second, time.Minute)
+
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancelledErr := make(chan error, 1)
+	go func() {
+		_, err := client.Lookup(cancelledCtx, accountID)
+		cancelledErr <- err
+	}()
+
+	patientErr := make(chan error, 1)
+	go func() {
+		<-requestStarted
+		_, err := client.Lookup(context.Background(), accountID)
+		patientErr <- err
+	}()
+
+	<-requestStarted
+	cancel()
+	assert.ErrorIs(t, <-cancelledErr, context.Canceled)
+
+	close(release)
+	assert.NoError(t, <-patientErr)
+	assert.Equal(t, int32(1), atomic.LoadInt32(&calls))
+}
+
 func TestDirectoryLookupErrorsAreNotCached(t *testing.T) {
 	var calls int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

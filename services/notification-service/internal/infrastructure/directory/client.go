@@ -67,13 +67,19 @@ func (c *Client) Lookup(ctx context.Context, accountID uuid.UUID) (models.Contac
 		return cached.contact, nil
 	}
 
-	result, err, _ := c.group.Do(accountID.String(), func() (interface{}, error) {
-		return c.fetch(ctx, accountID)
+	ch := c.group.DoChan(accountID.String(), func() (interface{}, error) {
+		return c.fetch(context.WithoutCancel(ctx), accountID)
 	})
-	if err != nil {
-		return models.Contact{}, err
+
+	select {
+	case <-ctx.Done():
+		return models.Contact{}, ctx.Err()
+	case res := <-ch:
+		if res.Err != nil {
+			return models.Contact{}, res.Err
+		}
+		return res.Val.(models.Contact), nil
 	}
-	return result.(models.Contact), nil
 }
 
 func (c *Client) fetch(ctx context.Context, accountID uuid.UUID) (models.Contact, error) {
