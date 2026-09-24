@@ -143,6 +143,7 @@ func TestConfigDefaults(t *testing.T) {
 	assert.NotEmpty(t, cfg.Server.Port)
 	assert.NotEmpty(t, cfg.CORS.AllowedOrigins)
 	assert.NotEmpty(t, cfg.CORS.AllowedMethods)
+	assert.Contains(t, cfg.CORS.ExposedHeaders, "X-Next-Before")
 	assert.Greater(t, cfg.RateLimit.Requests, 0)
 	assert.Greater(t, cfg.RateLimit.Window, time.Duration(0))
 }

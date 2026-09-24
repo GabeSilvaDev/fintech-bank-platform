@@ -55,7 +55,7 @@ func loadCORSConfig() contracts.CORSConfig {
 		AllowedOrigins:   env.SplitAndTrim(env.Get("CORS_ALLOWED_ORIGINS", "*")),
 		AllowedMethods:   env.SplitAndTrim(env.Get("CORS_ALLOWED_METHODS", "GET,POST,PUT,DELETE,OPTIONS")),
 		AllowedHeaders:   env.SplitAndTrim(env.Get("CORS_ALLOWED_HEADERS", "Accept,Authorization,Content-Type,X-Request-ID")),
-		ExposedHeaders:   env.SplitAndTrim(env.Get("CORS_EXPOSED_HEADERS", "Link")),
+		ExposedHeaders:   env.SplitAndTrim(env.Get("CORS_EXPOSED_HEADERS", "Link,X-Next-Before")),
 		AllowCredentials: env.GetBool("CORS_ALLOW_CREDENTIALS", true),
 		MaxAge:           env.GetInt("CORS_MAX_AGE", 300),
 	}

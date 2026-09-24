@@ -152,6 +152,25 @@ func TestReadProxyForwardsTransactionPaths(t *testing.T) {
 	assert.Equal(t, []string{"/transactions/abc", "/accounts/a1/transactions?limit=5"}, paths)
 }
 
+func TestReadProxyForwardsNextBeforeHeaderAndBeforeQuery(t *testing.T) {
+	var gotQuery string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQuery = r.URL.RawQuery
+		w.Header().Set("X-Next-Before", "2026-09-20T10:00:00.000Z")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"success":true,"data":[]}`))
+	}))
+	defer upstream.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/accounts/a1/transactions?limit=2&before=2026-09-20T10%3A01%3A00Z", nil)
+	rec := httptest.NewRecorder()
+	proxyRouter(upstream.URL, "transaction service").ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "limit=2&before=2026-09-20T10%3A01%3A00Z", gotQuery)
+	assert.Equal(t, "2026-09-20T10:00:00.000Z", rec.Header().Get("X-Next-Before"))
+}
+
 func TestReadProxyForwardsPaymentPaths(t *testing.T) {
 	var paths []string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

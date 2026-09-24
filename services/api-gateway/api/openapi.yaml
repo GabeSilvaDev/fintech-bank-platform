@@ -264,12 +264,15 @@ paths:
       parameters:
         - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/LedgerLimit'
+        - $ref: '#/components/parameters/StatementBefore'
       responses:
         '200':
           description: The transactions of the account.
           headers:
             X-Request-ID:
               $ref: '#/components/headers/XRequestID'
+            X-Next-Before:
+              $ref: '#/components/headers/XNextBefore'
           content:
             application/json:
               schema:
@@ -397,12 +400,15 @@ paths:
       parameters:
         - $ref: '#/components/parameters/RequestId'
         - $ref: '#/components/parameters/LedgerLimit'
+        - $ref: '#/components/parameters/StatementBefore'
       responses:
         '200':
           description: The payments of the account.
           headers:
             X-Request-ID:
               $ref: '#/components/headers/XRequestID'
+            X-Next-Before:
+              $ref: '#/components/headers/XNextBefore'
           content:
             application/json:
               schema:
@@ -636,11 +642,29 @@ components:
         minimum: 1
         maximum: 100
         default: 20
+    StatementBefore:
+      name: before
+      in: query
+      required: false
+      description: |
+        Return only rows created before this timestamp (RFC 3339, with or without fractional seconds). Combine with
+        `X-Next-Before` from a previous page to page through older rows. An unparsable value answers `422` with
+        `before` = `datetime`.
+      schema:
+        type: string
+        format: date-time
   headers:
     XRequestID:
       description: Request id of this call; the `X-Request-ID` sent by the client when valid, a generated UUID otherwise.
       schema:
         type: string
+    XNextBefore:
+      description: |
+        Present only when the page is full (as many rows as `limit`). RFC 3339 timestamp, with nanoseconds, of the
+        last row's `created_at`; pass it as `before` to fetch the next, older page. Absent on the last page.
+      schema:
+        type: string
+        format: date-time
     RetryAfter:
       description: Seconds to wait before retrying (the length of the rate limit window).
       schema:
@@ -757,7 +781,8 @@ components:
     InvalidListQuery:
       description: |
         A path id is not a UUID (`details` maps it to `uuid`) or `limit` is not an integer inside its range (`details`
-        has `limit` = `range`). The code is `VALIDATION_ERROR`.
+        has `limit` = `range`). On operations that accept `before`, an unparsable value answers the same way with
+        `before` = `datetime`. The code is `VALIDATION_ERROR`.
       headers:
         X-Request-ID:
           $ref: '#/components/headers/XRequestID'
