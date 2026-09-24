@@ -72,7 +72,7 @@ func TestTransitionToATerminalStatusRemovesTheIndexRow(t *testing.T) {
 	require.False(t, openRowExists(t, session, tx.ID))
 }
 
-func TestListStalePrunesIndexRowsOfSettledAndMissingTransactions(t *testing.T) {
+func TestListStalePrunesSettledRowsAndKeepsRowsOfRecordsNotYetVisible(t *testing.T) {
 	session, _ := throwawayKeyspace(t)
 	repo := database.NewTransactionRepository(session)
 	ctx := context.Background()
@@ -94,7 +94,7 @@ func TestListStalePrunesIndexRowsOfSettledAndMissingTransactions(t *testing.T) {
 	require.Equal(t, models.StatusDebited, listed[0].Status)
 	require.True(t, openRowExists(t, session, stale.ID))
 	require.False(t, openRowExists(t, session, settled.ID))
-	require.False(t, openRowExists(t, session, missing))
+	require.True(t, openRowExists(t, session, missing))
 }
 
 func TestListStaleFindsStaleTransactionsBeyondTheFirstChunk(t *testing.T) {

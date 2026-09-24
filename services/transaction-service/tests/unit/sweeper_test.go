@@ -524,22 +524,54 @@ func TestSweeperRunRebuildsTheOpenIndexAtStart(t *testing.T) {
 
 func TestSweeperRunRebuildsTheOpenIndexAgainAfterTheInterval(t *testing.T) {
 	h := newHarness()
+	calls := make(chan struct{}, 16)
+	h.repo.OnReindex = func() {
+		select {
+		case calls <- struct{}{}:
+		default:
+		}
+	}
 	sweeper := services.NewSweeper(h.service, &tests.FakePublisher{}, tests.FakeClock{T: now}, fullScanConfig(time.Millisecond), logger.New(logger.Config{Output: io.Discard}))
 
-	runSweeperFor(t, sweeper, 30*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		sweeper.Run(ctx)
+		close(done)
+	}()
 
+	for i := 0; i < 2; i++ {
+		select {
+		case <-calls:
+		case <-time.After(5 * time.Second):
+			cancel()
+			t.Fatalf("open index rebuild %d never happened", i+1)
+		}
+	}
+	cancel()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Run did not return after cancel")
+	}
 	assert.GreaterOrEqual(t, h.repo.Reindexes, 2)
 }
 
-func TestSweeperRunNeverRebuildsTheOpenIndexWhenDisabled(t *testing.T) {
+func TestSweeperRunRebuildsTheOpenIndexOnlyAtStartWhenRescansAreDisabled(t *testing.T) {
 	h := newHarness()
+	lost := h.pending(models.TypeDeposit, models.StatusPending)
+	delete(h.repo.Open, lost.ID)
 	logs := &bytes.Buffer{}
-	sweeper := services.NewSweeper(h.service, &tests.FakePublisher{}, tests.FakeClock{T: now}, fullScanConfig(0), logger.New(logger.Config{Output: logs}))
+	cfg := fullScanConfig(0)
+	cfg.Interval = time.Millisecond
+	sweeper := services.NewSweeper(h.service, &tests.FakePublisher{}, tests.FakeClock{T: now}, cfg, logger.New(logger.Config{Output: logs}))
 
 	runSweeperFor(t, sweeper, 20*time.Millisecond)
 
-	assert.Zero(t, h.repo.Reindexes)
-	assert.NotContains(t, logs.String(), "open index")
+	assert.Equal(t, 1, h.repo.Reindexes)
+	assert.Equal(t, map[uuid.UUID]bool{lost.ID: true}, h.repo.Open)
+	assert.Contains(t, logs.String(), "open index rebuilt")
 }
 
 func TestSweeperRunLogsOpenIndexRebuildFailures(t *testing.T) {
@@ -556,7 +588,7 @@ func TestSweeperRunLogsOpenIndexRebuildFailures(t *testing.T) {
 	assert.NotContains(t, logs.String(), "open index rebuilt")
 }
 
-func TestSweeperRunOnceIgnoresAndPrunesSettledRecordsLeftInTheOpenIndex(t *testing.T) {
+func TestSweeperRunOnceIgnoresSettledAndMissingRecordsLeftInTheOpenIndex(t *testing.T) {
 	h := newHarness()
 	settled := h.pending(models.TypeDeposit, models.StatusCompleted)
 	settled.UpdatedAt = now.Add(-10 * time.Minute)
@@ -573,5 +605,5 @@ func TestSweeperRunOnceIgnoresAndPrunesSettledRecordsLeftInTheOpenIndex(t *testi
 	assert.NoError(t, err)
 	assert.Equal(t, 0, count)
 	assert.Empty(t, publisher.Published)
-	assert.Empty(t, h.repo.Open)
+	assert.Equal(t, map[uuid.UUID]bool{ghost: true}, h.repo.Open)
 }

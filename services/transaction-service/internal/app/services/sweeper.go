@@ -111,9 +111,9 @@ func (s *Sweeper) exhaust(ctx context.Context, tx *models.Transaction, now time.
 func (s *Sweeper) Run(ctx context.Context) {
 	ticker := time.NewTicker(s.cfg.Interval)
 	defer ticker.Stop()
+	s.reindex(ctx)
 	var fullScan <-chan time.Time
 	if s.cfg.FullScanInterval > 0 {
-		s.reindex(ctx)
 		fullScanTicker := time.NewTicker(s.cfg.FullScanInterval)
 		defer fullScanTicker.Stop()
 		fullScan = fullScanTicker.C

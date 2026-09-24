@@ -140,7 +140,10 @@ func (r *TransactionRepository) ListStale(ctx context.Context, before time.Time,
 				break
 			}
 			tx, ok := byID[id]
-			if !ok || tx.Status.Terminal() {
+			if !ok {
+				continue
+			}
+			if tx.Status.Terminal() {
 				r.closeOpen(ctx, id)
 				continue
 			}

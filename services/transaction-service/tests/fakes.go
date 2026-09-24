@@ -48,6 +48,7 @@ type FakeTransactionRepo struct {
 	Open              map[uuid.UUID]bool
 	Reindexes         int
 	ReindexErr        error
+	OnReindex         func()
 }
 
 func NewFakeTransactionRepo() *FakeTransactionRepo {
@@ -204,7 +205,10 @@ func (f *FakeTransactionRepo) ListStale(_ context.Context, before time.Time, max
 			break
 		}
 		tx, ok := f.Transactions[id]
-		if !ok || tx.Status.Terminal() {
+		if !ok {
+			continue
+		}
+		if tx.Status.Terminal() {
 			delete(f.Open, id)
 			continue
 		}
@@ -218,6 +222,9 @@ func (f *FakeTransactionRepo) ListStale(_ context.Context, before time.Time, max
 
 func (f *FakeTransactionRepo) Reindex(_ context.Context) (int, error) {
 	f.Reindexes++
+	if f.OnReindex != nil {
+		f.OnReindex()
+	}
 	if f.ReindexErr != nil {
 		return 0, f.ReindexErr
 	}
