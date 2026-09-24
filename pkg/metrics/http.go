@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/fintech-bank-platform/pkg/internal/httpmethod"
 	"github.com/go-chi/chi/v5"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/prometheus/client_golang/prometheus"
@@ -15,6 +16,7 @@ const (
 	requestsTotalHelp   = "Total number of HTTP requests"
 	requestDurationName = "http_request_duration_seconds"
 	requestDurationHelp = "HTTP request duration in seconds"
+	otherMethod         = "OTHER"
 )
 
 func (m *Metrics) Middleware(next http.Handler) http.Handler {
@@ -41,7 +43,15 @@ func (m *Metrics) Middleware(next http.Handler) http.Handler {
 			status = http.StatusOK
 		}
 
-		requestsTotal.WithLabelValues(r.Method, route, strconv.Itoa(status)).Inc()
-		requestDuration.WithLabelValues(r.Method, route).Observe(time.Since(start).Seconds())
+		method := methodLabel(r.Method)
+		requestsTotal.WithLabelValues(method, route, strconv.Itoa(status)).Inc()
+		requestDuration.WithLabelValues(method, route).Observe(time.Since(start).Seconds())
 	})
+}
+
+func methodLabel(method string) string {
+	if httpmethod.Known(method) {
+		return method
+	}
+	return otherMethod
 }

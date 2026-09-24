@@ -3,24 +3,26 @@ package tracing
 import (
 	"net/http"
 
+	"github.com/fintech-bank-platform/pkg/internal/httpmethod"
 	"github.com/go-chi/chi/v5"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/propagation"
 	semconv "go.opentelemetry.io/otel/semconv/v1.39.0"
 	"go.opentelemetry.io/otel/trace"
 )
 
+const otherMethodName = "HTTP"
+
 func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		name, methodAttrs := method(r.Method)
 		ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
-		ctx, span := Tracer().Start(ctx, r.Method,
+		ctx, span := Tracer().Start(ctx, name,
 			trace.WithSpanKind(trace.SpanKindServer),
-			trace.WithAttributes(
-				semconv.HTTPRequestMethodKey.String(r.Method),
-				semconv.URLPath(r.URL.Path),
-			),
+			trace.WithAttributes(append(methodAttrs, semconv.URLPath(r.URL.Path))...),
 		)
 		defer span.End()
 
@@ -28,7 +30,7 @@ func Middleware(next http.Handler) http.Handler {
 		next.ServeHTTP(ww, r.WithContext(ctx))
 
 		if route := chi.RouteContext(r.Context()).RoutePattern(); route != "" {
-			span.SetName(r.Method + " " + route)
+			span.SetName(name + " " + route)
 			span.SetAttributes(semconv.HTTPRoute(route))
 		}
 
@@ -54,13 +56,13 @@ type transport struct {
 }
 
 func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
-	ctx, span := Tracer().Start(req.Context(), req.Method+" "+req.URL.Host,
+	name, methodAttrs := method(req.Method)
+	ctx, span := Tracer().Start(req.Context(), name+" "+req.URL.Host,
 		trace.WithSpanKind(trace.SpanKindClient),
-		trace.WithAttributes(
-			semconv.HTTPRequestMethodKey.String(req.Method),
+		trace.WithAttributes(append(methodAttrs,
 			semconv.ServerAddress(req.URL.Hostname()),
 			semconv.URLPath(req.URL.Path),
-		),
+		)...),
 	)
 	defer span.End()
 
@@ -77,6 +79,14 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	recordStatus(span, resp.StatusCode)
 
 	return resp, nil
+}
+
+func method(raw string) (string, []attribute.KeyValue) {
+	if httpmethod.Known(raw) {
+		return raw, []attribute.KeyValue{semconv.HTTPRequestMethodKey.String(raw)}
+	}
+
+	return otherMethodName, []attribute.KeyValue{semconv.HTTPRequestMethodOther, semconv.HTTPRequestMethodOriginal(raw)}
 }
 
 func recordStatus(span trace.Span, status int) {

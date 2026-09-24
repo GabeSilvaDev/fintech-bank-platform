@@ -28,11 +28,15 @@ func attributes(span sdktrace.ReadOnlySpan) map[attribute.Key]attribute.Value {
 }
 
 func serve(handler http.HandlerFunc, target string, header http.Header) *httptest.ResponseRecorder {
+	return serveWith(Middleware, handler, http.MethodGet, target, header)
+}
+
+func serveWith(middleware func(http.Handler) http.Handler, handler http.HandlerFunc, method, target string, header http.Header) *httptest.ResponseRecorder {
 	router := chi.NewRouter()
-	router.Use(Middleware)
+	router.Use(middleware)
 	router.Get("/accounts/{id}", handler)
 
-	req := httptest.NewRequest(http.MethodGet, target, nil)
+	req := httptest.NewRequest(method, target, nil)
 	for key, values := range header {
 		req.Header[key] = values
 	}
@@ -202,4 +206,55 @@ func TestTransportRecordsTransportErrors(t *testing.T) {
 	assert.Equal(t, "connection refused", spans[0].Status().Description)
 	require.Len(t, spans[0].Events(), 1)
 	assert.Equal(t, "exception", spans[0].Events()[0].Name)
+}
+
+func TestMiddlewareCollapsesNonStandardMethods(t *testing.T) {
+	recorder := useRecorder(t)
+
+	called := false
+	rec := serveWith(Middleware, func(w http.ResponseWriter, r *http.Request) {
+		called = true
+	}, "FOO", "/accounts/123", nil)
+
+	assert.False(t, called)
+	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+	spans := recorder.Ended()
+	require.Len(t, spans, 1)
+	assert.NotContains(t, spans[0].Name(), "FOO")
+	assert.Regexp(t, `^HTTP( |$)`, spans[0].Name())
+
+	attrs := attributes(spans[0])
+	assert.Equal(t, "_OTHER", attrs["http.request.method"].AsString())
+	assert.Equal(t, "FOO", attrs["http.request.method_original"].AsString())
+}
+
+func TestMiddlewareKeepsStandardMethodWithoutOriginal(t *testing.T) {
+	recorder := useRecorder(t)
+
+	serve(func(w http.ResponseWriter, r *http.Request) {}, "/accounts/123", nil)
+
+	spans := recorder.Ended()
+	require.Len(t, spans, 1)
+	_, hasOriginal := attributes(spans[0])["http.request.method_original"]
+	assert.False(t, hasOriginal)
+}
+
+func TestTransportCollapsesNonStandardMethods(t *testing.T) {
+	recorder := useRecorder(t)
+
+	base := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: http.NoBody, Request: req}, nil
+	})
+
+	req := httptest.NewRequest("FOO", "http://account-service:8081/accounts", nil)
+	resp, err := Transport(base).RoundTrip(req)
+	require.NoError(t, err)
+	resp.Body.Close()
+
+	spans := recorder.Ended()
+	require.Len(t, spans, 1)
+	assert.Equal(t, "HTTP account-service:8081", spans[0].Name())
+	attrs := attributes(spans[0])
+	assert.Equal(t, "_OTHER", attrs["http.request.method"].AsString())
+	assert.Equal(t, "FOO", attrs["http.request.method_original"].AsString())
 }
