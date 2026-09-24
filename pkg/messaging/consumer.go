@@ -79,7 +79,7 @@ func (c *Consumer) Run(ctx context.Context, handle Handler) error {
 	for {
 		msg, err := c.reader.FetchMessage(ctx)
 		if err != nil {
-			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			if (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) && ctx.Err() != nil {
 				return nil
 			}
 			return err
@@ -137,7 +137,13 @@ func (c *Consumer) Close() error {
 	return c.reader.Close()
 }
 
+var defaultBackoff = []time.Duration{time.Second}
+
 func RunWithRestart(ctx context.Context, newConsumer func() *Consumer, handle Handler, backoff []time.Duration, onError func(error)) {
+	if len(backoff) == 0 {
+		backoff = defaultBackoff
+	}
+
 	for attempt := 0; ; attempt++ {
 		consumer := newConsumer()
 		err := consumer.Run(ctx, handle)

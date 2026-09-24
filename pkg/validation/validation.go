@@ -40,6 +40,7 @@ func registerCustomValidators() {
 	validate.RegisterValidation("agency_number", validateAgencyNumber)
 	validate.RegisterValidation("pix_key", validatePixKey)
 	validate.RegisterValidation("boleto", validateBoleto)
+	validate.RegisterValidation("idempotency_key", validateIdempotencyKey)
 }
 
 // Validate validates a struct using the validator
@@ -353,6 +354,22 @@ func SanitizePhone(phone string) string {
 func onlyDigits(s string) bool {
 	for _, r := range s {
 		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func validateIdempotencyKey(fl validator.FieldLevel) bool {
+	return IsValidIdempotencyKey(fl.Field().String())
+}
+
+func IsValidIdempotencyKey(s string) bool {
+	if len(s) < 1 || len(s) > 64 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x21 || s[i] > 0x7E {
 			return false
 		}
 	}

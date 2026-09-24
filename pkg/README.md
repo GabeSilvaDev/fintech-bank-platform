@@ -91,9 +91,11 @@ validation.FormatPhone("11912345678")
 
 validation.IsValidBoleto("34191790010100000012334567812309811000000015000")   // true
 cents, ok := validation.BoletoAmountCents("34191790010100000012334567812309811000000015000") // 15000, true
+
+validation.IsValidIdempotencyKey("order-123") // true; 1-64 bytes, each in 0x21-0x7E (no spaces or control chars)
 ```
 
-Struct tags: `cpf`, `cnpj`, `phone_br`, `pix_key`, `agency_number`, `account_number`, `currency`, `password_strength`, `boleto`.
+Struct tags: `cpf`, `cnpj`, `phone_br`, `pix_key`, `agency_number`, `account_number`, `currency`, `password_strength`, `boleto`, `idempotency_key`.
 
 ## events
 
@@ -147,13 +149,13 @@ env.SplitAndTrim("kafka-1:9092, kafka-2:9092") // ["kafka-1:9092", "kafka-2:9092
 ```go
 import "github.com/fintech-bank-platform/pkg/middleware"
 
-router.Use(middleware.RequestID, middleware.Logger(log), middleware.Recovery)
+router.Use(middleware.RequestID, middleware.Logger(log), middleware.Recovery(log))
 
 // downstream handlers read the request id middleware.RequestID generated (or forwarded from middleware.RequestIDHeader)
 requestID := middleware.GetRequestID(r.Context())
 ```
 
-`Logger` adds `otel_trace_id` and `otel_span_id` to the request log line when the request context carries a span, so mount `tracing.Middleware` outside it.
+`Logger` adds `otel_trace_id` and `otel_span_id` to the request log line when the request context carries a span, so mount `tracing.Middleware` outside it. `Recovery(log)` logs a panic at error level (`panic`, `stack`, `request_id`, `method`, `path`, and the trace ids when present) with `handler panicked`, then answers the JSON error envelope with a 500 `INTERNAL_ERROR` unless the handler already wrote a response; `http.ErrAbortHandler` re-panics instead of being swallowed, and a `nil` logger falls back to `logger.NewDefault()`.
 
 ## messaging
 
@@ -180,7 +182,7 @@ newConsumer := func() *messaging.Consumer {
     })
 }
 err = newConsumer().Run(ctx, handle) // handle(ctx, kafka.Message) error; committed per message on success
-messaging.RunWithRestart(ctx, newConsumer, handle, backoff, onError) // rebuilds the consumer after Run fails, waiting backoff[attempt] between tries
+messaging.RunWithRestart(ctx, newConsumer, handle, backoff, onError) // rebuilds the consumer after Run fails, waiting backoff[attempt] between tries; an empty backoff defaults to 1s
 ```
 
 Traces cross Kafka through the message headers: `Publish` starts a `publish <topic>` producer span and injects its `traceparent` next to the `event_type` and `trace_id` headers, and the consumer hands the handler a context extracted from those headers, so the handler's spans continue the producer's trace. A consumer built with `NewConsumerWithReader` gets the lag gauge through `consumer.WithMetrics(m, topic, group)`; the gauge only moves when the reader has a `Stats() kafka.ReaderStats` method, as `*kafka.Reader` does. A `nil` `*metrics.Metrics` keeps everything unregistered.

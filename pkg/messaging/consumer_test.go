@@ -105,6 +105,26 @@ func TestConsumerSwallowsHandlerErrorsAfterCancel(t *testing.T) {
 	assert.Empty(t, reader.committed)
 }
 
+func TestConsumerReturnsDeadlineExceededWhenContextStillAlive(t *testing.T) {
+	reader := &fakeReader{fetchErr: context.DeadlineExceeded}
+	consumer := NewConsumerWithReader(reader, 0)
+
+	err := consumer.Run(context.Background(), func(context.Context, kafka.Message) error { return nil })
+
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
+}
+
+func TestConsumerReturnsNilWhenFetchFailsAfterContextCancelled(t *testing.T) {
+	reader := &fakeReader{fetchErr: context.Canceled}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	consumer := NewConsumerWithReader(reader, 0)
+	err := consumer.Run(ctx, func(context.Context, kafka.Message) error { return nil })
+
+	assert.NoError(t, err)
+}
+
 func TestConsumerReturnsFetchErrors(t *testing.T) {
 	reader := &fakeReader{fetchErr: errors.New("broker gone")}
 	consumer := NewConsumerWithReader(reader, 0)
@@ -276,6 +296,36 @@ func TestRunWithRestartReturnsWhenConsumerStopsCleanly(t *testing.T) {
 
 	assert.Equal(t, 0, restarts)
 	assert.True(t, reader.closed)
+}
+
+func TestDefaultBackoffIsOneSecond(t *testing.T) {
+	assert.Equal(t, []time.Duration{time.Second}, defaultBackoff)
+}
+
+func TestRunWithRestartUsesDefaultBackoffWhenEmpty(t *testing.T) {
+	previous := defaultBackoff
+	defaultBackoff = []time.Duration{30 * time.Millisecond}
+	defer func() { defaultBackoff = previous }()
+
+	reader := &fakeReader{fetchErr: errors.New("broker gone")}
+	newConsumer := func() *Consumer { return NewConsumerWithReader(reader, 0) }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var restarts int
+	start := time.Now()
+	RunWithRestart(ctx, newConsumer, func(context.Context, kafka.Message) error { return nil }, nil, func(error) {
+		restarts++
+		if restarts == 2 {
+			cancel()
+		}
+	})
+	elapsed := time.Since(start)
+
+	assert.Equal(t, 2, restarts)
+	assert.GreaterOrEqual(t, elapsed, 30*time.Millisecond)
+	assert.Less(t, elapsed, time.Second)
 }
 
 func TestRestartDelayClampsToLastBackoff(t *testing.T) {

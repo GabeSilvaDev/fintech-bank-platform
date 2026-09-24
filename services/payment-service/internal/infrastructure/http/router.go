@@ -26,7 +26,7 @@ func SetupRouter(router *chi.Mux, deps Dependencies) {
 	router.Use(deps.Metrics.Middleware)
 	router.Use(chiMiddleware.RealIP)
 	router.Use(middleware.Logger(deps.Logger))
-	router.Use(middleware.Recovery)
+	router.Use(middleware.Recovery(deps.Logger))
 	router.Use(chiMiddleware.StripSlashes)
 
 	router.Get("/health", healthHandler(deps.Ping))

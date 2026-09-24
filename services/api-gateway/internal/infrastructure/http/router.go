@@ -32,7 +32,7 @@ func SetupRouter(router *chi.Mux, cfg *config.Config, deps Dependencies) {
 	router.Use(deps.Metrics.Middleware)
 	router.Use(chiMiddleware.RealIP)
 	router.Use(pkgmw.Logger(deps.Logger))
-	router.Use(pkgmw.Recovery)
+	router.Use(pkgmw.Recovery(deps.Logger))
 	router.Use(middleware.CORS(cfg.CORS))
 	router.Use(middleware.RateLimit(cfg.RateLimit))
 	router.Use(chiMiddleware.StripSlashes)

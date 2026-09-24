@@ -1,6 +1,7 @@
 package validation
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/go-playground/validator/v10"
@@ -534,6 +535,50 @@ func TestBoletoAmountCents(t *testing.T) {
 
 	_, ok = BoletoAmountCents("34191790020100000012334567812309811000000015000")
 	assert.False(t, ok)
+}
+
+func TestIsValidIdempotencyKey(t *testing.T) {
+	tests := []struct {
+		name     string
+		key      string
+		expected bool
+	}{
+		{"empty", "", false},
+		{"single char", "!", true},
+		{"64 chars", strings.Repeat("a", 64), true},
+		{"65 chars", strings.Repeat("a", 65), false},
+		{"space", " ", false},
+		{"tab", "\t", false},
+		{"unicode e acute", "é", false},
+		{"tilde", "~", true},
+		{"exclamation", "!", true},
+		{"key with internal space", "abc def", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := IsValidIdempotencyKey(tt.key)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestIdempotencyKeyValidator(t *testing.T) {
+	type TestStruct struct {
+		Key string `validate:"idempotency_key"`
+	}
+
+	t.Run("valid key", func(t *testing.T) {
+		s := TestStruct{Key: "order-123"}
+		err := Validate(s)
+		assert.NoError(t, err)
+	})
+
+	t.Run("invalid key", func(t *testing.T) {
+		s := TestStruct{Key: ""}
+		err := Validate(s)
+		assert.Error(t, err)
+	})
 }
 
 func TestBoletoTag(t *testing.T) {
