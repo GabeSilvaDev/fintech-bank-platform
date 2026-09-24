@@ -104,6 +104,8 @@ paths:
           $ref: '#/components/responses/TooManyRequests'
         '503':
           $ref: '#/components/responses/PublishFailed'
+        default:
+          $ref: '#/components/responses/InternalError'
   /api/v1/accounts/{id}:
     parameters:
       - $ref: '#/components/parameters/AccountIdPath'
@@ -144,6 +146,8 @@ paths:
           $ref: '#/components/responses/TooManyRequests'
         '502':
           $ref: '#/components/responses/UpstreamUnavailable'
+        default:
+          $ref: '#/components/responses/InternalError'
     patch:
       tags: [Accounts]
       operationId: updateAccount
@@ -199,6 +203,8 @@ paths:
           $ref: '#/components/responses/TooManyRequests'
         '503':
           $ref: '#/components/responses/PublishFailed'
+        default:
+          $ref: '#/components/responses/InternalError'
     delete:
       tags: [Accounts]
       operationId: deleteAccount
@@ -217,6 +223,8 @@ paths:
           $ref: '#/components/responses/TooManyRequests'
         '503':
           $ref: '#/components/responses/PublishFailed'
+        default:
+          $ref: '#/components/responses/InternalError'
   /api/v1/users/{user_id}/accounts:
     parameters:
       - $ref: '#/components/parameters/UserIdPath'
@@ -238,11 +246,13 @@ paths:
               schema:
                 $ref: '#/components/schemas/AccountListEnvelope'
         '422':
-          $ref: '#/components/responses/InvalidPathId'
+          $ref: '#/components/responses/InvalidUserId'
         '429':
           $ref: '#/components/responses/TooManyRequests'
         '502':
           $ref: '#/components/responses/UpstreamUnavailable'
+        default:
+          $ref: '#/components/responses/InternalError'
   /api/v1/accounts/{account_id}/transactions:
     parameters:
       - $ref: '#/components/parameters/AccountIdListPath'
@@ -270,6 +280,8 @@ paths:
           $ref: '#/components/responses/TooManyRequests'
         '502':
           $ref: '#/components/responses/UpstreamUnavailable'
+        default:
+          $ref: '#/components/responses/InternalError'
   /api/v1/transactions:
     post:
       tags: [Transactions]
@@ -299,6 +311,8 @@ paths:
           $ref: '#/components/responses/TooManyRequests'
         '503':
           $ref: '#/components/responses/PublishFailed'
+        default:
+          $ref: '#/components/responses/InternalError'
   /api/v1/transfers:
     post:
       tags: [Transactions]
@@ -328,6 +342,8 @@ paths:
           $ref: '#/components/responses/TooManyRequests'
         '503':
           $ref: '#/components/responses/PublishFailed'
+        default:
+          $ref: '#/components/responses/InternalError'
   /api/v1/transactions/{id}:
     parameters:
       - $ref: '#/components/parameters/TransactionIdPath'
@@ -368,6 +384,8 @@ paths:
           $ref: '#/components/responses/TooManyRequests'
         '502':
           $ref: '#/components/responses/UpstreamUnavailable'
+        default:
+          $ref: '#/components/responses/InternalError'
   /api/v1/accounts/{account_id}/payments:
     parameters:
       - $ref: '#/components/parameters/AccountIdListPath'
@@ -395,6 +413,8 @@ paths:
           $ref: '#/components/responses/TooManyRequests'
         '502':
           $ref: '#/components/responses/UpstreamUnavailable'
+        default:
+          $ref: '#/components/responses/InternalError'
   /api/v1/payments:
     post:
       tags: [Payments]
@@ -427,6 +447,8 @@ paths:
           $ref: '#/components/responses/TooManyRequests'
         '503':
           $ref: '#/components/responses/PublishFailed'
+        default:
+          $ref: '#/components/responses/InternalError'
   /api/v1/payments/{id}:
     parameters:
       - $ref: '#/components/parameters/PaymentIdPath'
@@ -467,6 +489,8 @@ paths:
           $ref: '#/components/responses/TooManyRequests'
         '502':
           $ref: '#/components/responses/UpstreamUnavailable'
+        default:
+          $ref: '#/components/responses/InternalError'
   /api/v1/users/{user_id}/notifications:
     parameters:
       - $ref: '#/components/parameters/UserIdPath'
@@ -496,6 +520,8 @@ paths:
           $ref: '#/components/responses/TooManyRequests'
         '502':
           $ref: '#/components/responses/UpstreamUnavailable'
+        default:
+          $ref: '#/components/responses/InternalError'
 components:
   parameters:
     RequestId:
@@ -668,6 +694,22 @@ components:
               message: request validation failed
               details:
                 id: uuid
+    InvalidUserId:
+      description: The `user_id` path parameter is not a UUID (`VALIDATION_ERROR`, `details` has `user_id` = `uuid`).
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            success: false
+            error:
+              code: VALIDATION_ERROR
+              message: request validation failed
+              details:
+                user_id: uuid
     InvalidListQuery:
       description: |
         A path id is not a UUID (`details` maps it to `uuid`) or `limit` is not an integer inside its range (`details`
@@ -722,6 +764,22 @@ components:
             error:
               code: UPSTREAM_UNAVAILABLE
               message: account service is unavailable
+    InternalError:
+      description: |
+        Unexpected error (`INTERNAL_ERROR`, or a more specific code such as `EVENT_ENCODING_FAILED`). Proxied reads
+        pass the owning service's error response through unchanged.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            success: false
+            error:
+              code: INTERNAL_ERROR
+              message: Internal server error
     PublishFailed:
       description: |
         The command could not be published because Kafka is unreachable or the publisher circuit breaker is open
@@ -888,7 +946,9 @@ components:
         amount:
           type: number
           exclusiveMinimum: 0
-          description: Amount in currency units, at most two decimal places.
+          description: |
+            Amount in currency units. The gateway only checks that it is positive; an amount with more than two decimal
+            places is accepted and then fails in the service, like an unsupported currency.
           examples: [150.75]
         currency:
           $ref: '#/components/schemas/Currency'
@@ -916,7 +976,9 @@ components:
         amount:
           type: number
           exclusiveMinimum: 0
-          description: Amount in currency units, at most two decimal places.
+          description: |
+            Amount in currency units. The gateway only checks that it is positive; an amount with more than two decimal
+            places is accepted and then fails in the service, like an unsupported currency.
           examples: [42.5]
         currency:
           $ref: '#/components/schemas/Currency'
@@ -967,7 +1029,9 @@ components:
         amount:
           type: number
           exclusiveMinimum: 0
-          description: Amount in currency units, at most two decimal places.
+          description: |
+            Amount in currency units. The gateway only checks that it is positive; an amount with more than two decimal
+            places is accepted and then fails in the service, like an unsupported currency.
           examples: [89.9]
         currency:
           $ref: '#/components/schemas/Currency'
@@ -1268,8 +1332,9 @@ components:
         recipient:
           type: string
           description: |
-            Masked recipient. Email addresses keep the first character of the local part and the domain
-            (`m***@example.com`); phone numbers keep the first three and the last four characters.
+            Recipient of the notification. Email addresses are masked to the first character of the local part and the
+            domain (`m***@example.com`); SMS phone numbers keep the first three and the last four characters. Push
+            recipients are user ids and are returned as they are.
           examples: [m***@example.com]
         subject:
           type: string
