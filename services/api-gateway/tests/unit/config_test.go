@@ -136,6 +136,8 @@ func TestConfigRateLimitWithEnvVars(t *testing.T) {
 func TestConfigDefaults(t *testing.T) {
 	os.Unsetenv("SERVER_HOST")
 	os.Unsetenv("SERVER_PORT")
+	t.Setenv("CORS_EXPOSED_HEADERS", "")
+	os.Unsetenv("CORS_EXPOSED_HEADERS")
 
 	cfg, _ := config.New()
 
@@ -144,7 +146,7 @@ func TestConfigDefaults(t *testing.T) {
 	assert.Equal(t, []string{"*"}, cfg.CORS.AllowedOrigins)
 	assert.Equal(t, []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}, cfg.CORS.AllowedMethods)
 	assert.False(t, cfg.CORS.AllowCredentials)
-	assert.Contains(t, cfg.CORS.ExposedHeaders, "X-Next-Before")
+	assert.Equal(t, []string{"Link", "X-Next-Before", "Retry-After"}, cfg.CORS.ExposedHeaders)
 	assert.Greater(t, cfg.RateLimit.Requests, 0)
 	assert.Greater(t, cfg.RateLimit.Window, time.Duration(0))
 }

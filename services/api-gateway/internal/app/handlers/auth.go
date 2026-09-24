@@ -15,10 +15,11 @@ import (
 )
 
 const (
-	maxAuthBodyBytes = 16 << 10
-	minPasswordBytes = 8
-	maxPasswordBytes = 72
-	bearerTokenType  = "Bearer"
+	maxAuthBodyBytes     = 16 << 10
+	minPasswordBytes     = 8
+	maxPasswordBytes     = 72
+	maxRefreshTokenBytes = 256
+	bearerTokenType      = "Bearer"
 )
 
 type AuthHandler struct {
@@ -87,6 +88,10 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 		response.FromError(w, err)
 		return
 	}
+	if len(refreshToken) > maxRefreshTokenBytes {
+		identityFailure(w, apperrors.Unauthorized("INVALID_SESSION", "refresh token is invalid or expired"))
+		return
+	}
 
 	userID, session, err := h.sessions.RotateSession(r.Context(), refreshToken)
 	if err != nil {
@@ -101,6 +106,10 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	refreshToken, err := decodeRefreshToken(r)
 	if err != nil {
 		response.FromError(w, err)
+		return
+	}
+	if len(refreshToken) > maxRefreshTokenBytes {
+		response.NoContent(w)
 		return
 	}
 

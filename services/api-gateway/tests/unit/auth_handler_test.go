@@ -445,3 +445,29 @@ func TestSessionHandlersRejectBadBodies(t *testing.T) {
 	assert.Empty(t, sessions.rotated)
 	assert.Empty(t, sessions.revoked)
 }
+
+func TestSessionHandlersTurnAwayOversizedRefreshTokens(t *testing.T) {
+	sessions := newFakeSessions()
+	tokens := &fakeTokens{}
+	handler := sessionHandler(&fakeIdentities{}, sessions, tokens)
+	oversized := `{"refresh_token":"` + strings.Repeat("r", 257) + `"}`
+
+	rec := callAuth(handler.Refresh, oversized)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.JSONEq(t, `{"success":false,"error":{"code":"INVALID_SESSION","message":"refresh token is invalid or expired"}}`, rec.Body.String())
+	assert.Equal(t, []string{"Bearer"}, rec.Header().Values("WWW-Authenticate"))
+
+	rec = callAuth(handler.Logout, oversized)
+	assert.Equal(t, http.StatusNoContent, rec.Code)
+	assert.Empty(t, rec.Body.String())
+
+	assert.Empty(t, sessions.rotated)
+	assert.Empty(t, sessions.revoked)
+	assert.Empty(t, tokens.issued)
+
+	longest := strings.Repeat("r", 256)
+	callAuth(handler.Refresh, `{"refresh_token":"`+longest+`"}`)
+	callAuth(handler.Logout, `{"refresh_token":"`+longest+`"}`)
+	assert.Equal(t, []string{longest}, sessions.rotated)
+	assert.Equal(t, []string{longest}, sessions.revoked)
+}

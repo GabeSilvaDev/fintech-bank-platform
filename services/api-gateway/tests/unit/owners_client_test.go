@@ -2,9 +2,11 @@ package unit
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -539,12 +541,169 @@ func TestOwnerClientReturnsTheCallersErrorWhenAlreadyCancelled(t *testing.T) {
 	_, err := client.Owner(ctx, accountID)
 
 	assert.ErrorIs(t, err, context.Canceled)
-	<-server.entered
+	assert.Equal(t, 0, server.callCount())
+
 	close(server.release)
 	got, err := client.Owner(context.Background(), accountID)
 	require.NoError(t, err)
 	assert.Equal(t, userID, got)
 	assert.Equal(t, 1, server.callCount())
+
+	got, err = client.Owner(ctx, accountID)
+	require.NoError(t, err)
+	assert.Equal(t, userID, got)
+	assert.Equal(t, 1, server.callCount())
+}
+
+func TestOwnerClientAnswersACancelledCallerFromRememberedUnknownAccounts(t *testing.T) {
+	server := newOwnerServer()
+	client, _ := ownerClient(t, server)
+	client.WithNegativeTTL(5 * time.Second)
+	accountID := uuid.New()
+	_, err := client.Owner(context.Background(), accountID)
+	require.ErrorIs(t, err, contracts.ErrAccountNotFound)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err = client.Owner(ctx, accountID)
+
+	assert.ErrorIs(t, err, contracts.ErrAccountNotFound)
+	_, err = client.Owner(ctx, uuid.New())
+	assert.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, 1, server.callCount())
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+func memoryOwnerClient(known map[uuid.UUID]uuid.UUID, calls *int, panics func(int) bool) (*owners.Client, *fakeClock) {
+	var mu sync.Mutex
+	clock := &fakeClock{now: time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)}
+	base, _ := url.Parse("http://accounts.test")
+	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		mu.Lock()
+		*calls++
+		call := *calls
+		mu.Unlock()
+		if panics != nil && panics(call) {
+			panic("transport exploded")
+		}
+		for accountID, userID := range known {
+			if r.URL.Path == "/accounts/"+accountID.String()+"/owner" {
+				return memoryResponse(http.StatusOK, ownerBody(accountID, userID)), nil
+			}
+		}
+		return memoryResponse(http.StatusNotFound, notFoundBody), nil
+	})
+	return owners.NewClient(base, time.Second, time.Minute).WithClock(clock.Now).WithTransport(transport), clock
+}
+
+func memoryResponse(status int, body string) *http.Response {
+	return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(body))}
+}
+
+func TestOwnerClientTurnsAPanickingLookupIntoBadGateway(t *testing.T) {
+	accountID, userID := uuid.New(), uuid.New()
+	calls := 0
+	client, _ := memoryOwnerClient(map[uuid.UUID]uuid.UUID{accountID: userID}, &calls, func(call int) bool { return call == 1 })
+	client.WithNegativeTTL(time.Minute)
+
+	got, err := client.Owner(context.Background(), accountID)
+
+	assert.Equal(t, uuid.Nil, got)
+	appErr := assertAppError(t, err, http.StatusBadGateway, "UPSTREAM_UNAVAILABLE")
+	assert.Equal(t, "account service is unavailable", appErr.Message)
+	got, err = client.Owner(context.Background(), accountID)
+	require.NoError(t, err)
+	assert.Equal(t, userID, got)
+	assert.Equal(t, 2, calls)
+}
+
+func TestOwnerClientReleasesEveryWaiterWhenTheSharedLookupPanics(t *testing.T) {
+	accountID := uuid.New()
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var mu sync.Mutex
+	calls := 0
+	base, _ := url.Parse("http://accounts.test")
+	clock := &signallingClock{fakeClock: fakeClock{now: time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)}, ticks: make(chan struct{}, 64)}
+	client := owners.NewClient(base, 5*time.Second, time.Minute).WithClock(clock.Now).WithNegativeTTL(time.Minute).WithTransport(roundTripFunc(func(*http.Request) (*http.Response, error) {
+		mu.Lock()
+		calls++
+		first := calls == 1
+		mu.Unlock()
+		if first {
+			entered <- struct{}{}
+			<-release
+			panic("transport exploded")
+		}
+		return memoryResponse(http.StatusNotFound, notFoundBody), nil
+	}))
+
+	leader := lookupAsync(client, context.Background(), accountID)
+	<-entered
+	follower := lookupAsync(client, context.Background(), accountID)
+	clock.awaitLookups(t, 2)
+	close(release)
+
+	for _, result := range []<-chan ownerResult{leader, follower} {
+		got := <-result
+		assertAppError(t, got.err, http.StatusBadGateway, "UPSTREAM_UNAVAILABLE")
+	}
+	_, err := client.Owner(context.Background(), accountID)
+	assert.ErrorIs(t, err, contracts.ErrAccountNotFound)
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, 2, calls)
+}
+
+func TestOwnerClientRemembersAThousandUnknownAccountsByDefault(t *testing.T) {
+	calls := 0
+	client, clock := memoryOwnerClient(nil, &calls, nil)
+	client.WithNegativeTTL(time.Minute)
+
+	unknown := make([]uuid.UUID, 1001)
+	for i := range unknown {
+		unknown[i] = uuid.New()
+		clock.Advance(time.Millisecond)
+		_, err := client.Owner(context.Background(), unknown[i])
+		require.ErrorIs(t, err, contracts.ErrAccountNotFound)
+	}
+	require.Equal(t, 1001, calls)
+
+	for _, accountID := range unknown[1:] {
+		_, err := client.Owner(context.Background(), accountID)
+		require.ErrorIs(t, err, contracts.ErrAccountNotFound)
+	}
+	assert.Equal(t, 1001, calls)
+	_, err := client.Owner(context.Background(), unknown[0])
+	assert.ErrorIs(t, err, contracts.ErrAccountNotFound)
+	assert.Equal(t, 1002, calls)
+}
+
+func TestOwnerClientNeverEvictsKnownOwnersForUnknownAccounts(t *testing.T) {
+	known, userID := uuid.New(), uuid.New()
+	calls := 0
+	client, clock := memoryOwnerClient(map[uuid.UUID]uuid.UUID{known: userID}, &calls, nil)
+	client.WithNegativeTTL(5 * time.Second).WithMaxEntries(1).WithMaxNegativeEntries(1)
+
+	_, err := client.Owner(context.Background(), known)
+	require.NoError(t, err)
+	clock.Advance(58 * time.Second)
+	for i := 0; i < 3; i++ {
+		clock.Advance(time.Millisecond)
+		_, err := client.Owner(context.Background(), uuid.New())
+		require.ErrorIs(t, err, contracts.ErrAccountNotFound)
+	}
+	assert.Equal(t, 4, calls)
+
+	got, err := client.Owner(context.Background(), known)
+	require.NoError(t, err)
+	assert.Equal(t, userID, got)
+	assert.Equal(t, 4, calls)
 }
 
 func TestOwnerClientRemembersAnUnknownAccountBriefly(t *testing.T) {
@@ -604,11 +763,11 @@ func TestOwnerClientForgetsAnAccountThatDisappearsAfterItsOwnerExpires(t *testin
 	assert.Equal(t, 2, server.callCount())
 }
 
-func TestOwnerClientKeepsUnknownAccountsWithinTheBound(t *testing.T) {
+func TestOwnerClientKeepsUnknownAccountsWithinTheirOwnBound(t *testing.T) {
 	known, userID := uuid.New(), uuid.New()
 	server := newOwnerServer(known, userID)
 	client, clock := ownerClient(t, server)
-	client.WithNegativeTTL(5 * time.Second).WithMaxEntries(2)
+	client.WithNegativeTTL(5 * time.Second).WithMaxNegativeEntries(2)
 
 	_, err := client.Owner(context.Background(), known)
 	require.NoError(t, err)
@@ -622,14 +781,16 @@ func TestOwnerClientKeepsUnknownAccountsWithinTheBound(t *testing.T) {
 	}
 	assert.Equal(t, 6, server.callCount())
 
-	_, err = client.Owner(context.Background(), unknown[4])
-	assert.ErrorIs(t, err, contracts.ErrAccountNotFound)
+	for _, accountID := range unknown[3:] {
+		_, err = client.Owner(context.Background(), accountID)
+		assert.ErrorIs(t, err, contracts.ErrAccountNotFound)
+	}
 	got, err := client.Owner(context.Background(), known)
 	require.NoError(t, err)
 	assert.Equal(t, userID, got)
 	assert.Equal(t, 6, server.callCount())
 
-	_, err = client.Owner(context.Background(), unknown[3])
+	_, err = client.Owner(context.Background(), unknown[2])
 	assert.ErrorIs(t, err, contracts.ErrAccountNotFound)
 	assert.Equal(t, 7, server.callCount())
 }

@@ -273,8 +273,8 @@ paths:
           $ref: '#/components/responses/InvalidJSON'
         '401':
           description: |
-            The refresh token is unknown, expired, revoked or was already used (`INVALID_SESSION`), with
-            `WWW-Authenticate: Bearer`. Log in again.
+            The refresh token is unknown, expired, revoked, was already used or is longer than 256 bytes
+            (`INVALID_SESSION`), with `WWW-Authenticate: Bearer`. Log in again.
           headers:
             X-Request-ID:
               $ref: '#/components/headers/XRequestID'
@@ -297,6 +297,8 @@ paths:
           $ref: '#/components/responses/TooManyRequests'
         '502':
           $ref: '#/components/responses/UpstreamUnavailable'
+        '503':
+          $ref: '#/components/responses/ServiceBusy'
         default:
           $ref: '#/components/responses/InternalError'
   /api/v1/auth/logout:
@@ -308,7 +310,8 @@ paths:
       description: |
         Revokes the session of the refresh token: it and every refresh token issued from the same login or
         registration stop working. Access tokens already issued stay valid until they expire. An unknown, expired or
-        already revoked refresh token also answers `204`. Shares the stricter authentication rate limit.
+        already revoked refresh token also answers `204`, as does one longer than 256 bytes, which is never sent to
+        the account service. Shares the stricter authentication rate limit.
       parameters:
         - $ref: '#/components/parameters/RequestId'
       requestBody:
@@ -333,6 +336,8 @@ paths:
           $ref: '#/components/responses/TooManyRequests'
         '502':
           $ref: '#/components/responses/UpstreamUnavailable'
+        '503':
+          $ref: '#/components/responses/ServiceBusy'
         default:
           $ref: '#/components/responses/InternalError'
   /api/v1/accounts:
@@ -1294,8 +1299,9 @@ components:
               message: account service is unavailable
     ServiceBusy:
       description: |
-        The account service is already hashing as many passwords as it allows at once and could not start this one
-        within a short wait (`SERVICE_BUSY`). Nothing was stored; retry after `Retry-After` seconds.
+        The account service cannot take the request right now (`SERVICE_BUSY`): it is already hashing as many
+        passwords as it allows at once and could not start this one within a short wait, or (login) it could not read
+        or write the e-mail's failed-login counter. Nothing was stored; retry after `Retry-After` seconds.
       headers:
         X-Request-ID:
           $ref: '#/components/headers/XRequestID'

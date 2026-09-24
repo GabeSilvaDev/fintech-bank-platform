@@ -383,6 +383,18 @@ func (s *AuthTestSuite) TestRefreshAndLogoutValidateWithoutCallingTheAccountServ
 	s.Equal(0, s.accounts.sessionCalls)
 }
 
+func (s *AuthTestSuite) TestOversizedRefreshTokensNeverReachTheAccountService() {
+	oversized := strings.Repeat("r", 257)
+
+	s.WithoutToken().Post("/api/v1/auth/refresh", refreshToken(oversized)).
+		AssertUnauthorized().
+		AssertErrorCode("INVALID_SESSION").
+		AssertHeader("WWW-Authenticate", "Bearer")
+	s.Post("/api/v1/auth/logout", refreshToken(oversized)).AssertNoContent()
+
+	s.Equal(0, s.accounts.sessionCalls)
+}
+
 func (s *AuthTestSuite) TestLoginForwardsALockout() {
 	s.accounts.lockedFor = "840"
 
