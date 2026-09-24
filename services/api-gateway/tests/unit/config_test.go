@@ -104,7 +104,7 @@ func TestConfigServerTrustedProxyHopsNegativeFallsBack(t *testing.T) {
 
 func TestConfigCORSWithEnvVars(t *testing.T) {
 	os.Setenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000,http://localhost:8080")
-	os.Setenv("CORS_ALLOW_CREDENTIALS", "false")
+	os.Setenv("CORS_ALLOW_CREDENTIALS", "true")
 	os.Setenv("CORS_MAX_AGE", "600")
 	defer func() {
 		os.Unsetenv("CORS_ALLOWED_ORIGINS")
@@ -115,7 +115,7 @@ func TestConfigCORSWithEnvVars(t *testing.T) {
 	cfg, _ := config.New()
 
 	assert.Len(t, cfg.CORS.AllowedOrigins, 2)
-	assert.False(t, cfg.CORS.AllowCredentials)
+	assert.True(t, cfg.CORS.AllowCredentials)
 	assert.Equal(t, 600, cfg.CORS.MaxAge)
 }
 
@@ -141,8 +141,9 @@ func TestConfigDefaults(t *testing.T) {
 
 	assert.NotEmpty(t, cfg.Server.Host)
 	assert.NotEmpty(t, cfg.Server.Port)
-	assert.NotEmpty(t, cfg.CORS.AllowedOrigins)
-	assert.NotEmpty(t, cfg.CORS.AllowedMethods)
+	assert.Equal(t, []string{"*"}, cfg.CORS.AllowedOrigins)
+	assert.Equal(t, []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}, cfg.CORS.AllowedMethods)
+	assert.False(t, cfg.CORS.AllowCredentials)
 	assert.Contains(t, cfg.CORS.ExposedHeaders, "X-Next-Before")
 	assert.Greater(t, cfg.RateLimit.Requests, 0)
 	assert.Greater(t, cfg.RateLimit.Window, time.Duration(0))

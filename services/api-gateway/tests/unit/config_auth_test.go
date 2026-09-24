@@ -104,6 +104,27 @@ func TestConfigAuthFromEnv(t *testing.T) {
 	assert.Equal(t, 5*time.Minute, cfg.AuthRateLimit.Window)
 }
 
+func TestConfigAcceptsATokenLifetimeOfUpToADay(t *testing.T) {
+	t.Setenv("JWT_TTL", "24h")
+
+	cfg, err := config.New()
+
+	require.NoError(t, err)
+	assert.Equal(t, 24*time.Hour, cfg.Auth.TokenTTL)
+	assert.Equal(t, 24*time.Hour, config.MaxTokenTTL)
+}
+
+func TestConfigRefusesATokenLifetimeLongerThanADay(t *testing.T) {
+	for _, ttl := range []string{"24h0m1s", "25h", "720h"} {
+		t.Setenv("JWT_TTL", ttl)
+
+		cfg, err := config.New()
+
+		assert.ErrorIs(t, err, config.ErrLongTokenTTL, ttl)
+		assert.Nil(t, cfg)
+	}
+}
+
 func TestConfigAuthNonPositiveValuesFallBack(t *testing.T) {
 	for _, value := range []string{"0", "-1"} {
 		t.Setenv("JWT_TTL", value+"s")

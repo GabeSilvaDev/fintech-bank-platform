@@ -25,9 +25,13 @@ type Config struct {
 const (
 	minJWTSecretBytes    = 32
 	DevelopmentJWTSecret = "dev-only-jwt-secret-change-me-0123456789"
+	MaxTokenTTL          = 24 * time.Hour
 )
 
-var ErrWeakJWTSecret = errors.New("JWT_SECRET must be set to at least 32 bytes")
+var (
+	ErrWeakJWTSecret = errors.New("JWT_SECRET must be set to at least 32 bytes")
+	ErrLongTokenTTL  = errors.New("JWT_TTL must not exceed 24h")
+)
 
 func New() (*Config, error) {
 	_ = godotenv.Load()
@@ -71,10 +75,10 @@ func loadServerConfig() contracts.ServerConfig {
 func loadCORSConfig() contracts.CORSConfig {
 	return contracts.CORSConfig{
 		AllowedOrigins:   env.SplitAndTrim(env.Get("CORS_ALLOWED_ORIGINS", "*")),
-		AllowedMethods:   env.SplitAndTrim(env.Get("CORS_ALLOWED_METHODS", "GET,POST,PUT,DELETE,OPTIONS")),
+		AllowedMethods:   env.SplitAndTrim(env.Get("CORS_ALLOWED_METHODS", "GET,POST,PUT,PATCH,DELETE,OPTIONS")),
 		AllowedHeaders:   env.SplitAndTrim(env.Get("CORS_ALLOWED_HEADERS", "Accept,Authorization,Content-Type,X-Request-ID")),
 		ExposedHeaders:   env.SplitAndTrim(env.Get("CORS_EXPOSED_HEADERS", "Link,X-Next-Before")),
-		AllowCredentials: env.GetBool("CORS_ALLOW_CREDENTIALS", true),
+		AllowCredentials: env.GetBool("CORS_ALLOW_CREDENTIALS", false),
 		MaxAge:           env.GetInt("CORS_MAX_AGE", 300),
 	}
 }
@@ -119,10 +123,15 @@ func loadAuthConfig() (contracts.AuthConfig, error) {
 		return contracts.AuthConfig{}, ErrWeakJWTSecret
 	}
 
+	ttl := positiveDuration("JWT_TTL", time.Hour)
+	if ttl > MaxTokenTTL {
+		return contracts.AuthConfig{}, ErrLongTokenTTL
+	}
+
 	return contracts.AuthConfig{
 		JWTSecret:         secret,
 		DevelopmentSecret: secret == DevelopmentJWTSecret,
-		TokenTTL:          positiveDuration("JWT_TTL", time.Hour),
+		TokenTTL:          ttl,
 		OwnerCacheTTL:     positiveDuration("OWNER_CACHE_TTL", time.Minute),
 	}, nil
 }
