@@ -24,7 +24,6 @@ func SetupRouter(router *chi.Mux, deps Dependencies) {
 	router.Use(middleware.RequestID)
 	router.Use(tracing.Middleware)
 	router.Use(deps.Metrics.Middleware)
-	router.Use(chiMiddleware.RealIP)
 	router.Use(middleware.Logger(deps.Logger))
 	router.Use(middleware.Recovery(deps.Logger))
 	router.Use(chiMiddleware.StripSlashes)
