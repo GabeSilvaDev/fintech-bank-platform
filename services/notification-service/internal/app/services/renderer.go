@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
-	"strconv"
 	"strings"
 	"text/template"
 
@@ -62,16 +61,13 @@ func (r *Renderer) Render(kind string, data map[string]string) (Rendered, error)
 }
 
 func FormatBRL(amount domain.Amount) string {
-	cents := amount.Cents()
+	text := amount.String()
 	sign := ""
-	var magnitude uint64
-	if cents < 0 {
+	if strings.HasPrefix(text, "-") {
 		sign = "-"
-		magnitude = uint64(-(cents + 1)) + 1
-	} else {
-		magnitude = uint64(cents)
+		text = text[1:]
 	}
-	whole := strconv.FormatUint(magnitude/100, 10)
+	whole, cents, _ := strings.Cut(text, ".")
 	var grouped strings.Builder
 	for i, digit := range whole {
 		if i > 0 && (len(whole)-i)%3 == 0 {
@@ -79,5 +75,5 @@ func FormatBRL(amount domain.Amount) string {
 		}
 		grouped.WriteRune(digit)
 	}
-	return fmt.Sprintf("%sR$ %s,%02d", sign, grouped.String(), magnitude%100)
+	return sign + "R$ " + grouped.String() + "," + cents
 }
