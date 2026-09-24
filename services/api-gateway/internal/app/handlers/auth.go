@@ -4,12 +4,14 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/fintech-bank-platform/api-gateway/internal/contracts"
 	apperrors "github.com/fintech-bank-platform/pkg/errors"
 	"github.com/fintech-bank-platform/pkg/response"
 	"github.com/fintech-bank-platform/pkg/validation"
 	"github.com/go-playground/validator/v10"
+	"github.com/google/uuid"
 )
 
 const (
@@ -21,11 +23,12 @@ const (
 
 type AuthHandler struct {
 	identities contracts.IdentityProvider
+	sessions   contracts.SessionProvider
 	tokens     contracts.TokenIssuer
 }
 
-func NewAuthHandler(identities contracts.IdentityProvider, tokens contracts.TokenIssuer) *AuthHandler {
-	return &AuthHandler{identities: identities, tokens: tokens}
+func NewAuthHandler(identities contracts.IdentityProvider, sessions contracts.SessionProvider, tokens contracts.TokenIssuer) *AuthHandler {
+	return &AuthHandler{identities: identities, sessions: sessions, tokens: tokens}
 }
 
 type credentialsRequest struct {
@@ -33,11 +36,17 @@ type credentialsRequest struct {
 	Password string `json:"password"`
 }
 
+type refreshTokenRequest struct {
+	RefreshToken string `json:"refresh_token"`
+}
+
 type tokenResponse struct {
-	UserID      string `json:"user_id,omitempty"`
-	AccessToken string `json:"access_token"`
-	TokenType   string `json:"token_type"`
-	ExpiresIn   int    `json:"expires_in"`
+	UserID           string `json:"user_id,omitempty"`
+	AccessToken      string `json:"access_token"`
+	TokenType        string `json:"token_type"`
+	ExpiresIn        int    `json:"expires_in"`
+	RefreshToken     string `json:"refresh_token"`
+	RefreshExpiresIn int    `json:"refresh_expires_in"`
 }
 
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
@@ -53,13 +62,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, expiresIn, err := h.tokens.Issue(userID)
-	if err != nil {
-		response.FromError(w, err)
-		return
-	}
-
-	response.Created(w, tokenResponse{UserID: userID.String(), AccessToken: token, TokenType: bearerTokenType, ExpiresIn: expiresIn})
+	h.startSession(w, r, http.StatusCreated, userID, true)
 }
 
 func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
@@ -75,20 +78,99 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.startSession(w, r, http.StatusOK, userID, false)
+}
+
+func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
+	refreshToken, err := decodeRefreshToken(r)
+	if err != nil {
+		response.FromError(w, err)
+		return
+	}
+
+	userID, session, err := h.sessions.RotateSession(r.Context(), refreshToken)
+	if err != nil {
+		identityFailure(w, err)
+		return
+	}
+
+	h.respondWithTokens(w, http.StatusOK, userID, session, false)
+}
+
+func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	refreshToken, err := decodeRefreshToken(r)
+	if err != nil {
+		response.FromError(w, err)
+		return
+	}
+
+	if err := h.sessions.RevokeSession(r.Context(), refreshToken); err != nil {
+		identityFailure(w, err)
+		return
+	}
+
+	response.NoContent(w)
+}
+
+func (h *AuthHandler) startSession(w http.ResponseWriter, r *http.Request, status int, userID uuid.UUID, withUserID bool) {
+	session, err := h.sessions.StartSession(r.Context(), userID)
+	if err != nil {
+		identityFailure(w, err)
+		return
+	}
+
+	h.respondWithTokens(w, status, userID, session, withUserID)
+}
+
+func (h *AuthHandler) respondWithTokens(w http.ResponseWriter, status int, userID uuid.UUID, session contracts.Session, withUserID bool) {
 	token, expiresIn, err := h.tokens.Issue(userID)
 	if err != nil {
 		response.FromError(w, err)
 		return
 	}
 
-	response.OK(w, tokenResponse{AccessToken: token, TokenType: bearerTokenType, ExpiresIn: expiresIn})
+	body := tokenResponse{
+		AccessToken:      token,
+		TokenType:        bearerTokenType,
+		ExpiresIn:        expiresIn,
+		RefreshToken:     session.RefreshToken,
+		RefreshExpiresIn: secondsUntil(session.ExpiresAt),
+	}
+	if withUserID {
+		body.UserID = userID.String()
+	}
+	response.Success(w, status, body)
+}
+
+func secondsUntil(t time.Time) int {
+	if seconds := int(time.Until(t) / time.Second); seconds > 0 {
+		return seconds
+	}
+	return 0
 }
 
 func identityFailure(w http.ResponseWriter, err error) {
-	if apperrors.GetHTTPStatus(err) == http.StatusUnauthorized {
+	switch apperrors.GetHTTPStatus(err) {
+	case http.StatusUnauthorized:
 		w.Header().Set("WWW-Authenticate", bearerTokenType)
+	case http.StatusTooManyRequests, http.StatusServiceUnavailable:
+		var retryAfter contracts.RetryAfter
+		if errors.As(err, &retryAfter) {
+			w.Header().Set("Retry-After", string(retryAfter))
+		}
 	}
 	response.FromError(w, err)
+}
+
+func decodeRefreshToken(r *http.Request) (string, error) {
+	var req refreshTokenRequest
+	if err := decodeLimited(r, &req, maxAuthBodyBytes, "request body exceeds 16 KiB"); err != nil {
+		return "", err
+	}
+	if req.RefreshToken == "" {
+		return "", apperrors.UnprocessableEntity("VALIDATION_ERROR", "request validation failed").WithDetail("refresh_token", "required")
+	}
+	return req.RefreshToken, nil
 }
 
 func decodeCredentials(r *http.Request, rules func(credentialsRequest) map[string]string) (credentialsRequest, error) {

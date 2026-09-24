@@ -81,10 +81,8 @@ func SetupRouter(router *chi.Mux, cfg *config.Config, deps Dependencies) {
 	paymentByID := nethttp.StripPrefix("/api/v1", handlers.NewGuardedReadProxy(deps.PaymentService, "payment service", guard, handlers.ReadAccess{Owner: "account_id"}))
 	notificationReads := nethttp.StripPrefix("/api/v1", handlers.NewReadProxy(deps.NotificationService, "notification service"))
 
-	authentication := handlers.NewAuthHandler(
-		identity.NewClient(deps.AccountService, upstreamCallTimeout),
-		auth.NewIssuer(cfg.Auth.JWTSecret, cfg.Auth.TokenTTL),
-	)
+	identities := identity.NewClient(deps.AccountService, upstreamCallTimeout)
+	authentication := handlers.NewAuthHandler(identities, identities, auth.NewIssuer(cfg.Auth.JWTSecret, cfg.Auth.TokenTTL))
 	authLimit := middleware.RateLimit(cfg.AuthRateLimit)
 	requireAuth := auth.RequireAuth(auth.NewVerifier(cfg.Auth.JWTSecret))
 
@@ -95,6 +93,8 @@ func SetupRouter(router *chi.Mux, cfg *config.Config, deps Dependencies) {
 			r.Use(authLimit)
 			r.Post("/auth/register", authentication.Register)
 			r.Post("/auth/login", authentication.Login)
+			r.Post("/auth/refresh", authentication.Refresh)
+			r.Post("/auth/logout", authentication.Logout)
 		})
 
 		r.Group(func(r chi.Router) {

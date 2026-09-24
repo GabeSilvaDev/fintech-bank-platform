@@ -185,6 +185,8 @@ func TestOpenAPIDocumentProtectsEveryOperationButThePublicOnes(t *testing.T) {
 		"GET /api/v1/openapi.yaml":   true,
 		"POST /api/v1/auth/register": true,
 		"POST /api/v1/auth/login":    true,
+		"POST /api/v1/auth/refresh":  true,
+		"POST /api/v1/auth/logout":   true,
 	}
 	protected := 0
 	for path, item := range doc.Paths {
@@ -243,7 +245,34 @@ func TestOpenAPIDocumentsTheGatewayRejections(t *testing.T) {
 	for _, path := range []string{"/api/v1/auth/register", "/api/v1/auth/login"} {
 		assert.Equal(t, "#/components/responses/ServiceBusy", reference(operation(path, "post"), "503"), path)
 	}
+	assert.Equal(t, "#/components/responses/LoginTooManyRequests", reference(operation("/api/v1/auth/login", "post"), "429"))
+	for _, path := range []string{"/api/v1/auth/refresh", "/api/v1/auth/logout"} {
+		assert.Equal(t, "#/components/responses/RefreshTokenRequired", reference(operation(path, "post"), "422"), path)
+		assert.Equal(t, "#/components/responses/UpstreamUnavailable", reference(operation(path, "post"), "502"), path)
+	}
+	assert.Contains(t, operation("/api/v1/auth/refresh", "post").Responses, "401")
+	assert.Contains(t, operation("/api/v1/auth/logout", "post").Responses, "204")
 	for _, path := range []string{"/api/v1/accounts/{id}", "/api/v1/accounts/{account_id}/transactions", "/api/v1/accounts/{account_id}/payments"} {
 		assert.Contains(t, operation(path, "get").Responses, "422", path)
 	}
+}
+
+func TestOpenAPIDocumentsRetryAfterAndTheTokenPair(t *testing.T) {
+	var doc struct {
+		Components struct {
+			Responses map[string]struct {
+				Headers map[string]yaml.Node `yaml:"headers"`
+			} `yaml:"responses"`
+			Schemas map[string]struct {
+				Required []string `yaml:"required"`
+			} `yaml:"schemas"`
+		} `yaml:"components"`
+	}
+	require.NoError(t, yaml.Unmarshal(api.Spec, &doc))
+
+	for _, name := range []string{"TooManyRequests", "LoginTooManyRequests", "ServiceBusy"} {
+		assert.Contains(t, doc.Components.Responses[name].Headers, "Retry-After", name)
+	}
+	assert.Subset(t, doc.Components.Schemas["AccessToken"].Required, []string{"access_token", "token_type", "expires_in", "refresh_token", "refresh_expires_in"})
+	assert.Equal(t, []string{"refresh_token"}, doc.Components.Schemas["RefreshTokenRequest"].Required)
 }

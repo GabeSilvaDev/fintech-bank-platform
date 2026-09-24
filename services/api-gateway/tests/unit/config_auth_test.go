@@ -83,14 +83,15 @@ func TestConfigAuthDefaults(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, tests.JWTSecret, cfg.Auth.JWTSecret)
 	assert.False(t, cfg.Auth.DevelopmentSecret)
-	assert.Equal(t, time.Hour, cfg.Auth.TokenTTL)
+	assert.Equal(t, 15*time.Minute, cfg.Auth.TokenTTL)
+	assert.Equal(t, 15*time.Minute, config.DefaultTokenTTL)
 	assert.Equal(t, time.Minute, cfg.Auth.OwnerCacheTTL)
 	assert.Equal(t, 10, cfg.AuthRateLimit.Requests)
 	assert.Equal(t, time.Minute, cfg.AuthRateLimit.Window)
 }
 
 func TestConfigAuthFromEnv(t *testing.T) {
-	t.Setenv("JWT_TTL", "15m")
+	t.Setenv("JWT_TTL", "45m")
 	t.Setenv("OWNER_CACHE_TTL", "30s")
 	t.Setenv("AUTH_RATE_LIMIT_REQUESTS", "3")
 	t.Setenv("AUTH_RATE_LIMIT_WINDOW", "5m")
@@ -98,7 +99,7 @@ func TestConfigAuthFromEnv(t *testing.T) {
 	cfg, err := config.New()
 
 	require.NoError(t, err)
-	assert.Equal(t, 15*time.Minute, cfg.Auth.TokenTTL)
+	assert.Equal(t, 45*time.Minute, cfg.Auth.TokenTTL)
 	assert.Equal(t, 30*time.Second, cfg.Auth.OwnerCacheTTL)
 	assert.Equal(t, 3, cfg.AuthRateLimit.Requests)
 	assert.Equal(t, 5*time.Minute, cfg.AuthRateLimit.Window)
@@ -135,7 +136,7 @@ func TestConfigAuthNonPositiveValuesFallBack(t *testing.T) {
 		cfg, err := config.New()
 
 		require.NoError(t, err)
-		assert.Equal(t, time.Hour, cfg.Auth.TokenTTL, value)
+		assert.Equal(t, 15*time.Minute, cfg.Auth.TokenTTL, value)
 		assert.Equal(t, time.Minute, cfg.Auth.OwnerCacheTTL, value)
 		assert.Equal(t, 10, cfg.AuthRateLimit.Requests, value)
 		assert.Equal(t, time.Minute, cfg.AuthRateLimit.Window, value)
@@ -149,6 +150,6 @@ func TestConfigAuthInvalidValuesFallBack(t *testing.T) {
 	cfg, err := config.New()
 
 	require.NoError(t, err)
-	assert.Equal(t, time.Hour, cfg.Auth.TokenTTL)
+	assert.Equal(t, 15*time.Minute, cfg.Auth.TokenTTL)
 	assert.Equal(t, 10, cfg.AuthRateLimit.Requests)
 }

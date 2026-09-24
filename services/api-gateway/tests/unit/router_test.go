@@ -467,6 +467,8 @@ var publicRoutes = map[string]bool{
 	"GET /api/v1/openapi.yaml":   true,
 	"POST /api/v1/auth/register": true,
 	"POST /api/v1/auth/login":    true,
+	"POST /api/v1/auth/refresh":  true,
+	"POST /api/v1/auth/logout":   true,
 }
 
 func accountBody(route, accountID string) string {

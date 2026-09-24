@@ -12,9 +12,11 @@ info:
 
     Reads are proxied to the service that owns the data (account, transaction, payment and notification services).
 
-    Every operation except the health check, this document, registration and login needs an access token from
-    `POST /api/v1/auth/register` or `POST /api/v1/auth/login`, sent as `Authorization: Bearer <access_token>`. A
-    missing, invalid or expired token answers `401`. Each user reaches only their own data: a `user_id` in the path
+    Every operation except the health check, this document and the authentication endpoints (registration, login,
+    refresh and logout) needs an access token from `POST /api/v1/auth/register`, `POST /api/v1/auth/login` or
+    `POST /api/v1/auth/refresh`, sent as `Authorization: Bearer <access_token>`. A missing, invalid or expired token
+    answers `401`. Access tokens are short-lived; the refresh token returned next to them gets a new pair from
+    `POST /api/v1/auth/refresh` and is revoked by `POST /api/v1/auth/logout`. Each user reaches only their own data: a `user_id` in the path
     must be the caller's, and every account named in the path or in a command body (the source account of a
     transfer) must belong to the caller, otherwise the gateway answers `403`.
 
@@ -33,7 +35,9 @@ security:
   - bearerAuth: []
 tags:
   - name: Authentication
-    description: Registration and login. Both issue a bearer access token.
+    description: |
+      Registration, login, refresh and logout. Registration, login and refresh issue a bearer access token and a
+      refresh token.
   - name: Accounts
     description: Account lifecycle commands and account reads.
   - name: Transactions
@@ -93,10 +97,13 @@ paths:
       security: []
       summary: Register a user
       description: |
-        Creates an identity in the account service and returns an access token for the new user. The e-mail is trimmed
-        and lower-cased; it must not be registered yet. The password must have between 8 and 72 bytes. This endpoint
-        and the login share a stricter per-client-IP rate limit (10 requests per minute by default) on top of the
-        global one.
+        Creates an identity in the account service, starts a session and returns an access token and a refresh token
+        for the new user. The e-mail is trimmed and lower-cased; it must not be registered yet. The password must have
+        between 8 and 72 bytes. The authentication endpoints share a stricter per-client-IP rate limit (10 requests
+        per minute by default) on top of the global one.
+
+        If the session cannot be started after the identity was created, the call answers `502` or `503` even though
+        the account exists; the user can then log in.
       parameters:
         - $ref: '#/components/parameters/RequestId'
       requestBody:
@@ -166,9 +173,10 @@ paths:
       security: []
       summary: Log in
       description: |
-        Checks the e-mail and password with the account service and returns an access token. There are no refresh
-        tokens: log in again when the token expires. Shares the stricter authentication rate limit with the
-        registration.
+        Checks the e-mail and password with the account service, starts a new session and returns an access token and
+        a refresh token. After too many failed attempts for an e-mail the account service locks it for a while and
+        every login for it answers `429 TOO_MANY_ATTEMPTS`, even with the right password. Shares the stricter
+        authentication rate limit with the other authentication endpoints.
       parameters:
         - $ref: '#/components/parameters/RequestId'
       requestBody:
@@ -226,11 +234,105 @@ paths:
                   details:
                     password: required
         '429':
-          $ref: '#/components/responses/TooManyRequests'
+          $ref: '#/components/responses/LoginTooManyRequests'
         '502':
           $ref: '#/components/responses/UpstreamUnavailable'
         '503':
           $ref: '#/components/responses/ServiceBusy'
+        default:
+          $ref: '#/components/responses/InternalError'
+  /api/v1/auth/refresh:
+    post:
+      tags: [Authentication]
+      operationId: refreshSession
+      security: []
+      summary: Refresh the access token
+      description: |
+        Exchanges a refresh token for a new access token and a new refresh token. The refresh token is single use:
+        the one sent stops working, and sending it again revokes the whole session (every refresh token issued from
+        the same login or registration). Shares the stricter authentication rate limit.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshTokenRequest'
+      responses:
+        '200':
+          description: The session was rotated.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccessTokenEnvelope'
+        '400':
+          $ref: '#/components/responses/InvalidJSON'
+        '401':
+          description: |
+            The refresh token is unknown, expired, revoked or was already used (`INVALID_SESSION`), with
+            `WWW-Authenticate: Bearer`. Log in again.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+            WWW-Authenticate:
+              $ref: '#/components/headers/WWWAuthenticate'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+              example:
+                success: false
+                error:
+                  code: INVALID_SESSION
+                  message: refresh token is invalid or expired
+        '413':
+          $ref: '#/components/responses/AuthPayloadTooLarge'
+        '422':
+          $ref: '#/components/responses/RefreshTokenRequired'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/UpstreamUnavailable'
+        default:
+          $ref: '#/components/responses/InternalError'
+  /api/v1/auth/logout:
+    post:
+      tags: [Authentication]
+      operationId: logout
+      security: []
+      summary: Log out
+      description: |
+        Revokes the session of the refresh token: it and every refresh token issued from the same login or
+        registration stop working. Access tokens already issued stay valid until they expire. An unknown, expired or
+        already revoked refresh token also answers `204`. Shares the stricter authentication rate limit.
+      parameters:
+        - $ref: '#/components/parameters/RequestId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshTokenRequest'
+      responses:
+        '204':
+          description: The session is revoked.
+          headers:
+            X-Request-ID:
+              $ref: '#/components/headers/XRequestID'
+        '400':
+          $ref: '#/components/responses/InvalidJSON'
+        '413':
+          $ref: '#/components/responses/AuthPayloadTooLarge'
+        '422':
+          $ref: '#/components/responses/RefreshTokenRequired'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '502':
+          $ref: '#/components/responses/UpstreamUnavailable'
         default:
           $ref: '#/components/responses/InternalError'
   /api/v1/accounts:
@@ -827,8 +929,9 @@ components:
       scheme: bearer
       bearerFormat: JWT
       description: |
-        HS256 access token issued by `POST /api/v1/auth/register` and `POST /api/v1/auth/login`. It identifies the
-        user in `sub` and expires after `expires_in` seconds; there are no refresh tokens.
+        HS256 access token issued by `POST /api/v1/auth/register`, `POST /api/v1/auth/login` and
+        `POST /api/v1/auth/refresh`. It identifies the user in `sub` and expires after `expires_in` seconds; use the
+        refresh token to get a new one.
   parameters:
     RequestId:
       name: X-Request-ID
@@ -935,6 +1038,11 @@ components:
       description: Seconds to wait before retrying (the length of the rate limit window).
       schema:
         type: integer
+    RetryAfterSeconds:
+      description: Seconds to wait before retrying.
+      schema:
+        type: integer
+        minimum: 0
     RateLimitLimit:
       description: Requests allowed per window for the client IP.
       schema:
@@ -1129,6 +1237,47 @@ components:
             error:
               code: RATE_LIMIT_EXCEEDED
               message: Too many requests
+    LoginTooManyRequests:
+      description: |
+        Either the client IP exceeded the rate limit (`RATE_LIMIT_EXCEEDED`, with the `X-RateLimit-*` headers) or the
+        e-mail is locked after too many failed attempts (`TOO_MANY_ATTEMPTS`). `Retry-After` gives the seconds to wait
+        in both cases.
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+        Retry-After:
+          $ref: '#/components/headers/RetryAfterSeconds'
+        X-RateLimit-Limit:
+          $ref: '#/components/headers/RateLimitLimit'
+        X-RateLimit-Remaining:
+          $ref: '#/components/headers/RateLimitRemaining'
+        X-RateLimit-Reset:
+          $ref: '#/components/headers/RateLimitReset'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            success: false
+            error:
+              code: TOO_MANY_ATTEMPTS
+              message: too many failed attempts; try again later
+    RefreshTokenRequired:
+      description: The `refresh_token` is missing or empty (`VALIDATION_ERROR`, `details` maps it to `required`).
+      headers:
+        X-Request-ID:
+          $ref: '#/components/headers/XRequestID'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorEnvelope'
+          example:
+            success: false
+            error:
+              code: VALIDATION_ERROR
+              message: request validation failed
+              details:
+                refresh_token: required
     UpstreamUnavailable:
       description: The service that owns the data could not be reached (`UPSTREAM_UNAVAILABLE`).
       headers:
@@ -1146,10 +1295,12 @@ components:
     ServiceBusy:
       description: |
         The account service is already hashing as many passwords as it allows at once and could not start this one
-        within a short wait (`SERVICE_BUSY`). Nothing was stored; retry after a short pause.
+        within a short wait (`SERVICE_BUSY`). Nothing was stored; retry after `Retry-After` seconds.
       headers:
         X-Request-ID:
           $ref: '#/components/headers/XRequestID'
+        Retry-After:
+          $ref: '#/components/headers/RetryAfterSeconds'
       content:
         application/json:
           schema:
@@ -1293,9 +1444,18 @@ components:
           type: string
           format: password
           minLength: 1
+    RefreshTokenRequest:
+      type: object
+      additionalProperties: false
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+          minLength: 1
+          description: A refresh token from registration, login or a previous refresh.
     AccessToken:
       type: object
-      required: [access_token, token_type, expires_in]
+      required: [access_token, token_type, expires_in, refresh_token, refresh_expires_in]
       properties:
         access_token:
           type: string
@@ -1305,8 +1465,16 @@ components:
           const: Bearer
         expires_in:
           type: integer
-          description: Seconds until the token expires.
-          examples: [3600]
+          description: Seconds until the access token expires.
+          examples: [900]
+        refresh_token:
+          type: string
+          description: Opaque single-use token for `POST /api/v1/auth/refresh` and `POST /api/v1/auth/logout`.
+        refresh_expires_in:
+          type: integer
+          minimum: 0
+          description: Seconds until the refresh token expires.
+          examples: [2592000]
     Registered:
       allOf:
         - $ref: '#/components/schemas/AccessToken'

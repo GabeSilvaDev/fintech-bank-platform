@@ -25,6 +25,7 @@ type Config struct {
 const (
 	minJWTSecretBytes    = 32
 	DevelopmentJWTSecret = "dev-only-jwt-secret-change-me-0123456789"
+	DefaultTokenTTL      = 15 * time.Minute
 	MaxTokenTTL          = 24 * time.Hour
 )
 
@@ -123,7 +124,7 @@ func loadAuthConfig() (contracts.AuthConfig, error) {
 		return contracts.AuthConfig{}, ErrWeakJWTSecret
 	}
 
-	ttl := positiveDuration("JWT_TTL", time.Hour)
+	ttl := positiveDuration("JWT_TTL", DefaultTokenTTL)
 	if ttl > MaxTokenTTL {
 		return contracts.AuthConfig{}, ErrLongTokenTTL
 	}
