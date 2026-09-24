@@ -245,13 +245,13 @@ func TestLegacyStoredResultWithNumericAmountsIsReplayed(t *testing.T) {
 		Key:       "k-1",
 		Kind:      "credit",
 		Status:    models.OperationDone,
-		Result:    `{"Credited":{"account_id":"` + account.AccountID.String() + `","amount":10.5,"balance_after":1234.56,"reference":"tx-1","idempotency_key":"k-1","occurred_at":"2026-01-02T03:04:05Z"},"Rejected":null}`,
+		Result:    `{"Credited":{"account_id":"` + account.AccountID.String() + `","amount":10.5,"balance_after":152626798.92,"reference":"tx-1","idempotency_key":"k-1","occurred_at":"2026-01-02T03:04:05Z"},"Rejected":null}`,
 	}
 
 	result, err := h.service.Credit(context.Background(), credit(account.AccountID.String(), 1050))
 
 	assert.NoError(t, err)
 	assert.Equal(t, domain.AmountFromCents(1050), result.Credited.Amount)
-	assert.Equal(t, domain.AmountFromCents(123456), result.Credited.BalanceAfter)
+	assert.Equal(t, domain.AmountFromCents(15262679892), result.Credited.BalanceAfter)
 	assert.Equal(t, 0, h.accounts.CASCalls)
 }

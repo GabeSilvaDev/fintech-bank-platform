@@ -126,4 +126,12 @@ func TestDispatchersDecodeLegacyNumericAmounts(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, events.EventTypes.SubmitPayment, res.Messages[0].Event.Type)
 	assert.Equal(t, int64(5750), *h.repo.Payments[payment.ID].BalanceAfterCents)
+
+	large := h.stored(models.MethodPix, models.StatusPending)
+	reply, err = events.FromJSON([]byte(`{"type":"account.debited","payload":{"account_id":"` + large.AccountID.String() + `","amount":42.5,"balance_after":152626798.92,"reference":"` + models.Reference(large.ID) + `","idempotency_key":"` + models.StepKey(large.ID, models.StepDebit) + `"}}`))
+	assert.NoError(t, err)
+	res, err = replies.Dispatch(context.Background(), reply)
+	assert.NoError(t, err)
+	assert.Equal(t, events.EventTypes.SubmitPayment, res.Messages[0].Event.Type)
+	assert.Equal(t, int64(15262679892), *h.repo.Payments[large.ID].BalanceAfterCents)
 }
