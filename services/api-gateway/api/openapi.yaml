@@ -566,9 +566,11 @@ paths:
       operationId: getTransaction
       summary: Get a transaction
       description: |
-        Fetched from the transaction service and returned unchanged only when its `account_id` or, for a transfer, its
-        `counterparty_id` belongs to the caller; otherwise the gateway answers `403`. Returns no balances. An unknown
-        transaction keeps the service's `404`.
+        Fetched from the transaction service and returned only when its `account_id` or, for a transfer, its
+        `counterparty_id` belongs to the caller; otherwise the gateway answers `403`. The owner of `account_id` gets the
+        transaction unchanged; a caller who owns only `counterparty_id` (the recipient of a transfer) gets it without
+        the sender's `description` and `idempotency_key`. Returns no balances. An unknown transaction keeps the
+        service's `404`.
       parameters:
         - $ref: '#/components/parameters/RequestId'
       responses:
@@ -1630,7 +1632,7 @@ components:
             $ref: '#/components/schemas/Account'
     Transaction:
       type: object
-      required: [transaction_id, type, status, account_id, amount, currency, idempotency_key, created_at, updated_at]
+      required: [transaction_id, type, status, account_id, amount, currency, created_at, updated_at]
       properties:
         transaction_id:
           type: string
@@ -1661,8 +1663,12 @@ components:
           examples: [BRL]
         description:
           type: string
+          description: Omitted on `GET /transactions/{id}` when the caller owns only `counterparty_id`.
         idempotency_key:
           type: string
+          description: |
+            Always present in lists and for the owner of `account_id`; omitted on `GET /transactions/{id}` when the
+            caller owns only `counterparty_id`.
         failure_reason:
           type: string
           description: Why the transaction failed, when it did.

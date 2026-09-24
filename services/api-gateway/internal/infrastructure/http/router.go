@@ -72,9 +72,13 @@ func SetupRouter(router *chi.Mux, cfg *config.Config, deps Dependencies) {
 	payment := handlers.NewPaymentHandler(deps.Publisher, guard)
 	accountReads := nethttp.StripPrefix("/api/v1", handlers.NewReadProxy(deps.AccountService, "account service"))
 	transactionReads := nethttp.StripPrefix("/api/v1", handlers.NewReadProxy(deps.TransactionService, "transaction service"))
-	transactionByID := nethttp.StripPrefix("/api/v1", handlers.NewGuardedReadProxy(deps.TransactionService, "transaction service", guard, "account_id", "counterparty_id"))
+	transactionByID := nethttp.StripPrefix("/api/v1", handlers.NewGuardedReadProxy(deps.TransactionService, "transaction service", guard, handlers.ReadAccess{
+		Owner:              "account_id",
+		Counterparty:       "counterparty_id",
+		CounterpartyHidden: []string{"description", "idempotency_key"},
+	}))
 	paymentReads := nethttp.StripPrefix("/api/v1", handlers.NewReadProxy(deps.PaymentService, "payment service"))
-	paymentByID := nethttp.StripPrefix("/api/v1", handlers.NewGuardedReadProxy(deps.PaymentService, "payment service", guard, "account_id"))
+	paymentByID := nethttp.StripPrefix("/api/v1", handlers.NewGuardedReadProxy(deps.PaymentService, "payment service", guard, handlers.ReadAccess{Owner: "account_id"}))
 	notificationReads := nethttp.StripPrefix("/api/v1", handlers.NewReadProxy(deps.NotificationService, "notification service"))
 
 	authentication := handlers.NewAuthHandler(

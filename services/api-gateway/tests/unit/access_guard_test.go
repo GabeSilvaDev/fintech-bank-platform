@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -201,7 +202,11 @@ func guardedReadRouter(t *testing.T, upstream *guardedUpstream, owners *tests.Fa
 func guardedReadRouterFor(upstream string, owners *tests.FakeOwners, userID *uuid.UUID) http.Handler {
 	target, _ := url.Parse(upstream)
 	guard := handlers.NewAccessGuard(owners)
-	proxy := http.StripPrefix("/api/v1", handlers.NewGuardedReadProxy(target, "transaction service", guard, "account_id", "counterparty_id"))
+	proxy := http.StripPrefix("/api/v1", handlers.NewGuardedReadProxy(target, "transaction service", guard, handlers.ReadAccess{
+		Owner:              "account_id",
+		Counterparty:       "counterparty_id",
+		CounterpartyHidden: []string{"description", "idempotency_key"},
+	}))
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(func(next http.Handler) http.Handler {
@@ -255,6 +260,71 @@ func TestGuardedReadReturnsTheBodyToTheCounterparty(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, body, rec.Body.String())
 	assert.Len(t, owners.Lookups, 2)
+}
+
+func transferBody(from, to string) string {
+	return `{"success":true,"data":{"transaction_id":"t1","type":"transfer","account_id":"` + from + `","counterparty_id":"` + to +
+		`","amount":"10.00","currency":"BRL","description":"rent <march> & fees","idempotency_key":"sender-key-1"}}`
+}
+
+func TestGuardedReadShowsTheWholeTransferToTheSender(t *testing.T) {
+	userID := uuid.New()
+	owners := tests.NewFakeOwners()
+	own := owners.Own(tests.UUID(), userID)
+	body := transferBody(own, owners.Own(tests.UUID(), uuid.New()))
+
+	rec := guardedGet(guardedReadRouter(t, &guardedUpstream{status: http.StatusOK, body: body}, owners, &userID))
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, body, rec.Body.String())
+	assert.Len(t, owners.Lookups, 1)
+}
+
+func TestGuardedReadShowsTheWholeTransferBetweenTheCallersOwnAccounts(t *testing.T) {
+	userID := uuid.New()
+	owners := tests.NewFakeOwners()
+	body := transferBody(owners.Own(tests.UUID(), userID), owners.Own(tests.UUID(), userID))
+
+	rec := guardedGet(guardedReadRouter(t, &guardedUpstream{status: http.StatusOK, body: body}, owners, &userID))
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, body, rec.Body.String())
+}
+
+func TestGuardedReadHidesSenderOnlyFieldsFromTheCounterparty(t *testing.T) {
+	userID := uuid.New()
+	owners := tests.NewFakeOwners()
+	sender := owners.Own(tests.UUID(), uuid.New())
+	own := owners.Own(tests.UUID(), userID)
+
+	rec := guardedGet(guardedReadRouter(t, &guardedUpstream{status: http.StatusOK, body: transferBody(sender, own)}, owners, &userID))
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.JSONEq(t, `{"success":true,"data":{"transaction_id":"t1","type":"transfer","account_id":"`+sender+`","counterparty_id":"`+own+`","amount":"10.00","currency":"BRL"}}`, rec.Body.String())
+	assert.NotContains(t, rec.Body.String(), "sender-key-1")
+	assert.NotContains(t, rec.Body.String(), "rent")
+	assert.Equal(t, strconv.Itoa(rec.Body.Len()), rec.Header().Get("Content-Length"))
+	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"))
+}
+
+func TestGuardedReadWithoutACounterpartyFieldOnlyServesTheOwner(t *testing.T) {
+	userID := uuid.New()
+	owners := tests.NewFakeOwners()
+	own := owners.Own(tests.UUID(), userID)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true,"data":{"account_id":"` + tests.UUID() + `","counterparty_id":"` + own + `"}}`))
+	}))
+	defer server.Close()
+	target, _ := url.Parse(server.URL)
+	proxy := handlers.NewGuardedReadProxy(target, "payment service", handlers.NewAccessGuard(owners), handlers.ReadAccess{Owner: "account_id"})
+	req := httptest.NewRequest(http.MethodGet, "/payments/p1", nil).WithContext(actingAs(context.Background(), userID))
+	rec := httptest.NewRecorder()
+
+	proxy.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Len(t, owners.Lookups, 1)
 }
 
 func TestGuardedReadForbidsEveryoneElse(t *testing.T) {
@@ -314,8 +384,9 @@ func TestGuardedReadReportsOwnerLookupFailures(t *testing.T) {
 func TestGuardedReadReportsUnusableUpstreamBodies(t *testing.T) {
 	userID := uuid.New()
 	upstreams := map[string]*guardedUpstream{
-		"invalid json": {status: http.StatusOK, body: `{"success":`},
-		"too large":    {status: http.StatusOK, body: `{"success":true,"data":{"note":"` + strings.Repeat("a", 1<<20) + `"}}`},
+		"invalid json":       {status: http.StatusOK, body: `{"success":`},
+		"data not an object": {status: http.StatusOK, body: `{"success":true,"data":["account_id"]}`},
+		"too large":          {status: http.StatusOK, body: `{"success":true,"data":{"note":"` + strings.Repeat("a", 1<<20) + `"}}`},
 		"truncated": {handler: func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Length", "100")
 			w.WriteHeader(http.StatusOK)

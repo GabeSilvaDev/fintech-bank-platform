@@ -159,12 +159,12 @@ func (s *AuthorizationTestSuite) TestPercentEncodedAccountIDsNeverReachAnotherUs
 
 	for _, route := range []struct{ suffix, param string }{{"", "id"}, {"/transactions", "account_id"}, {"/payments", "account_id"}} {
 		s.assertForbidden(s.Get("/api/v1/accounts/" + encode(foreign) + route.suffix))
-		s.Get("/api/v1/accounts/" + encode(own) + route.suffix).
+		s.Get("/api/v1/accounts/"+encode(own)+route.suffix).
 			AssertUnprocessableEntity().
 			AssertErrorCode("VALIDATION_ERROR").
 			AssertJsonPath("error.details."+route.param, "uuid")
 		s.Get("/api/v1/accounts/" + encode(tests.UUID()) + route.suffix).AssertNotFound().AssertErrorCode("ACCOUNT_NOT_FOUND")
-		s.Get("/api/v1/accounts/not%2Da-uuid" + route.suffix).AssertUnprocessableEntity().AssertJsonPath("error.details."+route.param, "uuid")
+		s.Get("/api/v1/accounts/not%2Da-uuid"+route.suffix).AssertUnprocessableEntity().AssertJsonPath("error.details."+route.param, "uuid")
 	}
 	s.Patch("/api/v1/accounts/"+encode(foreign), map[string]string{"status": "blocked"}).AssertUnprocessableEntity()
 	s.Delete("/api/v1/accounts/" + encode(foreign)).AssertUnprocessableEntity()
@@ -175,7 +175,7 @@ func (s *AuthorizationTestSuite) TestPercentEncodedAccountIDsNeverReachAnotherUs
 
 func (s *AuthorizationTestSuite) TestAccountScopedReadsRejectUnparseableIDsAtTheGateway() {
 	for _, route := range []struct{ suffix, param string }{{"", "id"}, {"/transactions", "account_id"}, {"/payments", "account_id"}} {
-		s.Get("/api/v1/accounts/not-a-uuid" + route.suffix).
+		s.Get("/api/v1/accounts/not-a-uuid"+route.suffix).
 			AssertUnprocessableEntity().
 			AssertErrorCode("VALIDATION_ERROR").
 			AssertErrorMessage("request validation failed").
@@ -291,6 +291,24 @@ func (s *AuthorizationTestSuite) TestTransactionReadsNeedTheAccountOrTheCounterp
 	s.assertForbidden(s.Get("/api/v1/transactions/t3"))
 	s.assertForbidden(s.Get("/api/v1/transactions/t4"))
 	s.Get("/api/v1/transactions/t5").AssertNotFound().AssertErrorCode("TRANSACTION_NOT_FOUND")
+}
+
+func (s *AuthorizationTestSuite) TestTransferReadsHideSenderOnlyFieldsFromTheCounterparty() {
+	own := s.OwnedAccount()
+	foreign := s.ForeignAccount()
+	sent := `{"success":true,"data":{"transaction_id":"t1","type":"transfer","account_id":"` + own + `","counterparty_id":"` + foreign + `","description":"rent","idempotency_key":"k-1"}}`
+	received := `{"success":true,"data":{"transaction_id":"t2","type":"transfer","account_id":"` + foreign + `","counterparty_id":"` + own + `","description":"rent","idempotency_key":"k-2"}}`
+	s.upstream.reply("/transactions/t1", http.StatusOK, sent)
+	s.upstream.reply("/transactions/t2", http.StatusOK, received)
+
+	s.Equal(sent, s.Get("/api/v1/transactions/t1").AssertOk().Body())
+	s.Get("/api/v1/transactions/t2").
+		AssertOk().
+		AssertJsonPath("data.transaction_id", "t2").
+		AssertJsonPath("data.account_id", foreign).
+		AssertJsonPath("data.counterparty_id", own).
+		AssertJsonMissing("data.description").
+		AssertJsonMissing("data.idempotency_key")
 }
 
 func (s *AuthorizationTestSuite) TestPaymentReadsNeedTheAccount() {

@@ -21,9 +21,9 @@ func NewReadProxy(upstream *url.URL, serviceName string) *ReadProxy {
 	return newReadProxy(upstream, serviceName, nil)
 }
 
-func NewGuardedReadProxy(upstream *url.URL, serviceName string, guard *AccessGuard, accountFields ...string) *ReadProxy {
+func NewGuardedReadProxy(upstream *url.URL, serviceName string, guard *AccessGuard, access ReadAccess) *ReadProxy {
 	return newReadProxy(upstream, serviceName, func(resp *http.Response) error {
-		return guard.releaseOwned(resp, accountFields)
+		return guard.releaseOwned(resp, access)
 	})
 }
 

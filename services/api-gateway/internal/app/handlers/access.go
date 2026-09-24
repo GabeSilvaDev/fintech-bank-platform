@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 
 	"github.com/fintech-bank-platform/api-gateway/internal/contracts"
 	"github.com/fintech-bank-platform/api-gateway/internal/infrastructure/auth"
@@ -107,7 +108,21 @@ func (g *AccessGuard) ResolveUser(ctx context.Context, requested string) (string
 	return userID.String(), nil
 }
 
-func (g *AccessGuard) releaseOwned(resp *http.Response, fields []string) error {
+type ReadAccess struct {
+	Owner              string
+	Counterparty       string
+	CounterpartyHidden []string
+}
+
+type readView int
+
+const (
+	viewNone readView = iota
+	viewOwner
+	viewCounterparty
+)
+
+func (g *AccessGuard) releaseOwned(resp *http.Response, access ReadAccess) error {
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxGuardedBodyBytes+1))
 	_ = resp.Body.Close()
 	if err != nil {
@@ -117,49 +132,81 @@ func (g *AccessGuard) releaseOwned(resp *http.Response, fields []string) error {
 		return fmt.Errorf("upstream response exceeds %d bytes", maxGuardedBodyBytes)
 	}
 
-	var envelope struct {
-		Data map[string]interface{} `json:"data"`
-	}
+	var envelope map[string]json.RawMessage
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		return err
 	}
+	var data map[string]json.RawMessage
+	if raw, ok := envelope["data"]; ok {
+		if err := json.Unmarshal(raw, &data); err != nil {
+			return err
+		}
+	}
 
-	allowed, err := g.ownsAny(resp.Request.Context(), envelope.Data, fields)
+	view, err := g.view(resp.Request.Context(), data, access)
 	if err != nil {
 		return err
 	}
-	if !allowed {
+	if view == viewNone {
 		return forbidden()
+	}
+	if view == viewCounterparty && hide(data, access.CounterpartyHidden) {
+		envelope["data"], _ = json.Marshal(data)
+		body, _ = json.Marshal(envelope)
+		resp.ContentLength = int64(len(body))
+		resp.Header.Set("Content-Length", strconv.Itoa(len(body)))
 	}
 
 	resp.Body = io.NopCloser(bytes.NewReader(body))
 	return nil
 }
 
-func (g *AccessGuard) ownsAny(ctx context.Context, data map[string]interface{}, fields []string) (bool, error) {
+func hide(data map[string]json.RawMessage, fields []string) bool {
+	hidden := false
+	for _, field := range fields {
+		if _, ok := data[field]; ok {
+			delete(data, field)
+			hidden = true
+		}
+	}
+	return hidden
+}
+
+func (g *AccessGuard) view(ctx context.Context, data map[string]json.RawMessage, access ReadAccess) (readView, error) {
 	userID, err := caller(ctx)
+	if err != nil {
+		return viewNone, err
+	}
+
+	owns, err := g.ownsField(ctx, userID, data, access.Owner)
+	if err != nil || owns {
+		return viewOwner, err
+	}
+	if access.Counterparty == "" {
+		return viewNone, nil
+	}
+	owns, err = g.ownsField(ctx, userID, data, access.Counterparty)
+	if err != nil || owns {
+		return viewCounterparty, err
+	}
+	return viewNone, nil
+}
+
+func (g *AccessGuard) ownsField(ctx context.Context, userID uuid.UUID, data map[string]json.RawMessage, field string) (bool, error) {
+	var raw string
+	_ = json.Unmarshal(data[field], &raw)
+	accountID, err := uuid.Parse(raw)
+	if err != nil {
+		return false, nil
+	}
+	owner, err := g.owners.Owner(ctx, accountID)
+	if errors.Is(err, contracts.ErrAccountNotFound) {
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}
-
-	for _, field := range fields {
-		raw, _ := data[field].(string)
-		accountID, err := uuid.Parse(raw)
-		if err != nil {
-			continue
-		}
-		owner, err := g.owners.Owner(ctx, accountID)
-		if errors.Is(err, contracts.ErrAccountNotFound) {
-			continue
-		}
-		if err != nil {
-			return false, err
-		}
-		if owner == userID {
-			return true, nil
-		}
-	}
-	return false, nil
+	return owner == userID, nil
 }
 
 func (g *AccessGuard) checkOwner(ctx context.Context, accountID uuid.UUID) error {
