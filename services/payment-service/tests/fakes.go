@@ -114,16 +114,20 @@ func (f *FakePaymentRepo) Get(_ context.Context, id uuid.UUID) (*models.Payment,
 	return &copied, nil
 }
 
-func (f *FakePaymentRepo) ListByAccount(_ context.Context, accountID uuid.UUID, limit int) ([]*models.Payment, error) {
+func (f *FakePaymentRepo) ListByAccount(_ context.Context, accountID uuid.UUID, before *time.Time, limit int) ([]*models.Payment, error) {
 	if f.Err != nil {
 		return nil, f.Err
 	}
 	result := []*models.Payment{}
 	for _, payment := range f.Payments {
-		if payment.AccountID == accountID {
-			copied := *payment
-			result = append(result, &copied)
+		if payment.AccountID != accountID {
+			continue
 		}
+		if before != nil && !payment.CreatedAt.Before(*before) {
+			continue
+		}
+		copied := *payment
+		result = append(result, &copied)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt.After(result[j].CreatedAt) })
 	if len(result) > limit {

@@ -23,7 +23,7 @@ const (
 
 type PaymentReader interface {
 	Get(ctx context.Context, id uuid.UUID) (*models.Payment, error)
-	ListByAccount(ctx context.Context, accountID uuid.UUID, limit int) ([]*models.Payment, error)
+	ListByAccount(ctx context.Context, accountID uuid.UUID, before *time.Time, limit int) ([]*models.Payment, error)
 }
 
 type ReadHandler struct {
@@ -87,10 +87,18 @@ func (h *ReadHandler) ListAccountPayments(w http.ResponseWriter, r *http.Request
 		response.FromError(w, err)
 		return
 	}
-	payments, err := h.payments.ListByAccount(r.Context(), accountID, limit)
+	before, err := parseBefore(r.URL.Query().Get("before"))
+	if err != nil {
+		response.FromError(w, err)
+		return
+	}
+	payments, err := h.payments.ListByAccount(r.Context(), accountID, before, limit)
 	if err != nil {
 		response.FromError(w, mapReadError(err))
 		return
+	}
+	if len(payments) == limit {
+		w.Header().Set("X-Next-Before", payments[len(payments)-1].CreatedAt.UTC().Format(time.RFC3339Nano))
 	}
 	items := make([]paymentResponse, 0, len(payments))
 	for _, payment := range payments {
@@ -116,6 +124,17 @@ func parseLimit(raw string) (int, error) {
 		return 0, apperrors.UnprocessableEntity("VALIDATION_ERROR", "request validation failed").WithDetail("limit", "range")
 	}
 	return limit, nil
+}
+
+func parseBefore(raw string) (*time.Time, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		return nil, apperrors.UnprocessableEntity("VALIDATION_ERROR", "request validation failed").WithDetail("before", "datetime")
+	}
+	return &parsed, nil
 }
 
 func mapReadError(err error) error {

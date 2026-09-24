@@ -55,18 +55,18 @@ func TestTransactionRepository(t *testing.T) {
 	deposit := &models.Transaction{ID: uuid.New(), Type: models.TypeDeposit, Status: models.StatusPending, AccountID: to, AmountCents: 500, Currency: "BRL", IdempotencyKey: "dep-1", CreatedAt: later, UpdatedAt: later}
 	require.NoError(t, repo.Create(ctx, deposit))
 
-	list, err := repo.ListByAccount(ctx, to, 10)
+	list, err := repo.ListByAccount(ctx, to, nil, 10)
 	require.NoError(t, err)
 	require.Len(t, list, 2)
 	require.Equal(t, deposit.ID, list[0].ID)
 	require.Equal(t, transfer.ID, list[1].ID)
-	list, err = repo.ListByAccount(ctx, to, 1)
+	list, err = repo.ListByAccount(ctx, to, nil, 1)
 	require.NoError(t, err)
 	require.Len(t, list, 1)
-	list, err = repo.ListByAccount(ctx, from, 10)
+	list, err = repo.ListByAccount(ctx, from, nil, 10)
 	require.NoError(t, err)
 	require.Len(t, list, 1)
-	list, err = repo.ListByAccount(ctx, uuid.New(), 10)
+	list, err = repo.ListByAccount(ctx, uuid.New(), nil, 10)
 	require.NoError(t, err)
 	require.Empty(t, list)
 
@@ -183,7 +183,7 @@ func TestTransactionRepositoryListByAccountOrdersAndSkipsMissing(t *testing.T) {
 	missing := uuid.New()
 	require.NoError(t, session.Query("INSERT INTO transactions_by_account (account_id, created_at, transaction_id) VALUES (?, ?, ?)", gocql.UUID(account), base.Add(4*time.Second), gocql.UUID(missing)).WithContext(ctx).Exec())
 
-	list, err := repo.ListByAccount(ctx, account, 10)
+	list, err := repo.ListByAccount(ctx, account, nil, 10)
 	require.NoError(t, err)
 	require.Len(t, list, 3)
 	require.Equal(t, created[2].ID, list[0].ID)
@@ -205,7 +205,7 @@ func TestTransactionRepositoryListByAccountChunksBeyondHundred(t *testing.T) {
 		ids[i] = tx.ID
 	}
 
-	list, err := repo.ListByAccount(ctx, account, 200)
+	list, err := repo.ListByAccount(ctx, account, nil, 200)
 	require.NoError(t, err)
 	require.Len(t, list, 150)
 	for i, tx := range list {
@@ -213,11 +213,51 @@ func TestTransactionRepositoryListByAccountChunksBeyondHundred(t *testing.T) {
 	}
 }
 
+func TestTransactionRepositoryListByAccountPagesWithBeforeCursor(t *testing.T) {
+	session, _ := throwawayKeyspace(t)
+	repo := database.NewTransactionRepository(session)
+	ctx := context.Background()
+	account := uuid.New()
+	base := time.Now().UTC().Truncate(time.Millisecond)
+
+	created := make([]*models.Transaction, 5)
+	for i := 0; i < 5; i++ {
+		tx := &models.Transaction{ID: uuid.New(), Type: models.TypeDeposit, Status: models.StatusPending, AccountID: account, AmountCents: int64(100 + i), Currency: "BRL", IdempotencyKey: uuid.NewString(), CreatedAt: base.Add(time.Duration(i) * time.Second), UpdatedAt: base.Add(time.Duration(i) * time.Second)}
+		require.NoError(t, repo.Create(ctx, tx))
+		created[i] = tx
+	}
+
+	var seen []uuid.UUID
+	var before *time.Time
+	for i := 0; i < 10; i++ {
+		page, err := repo.ListByAccount(ctx, account, before, 2)
+		require.NoError(t, err)
+		if len(page) == 0 {
+			break
+		}
+		for _, tx := range page {
+			seen = append(seen, tx.ID)
+		}
+		if len(page) < 2 {
+			break
+		}
+		last := page[len(page)-1].CreatedAt
+		before = &last
+	}
+
+	require.Len(t, seen, 5)
+	require.Equal(t, created[4].ID, seen[0])
+	require.Equal(t, created[3].ID, seen[1])
+	require.Equal(t, created[2].ID, seen[2])
+	require.Equal(t, created[1].ID, seen[3])
+	require.Equal(t, created[0].ID, seen[4])
+}
+
 func TestTransactionRepositoryListByAccountEmpty(t *testing.T) {
 	session, _ := throwawayKeyspace(t)
 	repo := database.NewTransactionRepository(session)
 
-	list, err := repo.ListByAccount(context.Background(), uuid.New(), 10)
+	list, err := repo.ListByAccount(context.Background(), uuid.New(), nil, 10)
 	require.NoError(t, err)
 	require.NotNil(t, list)
 	require.Empty(t, list)

@@ -113,16 +113,20 @@ func (f *FakeTransactionRepo) Get(_ context.Context, id uuid.UUID) (*models.Tran
 	return &copied, nil
 }
 
-func (f *FakeTransactionRepo) ListByAccount(_ context.Context, accountID uuid.UUID, limit int) ([]*models.Transaction, error) {
+func (f *FakeTransactionRepo) ListByAccount(_ context.Context, accountID uuid.UUID, before *time.Time, limit int) ([]*models.Transaction, error) {
 	if f.Err != nil {
 		return nil, f.Err
 	}
 	result := []*models.Transaction{}
 	for _, tx := range f.Transactions {
-		if tx.AccountID == accountID || (tx.CounterpartyID != nil && *tx.CounterpartyID == accountID) {
-			copied := *tx
-			result = append(result, &copied)
+		if tx.AccountID != accountID && (tx.CounterpartyID == nil || *tx.CounterpartyID != accountID) {
+			continue
 		}
+		if before != nil && !tx.CreatedAt.Before(*before) {
+			continue
+		}
+		copied := *tx
+		result = append(result, &copied)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].CreatedAt.After(result[j].CreatedAt) })
 	if len(result) > limit {

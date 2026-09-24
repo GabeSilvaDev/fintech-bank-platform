@@ -296,7 +296,7 @@ func TestGetAndListByAccount(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, account, tx.AccountID)
 
-	list, err := h.service.ListByAccount(context.Background(), account, 10)
+	list, err := h.service.ListByAccount(context.Background(), account, nil, 10)
 	assert.NoError(t, err)
 	assert.Len(t, list, 1)
 }

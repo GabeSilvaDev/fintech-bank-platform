@@ -59,14 +59,14 @@ func TestPaymentRepository(t *testing.T) {
 	require.Nil(t, got.TED)
 	require.Equal(t, "ana@example.com", got.PixKey)
 
-	list, err := repo.ListByAccount(ctx, account, 10)
+	list, err := repo.ListByAccount(ctx, account, nil, 10)
 	require.NoError(t, err)
 	require.Len(t, list, 2)
 	require.Equal(t, pix.ID, list[0].ID)
-	list, err = repo.ListByAccount(ctx, account, 1)
+	list, err = repo.ListByAccount(ctx, account, nil, 1)
 	require.NoError(t, err)
 	require.Len(t, list, 1)
-	list, err = repo.ListByAccount(ctx, uuid.New(), 10)
+	list, err = repo.ListByAccount(ctx, uuid.New(), nil, 10)
 	require.NoError(t, err)
 	require.Empty(t, list)
 
@@ -167,7 +167,7 @@ func TestPaymentRepositoryListByAccountOrdersAndSkipsMissing(t *testing.T) {
 	missing := uuid.New()
 	require.NoError(t, session.Query("INSERT INTO payments_by_account (account_id, created_at, payment_id) VALUES (?, ?, ?)", gocql.UUID(account), base.Add(4*time.Second), gocql.UUID(missing)).WithContext(ctx).Exec())
 
-	list, err := repo.ListByAccount(ctx, account, 10)
+	list, err := repo.ListByAccount(ctx, account, nil, 10)
 	require.NoError(t, err)
 	require.Len(t, list, 3)
 	require.Equal(t, created[2].ID, list[0].ID)
@@ -189,7 +189,7 @@ func TestPaymentRepositoryListByAccountChunksBeyondHundred(t *testing.T) {
 		ids[i] = p.ID
 	}
 
-	list, err := repo.ListByAccount(ctx, account, 200)
+	list, err := repo.ListByAccount(ctx, account, nil, 200)
 	require.NoError(t, err)
 	require.Len(t, list, 150)
 	for i, p := range list {
@@ -197,11 +197,51 @@ func TestPaymentRepositoryListByAccountChunksBeyondHundred(t *testing.T) {
 	}
 }
 
+func TestPaymentRepositoryListByAccountPagesWithBeforeCursor(t *testing.T) {
+	session, _ := throwawayKeyspace(t)
+	repo := database.NewPaymentRepository(session)
+	ctx := context.Background()
+	account := uuid.New()
+	base := time.Now().UTC().Truncate(time.Millisecond)
+
+	created := make([]*models.Payment, 5)
+	for i := 0; i < 5; i++ {
+		p := &models.Payment{ID: uuid.New(), AccountID: account, Method: models.MethodPix, Status: models.StatusPending, AmountCents: int64(100 + i), Currency: "BRL", Recipient: "Ana", PixKey: "ana@example.com", IdempotencyKey: uuid.NewString(), CreatedAt: base.Add(time.Duration(i) * time.Second), UpdatedAt: base.Add(time.Duration(i) * time.Second)}
+		require.NoError(t, repo.Create(ctx, p))
+		created[i] = p
+	}
+
+	var seen []uuid.UUID
+	var before *time.Time
+	for i := 0; i < 10; i++ {
+		page, err := repo.ListByAccount(ctx, account, before, 2)
+		require.NoError(t, err)
+		if len(page) == 0 {
+			break
+		}
+		for _, p := range page {
+			seen = append(seen, p.ID)
+		}
+		if len(page) < 2 {
+			break
+		}
+		last := page[len(page)-1].CreatedAt
+		before = &last
+	}
+
+	require.Len(t, seen, 5)
+	require.Equal(t, created[4].ID, seen[0])
+	require.Equal(t, created[3].ID, seen[1])
+	require.Equal(t, created[2].ID, seen[2])
+	require.Equal(t, created[1].ID, seen[3])
+	require.Equal(t, created[0].ID, seen[4])
+}
+
 func TestPaymentRepositoryListByAccountEmpty(t *testing.T) {
 	session, _ := throwawayKeyspace(t)
 	repo := database.NewPaymentRepository(session)
 
-	list, err := repo.ListByAccount(context.Background(), uuid.New(), 10)
+	list, err := repo.ListByAccount(context.Background(), uuid.New(), nil, 10)
 	require.NoError(t, err)
 	require.NotNil(t, list)
 	require.Empty(t, list)

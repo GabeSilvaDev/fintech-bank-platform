@@ -69,8 +69,13 @@ func (r *PaymentRepository) Get(ctx context.Context, id uuid.UUID) (*models.Paym
 	return scanPayment(r.session.Query("SELECT "+paymentColumns+" FROM payments WHERE payment_id = ?", gocql.UUID(id)).WithContext(ctx))
 }
 
-func (r *PaymentRepository) ListByAccount(ctx context.Context, accountID uuid.UUID, limit int) ([]*models.Payment, error) {
-	iter := r.session.Query("SELECT payment_id FROM payments_by_account WHERE account_id = ? LIMIT ?", gocql.UUID(accountID), limit).WithContext(ctx).Iter()
+func (r *PaymentRepository) ListByAccount(ctx context.Context, accountID uuid.UUID, before *time.Time, limit int) ([]*models.Payment, error) {
+	var iter *gocql.Iter
+	if before != nil {
+		iter = r.session.Query("SELECT payment_id FROM payments_by_account WHERE account_id = ? AND created_at < ? LIMIT ?", gocql.UUID(accountID), *before, limit).WithContext(ctx).Iter()
+	} else {
+		iter = r.session.Query("SELECT payment_id FROM payments_by_account WHERE account_id = ? LIMIT ?", gocql.UUID(accountID), limit).WithContext(ctx).Iter()
+	}
 	var ids []gocql.UUID
 	var id gocql.UUID
 	for iter.Scan(&id) {

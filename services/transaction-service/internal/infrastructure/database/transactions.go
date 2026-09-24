@@ -72,8 +72,13 @@ func (r *TransactionRepository) Get(ctx context.Context, id uuid.UUID) (*models.
 	return scanTransaction(r.session.Query("SELECT "+transactionColumns+" FROM transactions WHERE transaction_id = ?", gocql.UUID(id)).WithContext(ctx))
 }
 
-func (r *TransactionRepository) ListByAccount(ctx context.Context, accountID uuid.UUID, limit int) ([]*models.Transaction, error) {
-	iter := r.session.Query("SELECT transaction_id FROM transactions_by_account WHERE account_id = ? LIMIT ?", gocql.UUID(accountID), limit).WithContext(ctx).Iter()
+func (r *TransactionRepository) ListByAccount(ctx context.Context, accountID uuid.UUID, before *time.Time, limit int) ([]*models.Transaction, error) {
+	var iter *gocql.Iter
+	if before != nil {
+		iter = r.session.Query("SELECT transaction_id FROM transactions_by_account WHERE account_id = ? AND created_at < ? LIMIT ?", gocql.UUID(accountID), *before, limit).WithContext(ctx).Iter()
+	} else {
+		iter = r.session.Query("SELECT transaction_id FROM transactions_by_account WHERE account_id = ? LIMIT ?", gocql.UUID(accountID), limit).WithContext(ctx).Iter()
+	}
 	var ids []gocql.UUID
 	var id gocql.UUID
 	for iter.Scan(&id) {

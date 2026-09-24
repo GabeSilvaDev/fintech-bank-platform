@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/fintech-bank-platform/transaction-service/internal/app/handlers"
 	"github.com/fintech-bank-platform/transaction-service/internal/app/models"
@@ -89,6 +90,41 @@ func TestListAccountTransactions(t *testing.T) {
 	h.repo.Err = errors.New("db down")
 	rec, _ = get(readRouter(h), "/accounts/"+tx.AccountID.String()+"/transactions")
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+}
+
+func TestListAccountTransactionsPagesWithBeforeCursor(t *testing.T) {
+	h := newHarness()
+	account := uuid.New()
+	base := time.Date(2026, 9, 20, 10, 0, 0, 0, time.UTC)
+	txs := make([]*models.Transaction, 3)
+	for i := 0; i < 3; i++ {
+		tx := &models.Transaction{ID: uuid.New(), Type: models.TypeDeposit, Status: models.StatusCompleted, AccountID: account, AmountCents: int64(1000 + i), Currency: "BRL", IdempotencyKey: uuid.NewString(), CreatedAt: base.Add(time.Duration(i) * time.Minute), UpdatedAt: base.Add(time.Duration(i) * time.Minute)}
+		h.repo.Put(tx)
+		txs[i] = tx
+	}
+
+	rec, body := get(readRouter(h), "/accounts/"+account.String()+"/transactions?limit=2")
+	assert.Equal(t, http.StatusOK, rec.Code)
+	items := body["data"].([]interface{})
+	assert.Len(t, items, 2)
+	assert.Equal(t, txs[2].ID.String(), items[0].(map[string]interface{})["transaction_id"])
+	assert.Equal(t, txs[1].ID.String(), items[1].(map[string]interface{})["transaction_id"])
+	nextBefore := rec.Header().Get("X-Next-Before")
+	assert.Equal(t, txs[1].CreatedAt.UTC().Format(time.RFC3339Nano), nextBefore)
+
+	rec, body = get(readRouter(h), "/accounts/"+account.String()+"/transactions?limit=2&before="+nextBefore)
+	assert.Equal(t, http.StatusOK, rec.Code)
+	items = body["data"].([]interface{})
+	assert.Len(t, items, 1)
+	assert.Equal(t, txs[0].ID.String(), items[0].(map[string]interface{})["transaction_id"])
+	assert.Empty(t, rec.Header().Get("X-Next-Before"))
+
+	rec, body = get(readRouter(h), "/accounts/"+account.String()+"/transactions?before=not-a-date")
+	assert.Equal(t, http.StatusUnprocessableEntity, rec.Code)
+	assert.Equal(t, "datetime", body["error"].(map[string]interface{})["details"].(map[string]interface{})["before"])
+
+	rec, _ = get(readRouter(h), "/accounts/"+account.String()+"/transactions?before=2026-09-20T10%3A00%3A00.123456789Z")
+	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
 func TestListAccountTransactionsDepositAndWithdrawalKeepOwnBalance(t *testing.T) {
