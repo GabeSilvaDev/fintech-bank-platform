@@ -35,7 +35,7 @@ tmp_dir = "tmp"
   # Send interrupt signal before kill
   send_interrupt = true
   # Kill delay after interrupt (in nanoseconds)
-  kill_delay = "2s"
+  kill_delay = "35s"
   # Rerun binary when it exits (useful for one-shot commands)
   rerun = false
   rerun_delay = 500
