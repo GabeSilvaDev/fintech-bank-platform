@@ -577,6 +577,14 @@ type FakeLoginFailureRepo struct {
 	ReplaceErr  error
 	ClearErr    error
 	BeforeWrite func(rows map[string]models.LoginFailure)
+	Precision   time.Duration
+}
+
+func (f *FakeLoginFailureRepo) stored(failure models.LoginFailure) models.LoginFailure {
+	if f.Precision > 0 {
+		failure.FirstFailure = failure.FirstFailure.Truncate(f.Precision)
+	}
+	return failure
 }
 
 func NewFakeLoginFailureRepo() *FakeLoginFailureRepo {
@@ -608,7 +616,7 @@ func (f *FakeLoginFailureRepo) Create(_ context.Context, failure *models.LoginFa
 	}
 	_, exists := f.Rows[failure.Email]
 	if !exists {
-		f.Rows[failure.Email] = *failure
+		f.Rows[failure.Email] = f.stored(*failure)
 	}
 	f.Writes = append(f.Writes, FailureWrite{Kind: "create", Next: *failure, TTL: ttl, Applied: !exists})
 	return !exists, nil
@@ -624,9 +632,9 @@ func (f *FakeLoginFailureRepo) Replace(_ context.Context, current, next *models.
 		return false, f.ReplaceErr
 	}
 	row, exists := f.Rows[current.Email]
-	applied := exists && row.Failures == current.Failures && row.FirstFailure.Equal(current.FirstFailure)
+	applied := exists && row.Failures == current.Failures && row.FirstFailure.Equal(f.stored(*current).FirstFailure)
 	if applied {
-		f.Rows[current.Email] = *next
+		f.Rows[current.Email] = f.stored(*next)
 	}
 	copied := *current
 	f.Writes = append(f.Writes, FailureWrite{Kind: "replace", Current: &copied, Next: *next, TTL: ttl, Applied: applied})

@@ -89,6 +89,9 @@ func (s *IdentitiesAPISuite) TestVerifyRejectsUnusableEmailLikeWrongPassword() {
 		s.Equal(wrong.Body(), rejected.Body())
 	}
 	s.Len(s.Hasher.Comparisons, 4)
+	_, recorded := s.Failures.Row("not-an-email")
+	s.False(recorded)
+	s.Len(s.Failures.Writes, 1)
 }
 
 func (s *IdentitiesAPISuite) TestVerifyRejectsPasswordBeyondSeventyTwoBytes() {

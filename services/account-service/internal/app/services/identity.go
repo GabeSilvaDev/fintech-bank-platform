@@ -135,7 +135,7 @@ func (s *IdentityService) Register(ctx context.Context, email, password string) 
 
 func (s *IdentityService) Verify(ctx context.Context, email, password string) (uuid.UUID, error) {
 	email = normaliseEmail(email)
-	if email == "" {
+	if validation.ValidateVar(email, "required,email") != nil {
 		return s.reject(ctx, password)
 	}
 	reservation, err := s.reserve(ctx, email)
@@ -156,9 +156,6 @@ func (s *IdentityService) Verify(ctx context.Context, email, password string) (u
 }
 
 func (s *IdentityService) verify(ctx context.Context, email, password string) (uuid.UUID, error) {
-	if validation.ValidateVar(email, "required,email") != nil {
-		return s.reject(ctx, password)
-	}
 	identity, err := s.identities.GetByEmail(ctx, email)
 	if errors.Is(err, domain.ErrNotFound) {
 		return s.reject(ctx, password)
@@ -185,7 +182,7 @@ func (s *IdentityService) reserve(ctx context.Context, email string) (*models.Lo
 		if err != nil {
 			return nil, ErrBusy
 		}
-		now := s.clock.Now()
+		now := s.clock.Now().Truncate(time.Millisecond)
 		if current != nil && current.Failures >= s.maxFailures && now.Before(current.FirstFailure.Add(s.window)) {
 			return nil, &ErrTooManyAttempts{RetryAfter: ceilSeconds(current.FirstFailure.Add(s.window).Sub(now))}
 		}

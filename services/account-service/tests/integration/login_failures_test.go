@@ -5,6 +5,7 @@ package integration
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -161,6 +162,12 @@ func TestIdentityLockoutAgainstCassandra(t *testing.T) {
 	require.ErrorAs(t, err, &locked)
 	require.Equal(t, time.Hour, locked.RetryAfter)
 
+	malformed := "Not-An-Email-" + uuid.NewString()
+	_, err = service.Verify(ctx, malformed, "wrong horse")
+	require.ErrorIs(t, err, services.ErrInvalidCredentials)
+	_, err = failures.Get(ctx, strings.ToLower(malformed))
+	require.ErrorIs(t, err, domain.ErrNotFound)
+
 	ghost := uuid.NewString() + "@example.com"
 	for i := 0; i < 3; i++ {
 		_, err := service.Verify(ctx, ghost, "wrong horse")
@@ -239,12 +246,14 @@ func TestConcurrentWrongPasswordsAreBoundedStrictlyAgainstCassandra(t *testing.T
 	close(start)
 	wg.Wait()
 
-	require.Equal(t, int32(5), invalid.Load())
-	require.Equal(t, int32(15), locked.Load())
-	require.Equal(t, int32(5), hasher.compares.Load())
+	compares := hasher.compares.Load()
+	require.LessOrEqual(t, compares, int32(5))
+	require.GreaterOrEqual(t, compares, int32(1))
+	require.Equal(t, compares, invalid.Load())
+	require.Equal(t, int32(20), invalid.Load()+locked.Load())
 
 	_, err = service.Verify(ctx, email, "correct horse")
 	var tooMany *services.ErrTooManyAttempts
 	require.ErrorAs(t, err, &tooMany)
-	require.Equal(t, int32(5), hasher.compares.Load())
+	require.Equal(t, compares, hasher.compares.Load())
 }

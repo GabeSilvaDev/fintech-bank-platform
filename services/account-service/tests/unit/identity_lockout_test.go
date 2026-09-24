@@ -172,31 +172,41 @@ func TestLockoutCountsUnknownEmailsAndLocksThemTheSameWay(t *testing.T) {
 	assert.Equal(t, known.failures.GetCalls, unknown.failures.GetCalls)
 }
 
-func TestLockoutCountsUnusableEmailsUnderTheirNormalisedForm(t *testing.T) {
-	h := newLockoutHarness(t, lockout)
-
-	for i := 0; i < 3; i++ {
-		_, err := h.service.Verify(context.Background(), "  Not-An-Email ", "correct horse")
-		require.ErrorIs(t, err, services.ErrInvalidCredentials)
-	}
-	_, err := h.service.Verify(context.Background(), "not-an-email", "correct horse")
-
-	tooManyAttempts(t, err)
-	assert.Equal(t, 3, h.failureCount("not-an-email"))
-}
-
-func TestLockoutSkipsEmptyEmails(t *testing.T) {
+func TestLockoutSkipsMalformedEmails(t *testing.T) {
 	h := newLockoutHarness(t, lockout)
 	h.failures.GetErr = errors.New("failures must not be read")
+	h.failures.CreateErr = errors.New("failures must not be written")
+	h.repo.GetErr = errors.New("identity must not be looked up")
+	emails := []string{"", "   ", "  Not-An-Email ", "ana@", strings.Repeat("x", 16*1024)}
 
-	for _, email := range []string{"", "   "} {
-		_, err := h.service.Verify(context.Background(), email, "correct horse")
+	for _, email := range emails {
+		verified, err := h.service.Verify(context.Background(), email, "correct horse")
 		require.ErrorIs(t, err, services.ErrInvalidCredentials)
+		assert.Equal(t, uuid.Nil, verified)
 	}
 
 	assert.Zero(t, h.failures.GetCalls)
 	assert.Empty(t, h.failures.Writes)
-	assert.Len(t, h.hasher.Comparisons, 2)
+	assert.Empty(t, h.failures.Rows)
+	assert.Empty(t, h.failures.Cleared)
+	dummy := tests.Comparison{Hash: "hashed:" + h.hasher.Hashed[0], Password: "correct horse"}
+	require.Len(t, h.hasher.Comparisons, len(emails))
+	for _, comparison := range h.hasher.Comparisons {
+		assert.Equal(t, dummy, comparison)
+	}
+}
+
+func TestLockoutComparesMalformedAndUnknownEmailsAgainstTheSameDummyHash(t *testing.T) {
+	malformed := newLockoutHarness(t, lockout)
+	unknown := newLockoutHarness(t, lockout)
+
+	_, malformedErr := malformed.service.Verify(context.Background(), "not-an-email", "correct horse")
+	_, unknownErr := unknown.service.Verify(context.Background(), "ghost@example.com", "correct horse")
+
+	assert.Equal(t, unknownErr, malformedErr)
+	assert.Equal(t, unknown.hasher.Comparisons, malformed.hasher.Comparisons)
+	assert.Empty(t, malformed.failures.Writes)
+	assert.Equal(t, 1, unknown.failureCount("ghost@example.com"))
 }
 
 func TestLockoutCountsPasswordsBeyondTheBcryptLimit(t *testing.T) {
@@ -422,6 +432,24 @@ func TestLockoutReleaseRetriesALostRace(t *testing.T) {
 	assert.False(t, h.failures.Writes[1].Applied)
 	assert.True(t, h.failures.Writes[2].Applied)
 	assert.Equal(t, 1, h.failureCount("ana@example.com"))
+}
+
+func TestLockoutReleaseRetriesWhenTheStoreKeepsMilliseconds(t *testing.T) {
+	h := newLockoutHarness(t, lockout)
+	h.failures.Precision = time.Millisecond
+	h.clock.T = now.Add(123*time.Millisecond + 456789*time.Nanosecond)
+	h.repo.GetErr = errors.New("cassandra down")
+	h.onWrite(2, bump("ana@example.com"))
+
+	_, err := h.service.Verify(context.Background(), "ana@example.com", "wrong horse")
+
+	assert.EqualError(t, err, "cassandra down")
+	require.Len(t, h.failures.Writes, 3)
+	assert.Equal(t, now.Add(123*time.Millisecond), h.failures.Writes[0].Next.FirstFailure)
+	assert.False(t, h.failures.Writes[1].Applied)
+	assert.True(t, h.failures.Writes[2].Applied)
+	row, _ := h.failures.Row("ana@example.com")
+	assert.Equal(t, models.LoginFailure{Email: "ana@example.com", Failures: 1, FirstFailure: now.Add(123 * time.Millisecond)}, row)
 }
 
 func TestLockoutReleaseGivesUpSafely(t *testing.T) {
