@@ -28,11 +28,11 @@ flowchart LR
 
 | Component | Port (container / published) | Responsibility | State |
 |---|---|---|---|
-| `api-gateway` | 8080 / 8081 | Validates HTTP writes and publishes them as commands (`202` with `command_id` and `trace_id`); proxies reads to the domain services; serves the OpenAPI document at `GET /api/v1/openapi.yaml`; guards the Kafka producer with a circuit breaker; CORS and per-IP rate limit | none |
+| `api-gateway` | 8080 / 8081 | Validates HTTP writes and publishes them as commands (`202` with `command_id` and `trace_id`); proxies reads to the domain services; serves the OpenAPI document at `GET /api/v1/openapi.yaml`; guards the Kafka producer with a circuit breaker; CORS and a per-client rate limit keyed on the connection address (proxy headers only with `TRUST_PROXY_HEADERS=true`) | none |
 | `account-service` | 8082 / 8082 | Customers and accounts; the only owner of balances — credits and debits are compare-and-set updates applied at most once per idempotency key; internal owner endpoint for the notification service | `fintech_accounts`: `accounts`, `customers`, lookup tables, `balance_operations`, `processed_events` |
-| `transaction-service` | 8083 / 8083 | Deposits, withdrawals and transfers as sagas over `account.commands`, compensation of rejected transfer credits, reconciliation sweeper | `fintech_transactions`: `transactions`, `transactions_by_account`, `transactions_by_key`, `processed_events` |
+| `transaction-service` | 8083 / 8083 | Deposits, withdrawals and transfers as sagas over `account.commands`, compensation of rejected transfer credits, reconciliation sweeper | `fintech_transactions`: `transactions`, `transactions_by_account`, `transactions_by_account_key`, `processed_events` (the older `transactions_by_key` is no longer used) |
 | `payment-service` | 8084 / 8084 | PIX, TED and boleto as sagas: debit, submission to the sandbox provider, settlement (at once or by signed webhook), refund on rejection, reconciliation sweeper | `fintech_payments`: `payments`, `payments_by_account`, `payments_by_key`, `payments_by_external_id`, `processed_events` |
-| `notification-service` | 8085 / 8085 | Routes result events into e-mail, SMS and push commands and delivers them; per-user history | Redis: processed markers and `notification:history:<user id>` |
+| `notification-service` | 8085 / 8085 | Routes result events into e-mail, SMS and push commands and delivers them; per-user history | Redis: processed markers and `notification:history:<user id>`; in memory: owner contacts, bounded by `ACCOUNT_DIRECTORY_MAX_ENTRIES` |
 | Kafka 3.7.1 (KRaft) | 29092 internal / 9092 | Every topic pre-created by `kafka-init` with 3 partitions; 24 h log retention | — |
 | Prometheus, Grafana, Jaeger | 9090, 3000, 16686 | Metrics scraping and alerting, dashboards, trace storage and UI — root compose `observability` profile | — |
 
@@ -77,7 +77,7 @@ sequenceDiagram
     C->>GW: POST /api/v1/transactions (type deposit, idempotency_key)
     GW->>TS: transaction.commands / transaction.create
     GW-->>C: 202 command_id, trace_id
-    TS->>TS: reserve idempotency_key (transactions_by_key, LWT), record pending
+    TS->>TS: reserve (account_id, idempotency_key) (transactions_by_account_key, LWT), record pending
     TS->>NS: transaction.events / transaction.created (not routed)
     TS->>AS: account.commands / account.credit (key id:credit)
     AS->>AS: mark event processed, reserve key in balance_operations
@@ -111,7 +111,7 @@ sequenceDiagram
     C->>GW: POST /api/v1/transfers (from, to, amount, idempotency_key)
     GW->>TS: transaction.commands / transaction.transfer
     GW-->>C: 202 command_id, trace_id
-    TS->>TS: reserve key, record pending
+    TS->>TS: reserve key under the source account, record pending
     TS->>AS: account.commands / account.debit source (key id:debit)
     AS->>TS: account.events / account.debited
     TS->>TS: pending to debited (LWT)
@@ -260,7 +260,7 @@ A row that was touched after `created_at + SWEEPER_MAX_AGE` is left out of later
 
 | Layer | Where | Key | Guarantee |
 |---|---|---|---|
-| Client idempotency key | Required by the gateway on `POST /transactions`, `/transfers` and `/payments` (1–64 characters), reserved by the owning service with `INSERT ... IF NOT EXISTS` | `transactions_by_key` (key alone); `payments_by_key` (`account_id`, key) | A repeated key never creates a second transaction or payment; the duplicate command is logged and ignored |
+| Client idempotency key | Required by the gateway on `POST /transactions`, `/transfers` and `/payments` — 1 to 64 printable ASCII characters (`0x21`–`0x7E`), no spaces, the `pkg/validation` `idempotency_key` rule, checked again by the owning service — and reserved by that service with `INSERT ... IF NOT EXISTS` | `transactions_by_account_key` (`account_id`, key; the source account for a transfer); `payments_by_key` (`account_id`, key) | A key repeated on the same account never creates a second transaction or payment; the duplicate command is logged and ignored. Different accounts may use the same key |
 | Processed events | Every processor, before dispatch (`pkg/processor`) | Event id in `processed_events` (Cassandra, `IF NOT EXISTS`, 7-day TTL) or `notification:processed:<event id>` (Redis `SETNX`, 7 days) | A redelivered message is skipped and counted as `messages_processed_total{outcome="duplicate"}`; a replay needs a new event id |
 | Balance operations | `account-service` on every `account.credit` / `account.debit` | (`account_id`, `idempotency_key`) in `balance_operations`, 30-day TTL; saga keys `id:debit`, `id:credit`, `id:reversal` and `payment:id:debit`, `payment:id:refund` | Each balance change applies at most once; a repeated key replays the stored reply; a key reused for the other operation kind is `idempotency_key_reused`; a key still `pending` is `ambiguous_write` |
 | LWT transitions | `transaction-service`, `payment-service` | `UPDATE ... IF status = <expected>`; sweeper touches add `AND updated_at = <read>` | A duplicate or stale reply cannot move a saga twice; only one instance acts on a stale record |
@@ -269,13 +269,14 @@ The sandbox provider deduplicates submissions by payment id; a real provider mus
 
 ## Failure semantics
 
-- **Delivery.** Consumers commit each message after its handler returns, so delivery is at least once; the processed-events layer turns that into at-most-once processing per event id. On shutdown the in-flight message gets up to `CONSUMER_DRAIN_TIMEOUT` to finish; a consumer that stops on an error is rebuilt with `CONSUMER_RETRY_BACKOFF` while the HTTP API keeps serving.
+- **Delivery.** Consumers commit each message after its handler returns, so delivery is at least once; the processed-events layer turns that into at-most-once processing per event id. On shutdown the in-flight message gets up to `CONSUMER_DRAIN_TIMEOUT` to finish; a consumer that stops on an error is rebuilt with `CONSUMER_RETRY_BACKOFF` while the HTTP API keeps serving. A fetch that fails with a cancelled or expired context is a clean stop only when the service itself is shutting down; otherwise it is an error like any other, and the consumer is rebuilt.
 - **Retries.** A dispatcher error is retried in process with `CONSUMER_RETRY_BACKOFF` (default `200ms,1s,5s`, so up to four attempts) unless it is permanent: invalid data (the domain code, such as `invalid_amount`), `not_found`, `ambiguous_write`, `unknown_command`, `bad_payload` or `panic` are dead-lettered at once. Transient errors that outlive the backoff are dead-lettered as `conflict` or `internal_error`. The dead-letter event is `<domain>.command_failed` with `error_code`, `error_message`, `retries` (dispatch attempts) and the original event.
 - **Other dead-letter codes.** `invalid_event` for a message that is not a decodable envelope with a uuid id; `publish_failed` when a result could not be published (the event itself is dead-lettered and logged); `reversal_failed` and `refund_failed` when a compensation is rejected; `reconciliation_exhausted` from the sweepers.
 - **Redelivery instead of dead-letter.** A cancelled context or a failure of the processed-events store returns the error to the consumer, which does not commit, so the message is processed again after the restart.
 - **`ambiguous_write`.** A Cassandra write timeout or unavailable error, an unknown LWT outcome, a client-side timeout or a cancelled write context may or may not have applied, so it is never retried automatically. In the account service the balance operation stays `pending` and every re-send of that key gets `ambiguous_write` again until the sweeper reaches `SWEEPER_MAX_AGE` and raises `reconciliation_exhausted`; the record then needs manual resolution well within the 30-day TTL (check the balance and the `balance_operations` row before replaying anything).
 - **Notifications.** The processed marker is written before the send, so a crash mid-delivery drops that notification (at most once), while an in-process retry after an ambiguous provider error, or a marker evicted from Redis (`allkeys-lru`, 128 MB), can repeat one. Routing skips source events older than `NOTIFICATION_MAX_EVENT_AGE`; delivery commands have no age check.
 - **Gateway.** When the broker is unreachable or the circuit breaker is open, writes answer `503 PUBLISH_FAILED`; a down upstream answers `502 UPSTREAM_UNAVAILABLE` on reads.
+- **HTTP panics.** Every router mounts `pkg/middleware.Recovery(log)`: a panicking handler is logged at error level as `handler panicked` (panic value, stack, request id, method, path, `otel_trace_id` and `otel_span_id` when present) and answered with the JSON error envelope, `500 INTERNAL_ERROR`, unless it had already written a response. `http.ErrAbortHandler` is re-raised so the server aborts the connection as usual.
 
 ## Observability
 

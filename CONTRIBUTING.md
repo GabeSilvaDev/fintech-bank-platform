@@ -102,6 +102,8 @@ docker run --rm --network host \
   golang:1.25-alpine go test -tags integration ./tests/integration/... -v
 ```
 
+The Kafka integration tests of the account, transaction, payment and notification services don't need an empty broker: before producing, they give every reader a fresh consumer group whose offsets are committed at the current end of its topic, so messages already on the topic are skipped, and they retry that positioning for up to 30 s while a broker that has just started can't answer yet. They can run against the same root compose the rest of the stack uses.
+
 `--network host` works on Linux. Elsewhere, join the compose network instead (`--network fintech-bank-platform_fintech-network`) and use the in-network addresses: `kafka:29092`, `cassandra:9042`, `redis:6379`, `mailpit:1025` and `http://mailpit:8025`.
 
 ### End-to-end tests
@@ -167,7 +169,7 @@ Keep a commit to one module or concern, and keep the coverage gate green in each
 1. **Module.** Create `services/<name>/` with the layout above and a `go.mod` for `github.com/fintech-bank-platform/<name>` that requires `github.com/fintech-bank-platform/pkg v0.0.0` with `replace github.com/fintech-bank-platform/pkg => ../../pkg`.
 2. **Wiring.** In `cmd/main.go`, follow the existing services: typed config from the environment (including `METRICS_ENABLED`, `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_SAMPLER_RATIO`), `tracing.Init` and `metrics.New("<name>")`, `tracing.Middleware` and the metrics middleware on the router with `GET /metrics` when metrics are enabled, `GET /health`, `pkg/processor` processors behind its consumers with the service's own `<domain>.command_failed` type and DLQ topic, and `retry.Do` around start-up dependencies.
 3. **Topics.** Add new topics and event types to `pkg/events` and to the `kafka-init` loop in the root `docker-compose.yml`.
-4. **Compose.** Add `Dockerfile`, `.air.toml` and a `docker-compose.yml` whose container is `fintech-<name>`, mounts `../../pkg`, passes `OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-}` through and joins the external network `fintech-bank-platform_fintech-network`. Add the service to `SERVICES`, the health URLs and the log containers in `scripts/stack.sh`.
+4. **Compose.** Add `Dockerfile`, `.air.toml` (with `send_interrupt = true` and a `kill_delay` of `35s`, like the other services, so a hot reload lets the HTTP server and the consumers drain before the process is killed) and a `docker-compose.yml` whose container is `fintech-<name>`, mounts `../../pkg`, passes `OTEL_EXPORTER_OTLP_ENDPOINT=${OTEL_EXPORTER_OTLP_ENDPOINT:-}` through and joins the external network `fintech-bank-platform_fintech-network`. Add the service to `SERVICES`, the health URLs and the log containers in `scripts/stack.sh`.
 5. **CI.** Add a job to `.github/workflows/ci.yml` modelled on an existing one (service containers for its infrastructure, gofmt check, unit and feature tests with `-coverpkg=./internal/app/...` and the 100 % gate, integration tests) and list it in the `e2e` job's `needs`.
 6. **Observability.** Add a scrape job for `<name>:<port>` to `observability/prometheus/prometheus.yml`; the dashboard and alerts pick it up through the `service` label.
 7. **Docs.** Add `.env.example` with every variable the service reads, its section in both READMEs, and its topics and flows in `docs/architecture.md`.
