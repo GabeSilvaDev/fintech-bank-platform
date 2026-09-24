@@ -1,6 +1,6 @@
 import http from 'k6/http';
 import { check } from 'k6';
-import { BASE_URL, jsonHeaders, uuid, createFundedCustomer, scenarios, thresholds, summaryTrendStats } from './lib.js';
+import { BASE_URL, authHeaders, uuid, createFundedCustomer, scenarios, thresholds, summaryTrendStats } from './lib.js';
 
 const CUSTOMER_COUNT = 20;
 const FUND_AMOUNT = '1000000.00';
@@ -37,7 +37,7 @@ function postDeposit(customers) {
     amount: randomAmount(10, 500),
     currency: 'BRL',
     idempotency_key: uuid(),
-  }), { headers: jsonHeaders });
+  }), { headers: authHeaders(customer.token) });
 }
 
 function postTransfer(customers) {
@@ -52,7 +52,7 @@ function postTransfer(customers) {
     amount: randomAmount(5, 100),
     currency: 'BRL',
     idempotency_key: uuid(),
-  }), { headers: jsonHeaders });
+  }), { headers: authHeaders(from.token) });
 }
 
 function postPayment(customers) {
@@ -65,7 +65,7 @@ function postPayment(customers) {
     recipient: 'Ana Souza',
     pix_key: 'ana@example.com',
     idempotency_key: uuid(),
-  }), { headers: jsonHeaders });
+  }), { headers: authHeaders(customer.token) });
 }
 
 export default function (data) {

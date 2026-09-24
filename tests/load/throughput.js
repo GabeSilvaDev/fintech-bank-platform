@@ -2,7 +2,7 @@ import http from 'k6/http';
 import { check, sleep } from 'k6';
 import { scenario } from 'k6/execution';
 import { Counter, Trend } from 'k6/metrics';
-import { BASE_URL, jsonHeaders, uuid, createCustomer, TRANSACTION_FINAL_STATUSES, summaryTrendStats } from './lib.js';
+import { BASE_URL, authHeaders, uuid, createCustomer, TRANSACTION_FINAL_STATUSES, summaryTrendStats } from './lib.js';
 
 const N = __ENV.N ? parseInt(__ENV.N, 10) : 500;
 const VUS = 10;
@@ -47,8 +47,10 @@ export function setup() {
 
   const plan = [];
   for (let i = 0; i < N; i += 1) {
+    const account = accounts[i % accounts.length];
     plan.push({
-      accountId: accounts[i % accounts.length].accountId,
+      accountId: account.accountId,
+      token: account.token,
       idempotencyKey: uuid(),
     });
   }
@@ -64,23 +66,22 @@ export default function (data) {
     amount: '10.00',
     currency: 'BRL',
     idempotency_key: item.idempotencyKey,
-  }), { headers: jsonHeaders });
+  }), { headers: authHeaders(item.token) });
   const ok = check(res, { 'deposit accepted (202)': (r) => r.status === 202 });
   if (ok) {
     commandsAccepted.add(1);
   }
 }
 
-function pollUntilAllSettled(plan, timeoutMs) {
+function pollUntilAllSettled(plan, accounts, timeoutMs) {
   const remaining = new Map();
   plan.forEach((item) => remaining.set(item.idempotencyKey, true));
   const resolvedStatus = new Map();
-  const accountIds = Array.from(new Set(plan.map((item) => item.accountId)));
   const deadline = Date.now() + timeoutMs;
 
   while (remaining.size > 0 && Date.now() < deadline) {
-    accountIds.forEach((accountId) => {
-      const res = http.get(`${BASE_URL}/api/v1/accounts/${accountId}/transactions?limit=${PER_ACCOUNT}`, { headers: jsonHeaders });
+    accounts.forEach(({ accountId, token }) => {
+      const res = http.get(`${BASE_URL}/api/v1/accounts/${accountId}/transactions?limit=${PER_ACCOUNT}`, { headers: authHeaders(token) });
       if (res.status === 200) {
         const parsed = JSON.parse(res.body);
         const items = parsed.data || [];
@@ -103,7 +104,7 @@ export function teardown(data) {
   const submissionEnd = Date.now();
   submissionDurationSeconds.add((submissionEnd - data.start) / 1000);
 
-  const { resolvedStatus, unresolvedCount } = pollUntilAllSettled(data.plan, POLL_TIMEOUT_MS);
+  const { resolvedStatus, unresolvedCount } = pollUntilAllSettled(data.plan, data.accounts, POLL_TIMEOUT_MS);
   const completionEnd = Date.now();
   const completionSeconds = (completionEnd - data.start) / 1000;
 

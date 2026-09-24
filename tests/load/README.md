@@ -2,13 +2,17 @@
 
 k6 scripts exercising the gateway (`:8081`) end to end: commands (writes through Kafka and the sagas), reads (proxied to the account, transaction and payment services) and a raw throughput benchmark for deposits.
 
-## Prerequisite: raise the rate limit
+## Prerequisite: raise the rate limits
 
-The gateway rate-limits requests per IP (`RATE_LIMIT_REQUESTS`, default 100/min). Load scenarios exceed that in seconds, so recreate the gateway with a much higher limit before running anything here:
+The gateway rate-limits requests per IP (`RATE_LIMIT_REQUESTS`, default 100/min) and applies a stricter, separate limit to `POST /auth/register` and `POST /auth/login` (`AUTH_RATE_LIMIT_REQUESTS`, default 10/min). Load scenarios exceed the first in seconds, and every script's `setup()` registers one user per customer (20 for `commands.js` / `reads.js`, at least 10 for `throughput.js`), which trips the second, so recreate the gateway with both limits raised before running anything here:
 
 ```bash
-cd services/api-gateway && RATE_LIMIT_REQUESTS=100000 docker compose up -d
+cd services/api-gateway && RATE_LIMIT_REQUESTS=100000 AUTH_RATE_LIMIT_REQUESTS=100000 docker compose up -d
 ```
+
+## Authentication
+
+Every `/api/v1` route except `/auth/register` and `/auth/login` requires `Authorization: Bearer <token>`, and each customer can only touch its own accounts. `setup()` therefore registers a fresh user per customer (unique `@load.test` e-mail), keeps the returned access token next to the account id, and creates the account without `user_id` (the gateway takes it from the token). Every request then sends the owning customer's token: reads and deposits use the customer's own token, and a transfer uses the sender's token. Tokens live for `JWT_TTL` (default 1 h), longer than any scenario here.
 
 ## Running
 
@@ -31,8 +35,8 @@ docker run --rm -i --network host -e BASE_URL=http://localhost:8081 -e N=500 -v 
 
 Every payload sends `amount` as a decimal string with two decimals (`"1000000.00"`, `"42.50"`), the representation the API recommends and returns.
 
-- **`lib.js`** — shared helpers: `BASE_URL`, `uuid()`, JSON headers, `createCustomer()` (creates an account and polls `GET /users/{user_id}/accounts` until it shows up), `fundAccount()` / `createFundedCustomer()` (deposit, poll until settled, and throw if the deposit didn't settle as `completed` or its `amount` doesn't come back as the exact decimal string that was sent), `waitForStatus()`, `scenarios(name)` and the shared `thresholds`.
-- **`commands.js`** — `setup()` creates 20 customers and funds each with a 1,000,000 BRL deposit; the default function randomly fires a deposit, a transfer between two setup customers, or a PIX payment to `ana@example.com`, each with a fresh idempotency key, and checks for `202`.
+- **`lib.js`** — shared helpers: `BASE_URL`, `uuid()`, JSON headers, `authHeaders(token)`, `registerUser()` (registers a fresh user and returns its id and access token), `createCustomer()` (registers a user, creates its account and polls `GET /users/{user_id}/accounts` until it shows up, returning `{ userId, token, accountId }`), `fundAccount()` / `createFundedCustomer()` (deposit, poll until settled, and throw if the deposit didn't settle as `completed` or its `amount` doesn't come back as the exact decimal string that was sent), `waitForStatus()`, `scenarios(name)` and the shared `thresholds`.
+- **`commands.js`** — `setup()` registers 20 users, creates an account for each and funds it with a 1,000,000 BRL deposit; the default function randomly fires a deposit, a transfer between two setup customers (sent with the sender's token), or a PIX payment to `ana@example.com`, each with a fresh idempotency key, and checks for `202`.
 - **`reads.js`** — `setup()` creates the same 20 funded customers; the default function reads the account, its transaction list and its payment list, checking for `200`.
 - **`throughput.js`** — submits `N` deposits as fast as possible across 10 VUs (`shared-iterations` executor) against 10 pre-created accounts (one more account per 200 deposits once `N` exceeds 2,000, so no account holds more deposits than the 200-item page the transaction list allows), then polls every account's transaction list until all `N` deposits reach a final status. Counts real `202`s (`commands_accepted`), deposits that actually settled as `completed` (`completed_deposits`, feeding `completed_per_second`) separately from any that settled as a non-`completed` terminal status (`settlement_failures`) or never settled within the poll timeout (`unresolved_after_timeout`); thresholds fail the run if `settlement_failures` or `unresolved_after_timeout` is ever above zero.
 
