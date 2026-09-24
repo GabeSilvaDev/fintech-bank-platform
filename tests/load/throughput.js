@@ -61,7 +61,7 @@ export default function (data) {
   const res = http.post(`${BASE_URL}/api/v1/transactions`, JSON.stringify({
     account_id: item.accountId,
     type: 'deposit',
-    amount: 10,
+    amount: '10.00',
     currency: 'BRL',
     idempotency_key: item.idempotencyKey,
   }), { headers: jsonHeaders });

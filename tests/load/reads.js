@@ -3,7 +3,7 @@ import { check } from 'k6';
 import { BASE_URL, jsonHeaders, createFundedCustomer, scenarios, thresholds, summaryTrendStats } from './lib.js';
 
 const CUSTOMER_COUNT = 20;
-const FUND_AMOUNT = 1000000;
+const FUND_AMOUNT = '1000000.00';
 
 export const options = {
   scenarios: scenarios(__ENV.SCENARIO || 'smoke'),

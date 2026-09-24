@@ -91,6 +91,9 @@ export function fundAccount(accountId, amount) {
   if (settled.status !== 'completed') {
     throw new Error(`funding deposit for account ${accountId} settled as ${settled.status}, expected completed (idempotency_key=${idempotencyKey})`);
   }
+  if (settled.amount !== amount) {
+    throw new Error(`funding deposit for account ${accountId} settled with amount ${JSON.stringify(settled.amount)}, expected ${JSON.stringify(amount)} (idempotency_key=${idempotencyKey})`);
+  }
   return settled;
 }
 

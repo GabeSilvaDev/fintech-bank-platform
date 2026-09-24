@@ -3,7 +3,7 @@ import { check } from 'k6';
 import { BASE_URL, jsonHeaders, uuid, createFundedCustomer, scenarios, thresholds, summaryTrendStats } from './lib.js';
 
 const CUSTOMER_COUNT = 20;
-const FUND_AMOUNT = 1000000;
+const FUND_AMOUNT = '1000000.00';
 
 export const options = {
   scenarios: scenarios(__ENV.SCENARIO || 'smoke'),
@@ -25,7 +25,8 @@ function randomCustomer(customers) {
 }
 
 function randomAmount(min, max) {
-  return Math.round((min + Math.random() * (max - min)) * 100) / 100;
+  const cents = Math.round((min + Math.random() * (max - min)) * 100);
+  return (cents / 100).toFixed(2);
 }
 
 function postDeposit(customers) {
