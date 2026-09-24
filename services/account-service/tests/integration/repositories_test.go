@@ -159,3 +159,30 @@ func TestProcessedEventStore(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, first)
 }
+
+func TestIdentityRepository(t *testing.T) {
+	session, _ := throwawayKeyspace(t)
+	repo := database.NewIdentityRepository(session)
+	ctx := context.Background()
+	createdAt := time.Now().UTC().Truncate(time.Millisecond)
+	identity := &models.Identity{Email: "ana-" + uuid.NewString() + "@example.com", UserID: uuid.New(), PasswordHash: "$2a$04$hash", CreatedAt: createdAt}
+
+	created, err := repo.Create(ctx, identity)
+	require.NoError(t, err)
+	require.True(t, created)
+
+	duplicate := &models.Identity{Email: identity.Email, UserID: uuid.New(), PasswordHash: "$2a$04$other", CreatedAt: createdAt.Add(time.Minute)}
+	created, err = repo.Create(ctx, duplicate)
+	require.NoError(t, err)
+	require.False(t, created)
+
+	stored, err := repo.GetByEmail(ctx, identity.Email)
+	require.NoError(t, err)
+	require.Equal(t, identity.Email, stored.Email)
+	require.Equal(t, identity.UserID, stored.UserID)
+	require.Equal(t, identity.PasswordHash, stored.PasswordHash)
+	require.WithinDuration(t, createdAt, stored.CreatedAt, time.Millisecond)
+
+	_, err = repo.GetByEmail(ctx, "ghost-"+uuid.NewString()+"@example.com")
+	require.ErrorIs(t, err, domain.ErrNotFound)
+}

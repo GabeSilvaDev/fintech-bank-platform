@@ -35,6 +35,16 @@ type BalanceOperationRepository interface {
 	Release(ctx context.Context, accountID uuid.UUID, key string) error
 }
 
+type IdentityRepository interface {
+	Create(ctx context.Context, identity *models.Identity) (bool, error)
+	GetByEmail(ctx context.Context, email string) (*models.Identity, error)
+}
+
+type Hasher interface {
+	Hash(password string) (string, error)
+	Compare(hash, password string) error
+}
+
 type Migrator interface {
 	Up(ctx context.Context) ([]int, error)
 }

@@ -13,10 +13,11 @@ import (
 )
 
 type Dependencies struct {
-	Reads   *handlers.ReadHandler
-	Ping    func(context.Context) error
-	Logger  *logger.Logger
-	Metrics *metrics.Metrics
+	Reads      *handlers.ReadHandler
+	Identities *handlers.IdentityHandler
+	Ping       func(context.Context) error
+	Logger     *logger.Logger
+	Metrics    *metrics.Metrics
 }
 
 func SetupRouter(router *chi.Mux, deps Dependencies) {
@@ -36,4 +37,6 @@ func SetupRouter(router *chi.Mux, deps Dependencies) {
 	router.Get("/accounts/{id}", deps.Reads.GetAccount)
 	router.Get("/accounts/{id}/owner", deps.Reads.GetOwner)
 	router.Get("/users/{user_id}/accounts", deps.Reads.ListUserAccounts)
+	router.Post("/identities", deps.Identities.Register)
+	router.Post("/identities/verify", deps.Identities.Verify)
 }

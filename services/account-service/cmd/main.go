@@ -72,6 +72,11 @@ func main() {
 		services.RandomNumber,
 	)
 
+	identities, err := services.NewIdentityService(database.NewIdentityRepository(session), services.NewBcryptHasher(services.BcryptCost), services.SystemClock{})
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to initialize identity service")
+	}
+
 	producer := messaging.NewProducer(messaging.ProducerConfig{
 		Brokers:        cfg.Kafka.Brokers,
 		WriteTimeout:   cfg.Kafka.WriteTimeout,
@@ -101,10 +106,11 @@ func main() {
 
 	router := chi.NewRouter()
 	http.SetupRouter(router, http.Dependencies{
-		Reads:   handlers.NewReadHandler(service),
-		Ping:    database.Ping(session),
-		Logger:  log,
-		Metrics: m,
+		Reads:      handlers.NewReadHandler(service),
+		Identities: handlers.NewIdentityHandler(identities),
+		Ping:       database.Ping(session),
+		Logger:     log,
+		Metrics:    m,
 	})
 	server := http.NewServer(cfg.Server, router)
 

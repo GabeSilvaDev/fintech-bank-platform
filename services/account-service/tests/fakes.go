@@ -2,6 +2,7 @@ package tests
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/fintech-bank-platform/account-service/internal/app/models"
@@ -370,4 +371,67 @@ func (f FakeClock) Now() time.Time {
 
 func Ptr(s string) *string {
 	return &s
+}
+
+type FakeIdentityRepo struct {
+	Identities map[string]*models.Identity
+	Created    []*models.Identity
+	CreateErr  error
+	GetErr     error
+}
+
+func NewFakeIdentityRepo() *FakeIdentityRepo {
+	return &FakeIdentityRepo{Identities: map[string]*models.Identity{}}
+}
+
+func (f *FakeIdentityRepo) Create(_ context.Context, identity *models.Identity) (bool, error) {
+	if f.CreateErr != nil {
+		return false, f.CreateErr
+	}
+	if _, exists := f.Identities[identity.Email]; exists {
+		return false, nil
+	}
+	copied := *identity
+	f.Identities[identity.Email] = &copied
+	f.Created = append(f.Created, identity)
+	return true, nil
+}
+
+func (f *FakeIdentityRepo) GetByEmail(_ context.Context, email string) (*models.Identity, error) {
+	if f.GetErr != nil {
+		return nil, f.GetErr
+	}
+	identity, ok := f.Identities[email]
+	if !ok {
+		return nil, domain.ErrNotFound
+	}
+	copied := *identity
+	return &copied, nil
+}
+
+type Comparison struct {
+	Hash     string
+	Password string
+}
+
+type FakeHasher struct {
+	HashErr     error
+	Hashed      []string
+	Comparisons []Comparison
+}
+
+func (f *FakeHasher) Hash(password string) (string, error) {
+	if f.HashErr != nil {
+		return "", f.HashErr
+	}
+	f.Hashed = append(f.Hashed, password)
+	return "hashed:" + password, nil
+}
+
+func (f *FakeHasher) Compare(hash, password string) error {
+	f.Comparisons = append(f.Comparisons, Comparison{Hash: hash, Password: password})
+	if hash != "hashed:"+password {
+		return errors.New("mismatch")
+	}
+	return nil
 }

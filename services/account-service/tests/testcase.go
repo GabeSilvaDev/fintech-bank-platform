@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"time"
 
 	"github.com/fintech-bank-platform/account-service/internal/app/handlers"
@@ -22,6 +23,8 @@ type TestCase struct {
 	Customers  *FakeCustomerRepo
 	Operations *FakeOperationRepo
 	Service    *services.AccountService
+	Identities *FakeIdentityRepo
+	Hasher     *FakeHasher
 	PingErr    error
 	headers    map[string]string
 }
@@ -31,14 +34,19 @@ func (tc *TestCase) SetupTest() {
 	tc.Customers = NewFakeCustomerRepo()
 	tc.Operations = NewFakeOperationRepo()
 	tc.Service = services.NewAccountService(tc.Accounts, tc.Customers, tc.Operations, FakeClock{T: time.Now().UTC()}, func() string { return "00000001" })
+	tc.Identities = NewFakeIdentityRepo()
+	tc.Hasher = &FakeHasher{}
+	identityService, err := services.NewIdentityService(tc.Identities, tc.Hasher, FakeClock{T: time.Now().UTC()})
+	tc.Require().NoError(err)
 	tc.PingErr = nil
 	tc.headers = map[string]string{}
 
 	tc.Router = chi.NewRouter()
 	appHttp.SetupRouter(tc.Router, appHttp.Dependencies{
-		Reads:  handlers.NewReadHandler(tc.Service),
-		Ping:   func(context.Context) error { return tc.PingErr },
-		Logger: logger.New(logger.Config{Output: io.Discard}),
+		Reads:      handlers.NewReadHandler(tc.Service),
+		Identities: handlers.NewIdentityHandler(identityService),
+		Ping:       func(context.Context) error { return tc.PingErr },
+		Logger:     logger.New(logger.Config{Output: io.Discard}),
 	})
 }
 
@@ -49,6 +57,17 @@ func (tc *TestCase) WithHeader(key, value string) *TestCase {
 
 func (tc *TestCase) Get(uri string) *TestResponse {
 	req := httptest.NewRequest(http.MethodGet, uri, nil)
+	for key, value := range tc.headers {
+		req.Header.Set(key, value)
+	}
+	rec := httptest.NewRecorder()
+	tc.Router.ServeHTTP(rec, req)
+	return newTestResponse(tc.T(), rec)
+}
+
+func (tc *TestCase) Post(uri, body string) *TestResponse {
+	req := httptest.NewRequest(http.MethodPost, uri, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	for key, value := range tc.headers {
 		req.Header.Set(key, value)
 	}

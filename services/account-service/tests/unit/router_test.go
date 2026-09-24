@@ -26,10 +26,15 @@ func testDependencies() appHttp.Dependencies {
 		tests.FakeClock{T: time.Now().UTC()},
 		func() string { return "00000001" },
 	)
+	identities, err := services.NewIdentityService(tests.NewFakeIdentityRepo(), &tests.FakeHasher{}, tests.FakeClock{T: time.Now().UTC()})
+	if err != nil {
+		panic(err)
+	}
 	return appHttp.Dependencies{
-		Reads:  handlers.NewReadHandler(service),
-		Ping:   func(context.Context) error { return nil },
-		Logger: logger.New(logger.Config{Output: io.Discard}),
+		Reads:      handlers.NewReadHandler(service),
+		Identities: handlers.NewIdentityHandler(identities),
+		Ping:       func(context.Context) error { return nil },
+		Logger:     logger.New(logger.Config{Output: io.Discard}),
 	}
 }
 
