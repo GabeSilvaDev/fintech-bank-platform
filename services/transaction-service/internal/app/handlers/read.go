@@ -62,7 +62,7 @@ func (h *ReadHandler) GetTransaction(w http.ResponseWriter, r *http.Request) {
 		response.FromError(w, mapReadError(err))
 		return
 	}
-	response.OK(w, toResponse(tx))
+	response.OK(w, toDetailResponse(tx))
 }
 
 func (h *ReadHandler) ListAccountTransactions(w http.ResponseWriter, r *http.Request) {
@@ -83,7 +83,7 @@ func (h *ReadHandler) ListAccountTransactions(w http.ResponseWriter, r *http.Req
 	}
 	items := make([]transactionResponse, 0, len(txns))
 	for _, tx := range txns {
-		items = append(items, toResponse(tx))
+		items = append(items, toListResponse(tx, accountID))
 	}
 	response.OK(w, items)
 }
@@ -114,7 +114,7 @@ func mapReadError(err error) error {
 	return err
 }
 
-func toResponse(tx *models.Transaction) transactionResponse {
+func baseResponse(tx *models.Transaction) transactionResponse {
 	out := transactionResponse{
 		TransactionID:  tx.ID.String(),
 		Type:           string(tx.Type),
@@ -131,6 +131,26 @@ func toResponse(tx *models.Transaction) transactionResponse {
 	}
 	if tx.CounterpartyID != nil {
 		out.CounterpartyID = tx.CounterpartyID.String()
+	}
+	return out
+}
+
+func toDetailResponse(tx *models.Transaction) transactionResponse {
+	return baseResponse(tx)
+}
+
+func toListResponse(tx *models.Transaction, viewedAccount uuid.UUID) transactionResponse {
+	out := baseResponse(tx)
+	if tx.Type == models.TypeTransfer {
+		if viewedAccount == tx.AccountID && tx.FromBalanceCents != nil {
+			value := domain.FromCents(*tx.FromBalanceCents)
+			out.FromBalanceAfter = &value
+		}
+		if tx.CounterpartyID != nil && viewedAccount == *tx.CounterpartyID && tx.ToBalanceCents != nil {
+			value := domain.FromCents(*tx.ToBalanceCents)
+			out.ToBalanceAfter = &value
+		}
+		return out
 	}
 	if tx.FromBalanceCents != nil {
 		value := domain.FromCents(*tx.FromBalanceCents)

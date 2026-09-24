@@ -25,7 +25,8 @@ func TestCommandDispatcherRoutesCreateAndTransfer(t *testing.T) {
 	logs := &bytes.Buffer{}
 	dispatcher := handlers.NewCommandDispatcher(h.service, logger.New(logger.Config{Output: logs}))
 
-	res, err := dispatcher.Dispatch(context.Background(), command(events.EventTypes.CreateTransaction, deposit(uuid.NewString())))
+	depositAccount := uuid.NewString()
+	res, err := dispatcher.Dispatch(context.Background(), command(events.EventTypes.CreateTransaction, deposit(depositAccount)))
 	assert.NoError(t, err)
 	assert.Len(t, res.Messages, 2)
 	assert.Equal(t, events.EventTypes.TransactionCreated, res.Messages[0].Event.Type)
@@ -36,7 +37,7 @@ func TestCommandDispatcherRoutesCreateAndTransfer(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, events.EventTypes.DebitAccount, res.Messages[1].Event.Type)
 
-	res, err = dispatcher.Dispatch(context.Background(), command(events.EventTypes.CreateTransaction, deposit(uuid.NewString())))
+	res, err = dispatcher.Dispatch(context.Background(), command(events.EventTypes.CreateTransaction, deposit(depositAccount)))
 	assert.NoError(t, err)
 	assert.Empty(t, res.Messages)
 	assert.Contains(t, logs.String(), "duplicate idempotency key")

@@ -23,10 +23,10 @@ func TestTransactionRepository(t *testing.T) {
 
 	transfer := &models.Transaction{ID: uuid.New(), Type: models.TypeTransfer, Status: models.StatusPending, AccountID: from, CounterpartyID: &to, AmountCents: 3000, Currency: "BRL", Description: "rent", IdempotencyKey: "tr-1", CreatedAt: now, UpdatedAt: now}
 
-	owner, err := repo.ReserveKey(ctx, "tr-1", transfer.ID)
+	owner, err := repo.ReserveKey(ctx, from, "tr-1", transfer.ID)
 	require.NoError(t, err)
 	require.Equal(t, transfer.ID, owner)
-	owner, err = repo.ReserveKey(ctx, "tr-1", uuid.New())
+	owner, err = repo.ReserveKey(ctx, from, "tr-1", uuid.New())
 	require.NoError(t, err)
 	require.Equal(t, transfer.ID, owner)
 
@@ -98,6 +98,27 @@ func TestTransactionRepository(t *testing.T) {
 	require.Equal(t, "account_not_active", got.FailureReason)
 	require.WithinDuration(t, later, *got.CompletedAt, time.Millisecond)
 	require.WithinDuration(t, later, got.UpdatedAt, time.Millisecond)
+}
+
+func TestTransactionRepositoryReserveKeyIsScopedPerAccount(t *testing.T) {
+	session, _ := throwawayKeyspace(t)
+	repo := database.NewTransactionRepository(session)
+	ctx := context.Background()
+	accountA, accountB := uuid.New(), uuid.New()
+	idA, idB := uuid.New(), uuid.New()
+
+	ownerA, err := repo.ReserveKey(ctx, accountA, "shared-key", idA)
+	require.NoError(t, err)
+	require.Equal(t, idA, ownerA)
+
+	ownerB, err := repo.ReserveKey(ctx, accountB, "shared-key", idB)
+	require.NoError(t, err)
+	require.Equal(t, idB, ownerB)
+
+	other := uuid.New()
+	ownerA, err = repo.ReserveKey(ctx, accountA, "shared-key", other)
+	require.NoError(t, err)
+	require.Equal(t, idA, ownerA)
 }
 
 func TestTransactionRepositoryTouch(t *testing.T) {

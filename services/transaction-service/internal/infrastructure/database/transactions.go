@@ -40,9 +40,9 @@ func (r *TransactionRepository) Create(ctx context.Context, tx *models.Transacti
 	return cassandra.MapWriteError(batch.Exec())
 }
 
-func (r *TransactionRepository) ReserveKey(ctx context.Context, key string, id uuid.UUID) (uuid.UUID, error) {
+func (r *TransactionRepository) ReserveKey(ctx context.Context, accountID uuid.UUID, key string, id uuid.UUID) (uuid.UUID, error) {
 	existing := map[string]interface{}{}
-	applied, err := r.session.Query("INSERT INTO transactions_by_key (idempotency_key, transaction_id) VALUES (?, ?) IF NOT EXISTS", key, gocql.UUID(id)).
+	applied, err := r.session.Query("INSERT INTO transactions_by_account_key (account_id, idempotency_key, transaction_id) VALUES (?, ?, ?) IF NOT EXISTS", gocql.UUID(accountID), key, gocql.UUID(id)).
 		WithContext(ctx).MapScanCAS(existing)
 	if err != nil {
 		return uuid.Nil, cassandra.MapWriteError(err)

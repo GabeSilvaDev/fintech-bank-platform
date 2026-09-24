@@ -9,6 +9,7 @@ import (
 	"github.com/fintech-bank-platform/pkg/domain"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/processor"
+	"github.com/fintech-bank-platform/pkg/validation"
 	"github.com/fintech-bank-platform/transaction-service/internal/app/models"
 	"github.com/fintech-bank-platform/transaction-service/internal/contracts"
 	"github.com/google/uuid"
@@ -16,7 +17,6 @@ import (
 
 const (
 	source            = "transaction-service"
-	maxKeyLength      = 64
 	maxDescriptionLen = 255
 )
 
@@ -111,7 +111,7 @@ func (s *TransactionService) record(ctx context.Context, tx *models.Transaction)
 	tx.CreatedAt = now
 	tx.UpdatedAt = now
 
-	owner, err := s.repo.ReserveKey(ctx, tx.IdempotencyKey, tx.ID)
+	owner, err := s.repo.ReserveKey(ctx, tx.AccountID, tx.IdempotencyKey, tx.ID)
 	if err != nil {
 		return err
 	}
@@ -136,9 +136,8 @@ func parseMoney(amount float64, currency, key, description string) (int64, strin
 	if !strings.EqualFold(currency, models.Currency) {
 		return 0, "", domain.Invalid("unsupported_currency", "only BRL is supported")
 	}
-	key = strings.TrimSpace(key)
-	if key == "" || len(key) > maxKeyLength {
-		return 0, "", domain.Invalid("invalid_idempotency_key", "idempotency_key must have between 1 and 64 characters")
+	if !validation.IsValidIdempotencyKey(key) {
+		return 0, "", domain.Invalid("invalid_idempotency_key", "idempotency_key must be 1 to 64 printable ASCII characters with no spaces")
 	}
 	if len(description) > maxDescriptionLen {
 		return 0, "", domain.Invalid("invalid_description", "description must have at most 255 characters")

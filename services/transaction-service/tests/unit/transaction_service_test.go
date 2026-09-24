@@ -57,7 +57,7 @@ func TestCreateDepositRecordsAndRequestsCredit(t *testing.T) {
 	assert.Equal(t, "BRL", tx.Currency)
 	assert.Equal(t, "dep-1", tx.IdempotencyKey)
 	assert.Equal(t, now, tx.CreatedAt)
-	assert.Equal(t, h.nextID, h.repo.Keys["dep-1"])
+	assert.Equal(t, h.nextID, h.repo.Keys[tests.KeyFor(account, "dep-1")])
 
 	created := res.Messages[0]
 	assert.Equal(t, events.Topics.TransactionEvents, created.Topic)
@@ -130,15 +130,32 @@ func TestCreateValidation(t *testing.T) {
 
 func TestCreateDuplicateKeyIsNoOp(t *testing.T) {
 	h := newHarness()
+	account := uuid.New()
 	existing := h.pending(models.TypeDeposit, models.StatusPending)
-	h.repo.Keys["dep-1"] = existing.ID
+	h.repo.Keys[tests.KeyFor(account, "dep-1")] = existing.ID
 
-	res, err := h.service.Create(context.Background(), deposit(uuid.NewString()), "t")
+	res, err := h.service.Create(context.Background(), deposit(account.String()), "t")
 
 	assert.ErrorIs(t, err, models.ErrDuplicateKey)
 	assert.Empty(t, res.Messages)
 	assert.Empty(t, h.repo.Created)
-	assert.Equal(t, existing.ID, h.repo.Keys["dep-1"])
+	assert.Equal(t, existing.ID, h.repo.Keys[tests.KeyFor(account, "dep-1")])
+}
+
+func TestCreateSameKeyOnDifferentAccountsCreatesTwoTransactions(t *testing.T) {
+	h := newHarness()
+	accountA, accountB := uuid.New(), uuid.New()
+
+	_, err := h.service.Create(context.Background(), deposit(accountA.String()), "t")
+	assert.NoError(t, err)
+	h.nextID = uuid.New()
+	_, err = h.service.Create(context.Background(), deposit(accountB.String()), "t")
+	assert.NoError(t, err)
+
+	assert.Len(t, h.repo.Created, 2)
+	assert.NotEqual(t, h.repo.Created[0].ID, h.repo.Created[1].ID)
+	assert.Equal(t, accountA, h.repo.Created[0].AccountID)
+	assert.Equal(t, accountB, h.repo.Created[1].AccountID)
 }
 
 func TestCreateRecoversAReservedKeyWithoutARow(t *testing.T) {
@@ -147,7 +164,7 @@ func TestCreateRecoversAReservedKeyWithoutARow(t *testing.T) {
 	h.repo.CreateErr = errors.New("db down")
 	_, err := h.service.Create(context.Background(), deposit(account.String()), "t")
 	assert.EqualError(t, err, "db down")
-	reserved := h.repo.Keys["dep-1"]
+	reserved := h.repo.Keys[tests.KeyFor(account, "dep-1")]
 	assert.Equal(t, h.nextID, reserved)
 	assert.Empty(t, h.repo.Created)
 
@@ -158,7 +175,7 @@ func TestCreateRecoversAReservedKeyWithoutARow(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, h.repo.Created, 1)
 	assert.Equal(t, reserved, h.repo.Created[0].ID)
-	assert.Equal(t, h.repo.Keys["dep-1"], h.repo.Created[0].ID)
+	assert.Equal(t, h.repo.Keys[tests.KeyFor(account, "dep-1")], h.repo.Created[0].ID)
 	assert.Equal(t, models.StatusPending, h.repo.Created[0].Status)
 	assert.Len(t, res.Messages, 2)
 	assert.Equal(t, reserved.String(), res.Messages[0].Event.Payload.(events.TransactionCreatedPayload).TransactionID)
@@ -178,9 +195,10 @@ func TestCreatePropagatesRepositoryErrors(t *testing.T) {
 	assert.EqualError(t, err, "db down")
 
 	h = newHarness()
-	h.repo.Keys["dep-1"] = uuid.New()
+	account := uuid.New()
+	h.repo.Keys[tests.KeyFor(account, "dep-1")] = uuid.New()
 	h.repo.GetErrs = []error{errors.New("db down")}
-	_, err = h.service.Create(context.Background(), deposit(uuid.NewString()), "t")
+	_, err = h.service.Create(context.Background(), deposit(account.String()), "t")
 	assert.EqualError(t, err, "db down")
 	assert.Empty(t, h.repo.Created)
 }
@@ -230,10 +248,25 @@ func TestTransferValidation(t *testing.T) {
 	}
 
 	h := newHarness()
-	h.repo.Keys["tr-1"] = h.pending(models.TypeTransfer, models.StatusPending).ID
-	_, err := h.service.Transfer(context.Background(), transfer(uuid.NewString(), uuid.NewString()), "t")
+	from := uuid.New()
+	h.repo.Keys[tests.KeyFor(from, "tr-1")] = h.pending(models.TypeTransfer, models.StatusPending).ID
+	_, err := h.service.Transfer(context.Background(), transfer(from.String(), uuid.NewString()), "t")
 	assert.ErrorIs(t, err, models.ErrDuplicateKey)
 	assert.Empty(t, h.repo.Created)
+}
+
+func TestTransferSameKeyOnDifferentSendersCreatesTwoTransactions(t *testing.T) {
+	h := newHarness()
+	senderA, senderB, to := uuid.New(), uuid.New(), uuid.New()
+
+	_, err := h.service.Transfer(context.Background(), transfer(senderA.String(), to.String()), "t")
+	assert.NoError(t, err)
+	h.nextID = uuid.New()
+	_, err = h.service.Transfer(context.Background(), transfer(senderB.String(), to.String()), "t")
+	assert.NoError(t, err)
+
+	assert.Len(t, h.repo.Created, 2)
+	assert.NotEqual(t, h.repo.Created[0].ID, h.repo.Created[1].ID)
 }
 
 func TestGetAndListByAccount(t *testing.T) {

@@ -1228,10 +1228,16 @@ components:
           description: Why the transaction failed, when it did.
         from_balance_after:
           type: number
-          description: Balance of the debited account after the debit (withdrawals and transfers).
+          description: |
+            Balance of the debited account after the debit. For withdrawals, present whenever the debit has
+            happened. For transfers, present only when listing the transactions of `account_id` (the sender);
+            never present on the `GET /transactions/{id}` response.
         to_balance_after:
           type: number
-          description: Balance of the credited account after the credit (`account_id` for deposits, `counterparty_id` for transfers).
+          description: |
+            Balance of the credited account after the credit. For deposits, present whenever the credit has
+            happened. For transfers, present only when listing the transactions of `counterparty_id` (the
+            recipient); never present on the `GET /transactions/{id}` response.
         created_at:
           type: string
           format: date-time

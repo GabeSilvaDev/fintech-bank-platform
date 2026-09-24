@@ -47,7 +47,7 @@ func TestGetTransaction(t *testing.T) {
 	assert.Equal(t, 30.0, data["amount"])
 	assert.Equal(t, "BRL", data["currency"])
 	assert.Equal(t, "rent", data["description"])
-	assert.Equal(t, 70.0, data["from_balance_after"])
+	assert.NotContains(t, data, "from_balance_after")
 	assert.NotContains(t, data, "to_balance_after")
 	assert.NotContains(t, data, "failure_reason")
 	assert.NotContains(t, data, "completed_at")
@@ -91,6 +91,57 @@ func TestListAccountTransactions(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 }
 
+func TestListAccountTransactionsDepositAndWithdrawalKeepOwnBalance(t *testing.T) {
+	h := newHarness()
+	withdrawal := h.pending(models.TypeWithdrawal, models.StatusDebited)
+	deposit := h.pending(models.TypeDeposit, models.StatusCompleted)
+	toBalance := int64(5000)
+	deposit.ToBalanceCents = &toBalance
+	h.repo.Put(deposit)
+
+	rec, body := get(readRouter(h), "/accounts/"+withdrawal.AccountID.String()+"/transactions")
+	assert.Equal(t, http.StatusOK, rec.Code)
+	items := body["data"].([]interface{})
+	assert.Len(t, items, 1)
+	withdrawalView := items[0].(map[string]interface{})
+	assert.Equal(t, 70.0, withdrawalView["from_balance_after"])
+	assert.NotContains(t, withdrawalView, "to_balance_after")
+
+	rec, body = get(readRouter(h), "/accounts/"+deposit.AccountID.String()+"/transactions")
+	assert.Equal(t, http.StatusOK, rec.Code)
+	items = body["data"].([]interface{})
+	assert.Len(t, items, 1)
+	depositView := items[0].(map[string]interface{})
+	assert.Equal(t, 50.0, depositView["to_balance_after"])
+	assert.NotContains(t, depositView, "from_balance_after")
+}
+
+func TestListAccountTransactionsTransferBalanceVisibility(t *testing.T) {
+	h := newHarness()
+	tx := h.pending(models.TypeTransfer, models.StatusCompleted)
+	from := int64(7000)
+	to := int64(3000)
+	tx.FromBalanceCents = &from
+	tx.ToBalanceCents = &to
+	h.repo.Put(tx)
+
+	rec, body := get(readRouter(h), "/accounts/"+tx.AccountID.String()+"/transactions")
+	assert.Equal(t, http.StatusOK, rec.Code)
+	items := body["data"].([]interface{})
+	assert.Len(t, items, 1)
+	senderView := items[0].(map[string]interface{})
+	assert.Equal(t, 70.0, senderView["from_balance_after"])
+	assert.NotContains(t, senderView, "to_balance_after")
+
+	rec, body = get(readRouter(h), "/accounts/"+tx.CounterpartyID.String()+"/transactions")
+	assert.Equal(t, http.StatusOK, rec.Code)
+	items = body["data"].([]interface{})
+	assert.Len(t, items, 1)
+	counterpartyView := items[0].(map[string]interface{})
+	assert.Equal(t, 30.0, counterpartyView["to_balance_after"])
+	assert.NotContains(t, counterpartyView, "from_balance_after")
+}
+
 func TestGetTransactionReportsReversing(t *testing.T) {
 	h := newHarness()
 	tx := h.pending(models.TypeTransfer, models.StatusReversing)
@@ -105,12 +156,12 @@ func TestGetTransactionReportsReversing(t *testing.T) {
 	assert.Equal(t, "reversing", data["status"])
 	assert.Equal(t, "account_not_active", data["failure_reason"])
 	assert.Equal(t, tx.CounterpartyID.String(), data["counterparty_id"])
-	assert.Equal(t, 70.0, data["from_balance_after"])
+	assert.NotContains(t, data, "from_balance_after")
 	assert.NotContains(t, data, "to_balance_after")
 	assert.NotContains(t, data, "completed_at")
 }
 
-func TestGetTransactionIncludesToBalanceAfter(t *testing.T) {
+func TestGetTransactionOmitsBothBalancesEvenWhenBothAreSet(t *testing.T) {
 	h := newHarness()
 	tx := h.pending(models.TypeTransfer, models.StatusCompleted)
 	toBalance := int64(9000)
@@ -121,5 +172,6 @@ func TestGetTransactionIncludesToBalanceAfter(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 	data := body["data"].(map[string]interface{})
-	assert.Equal(t, 90.0, data["to_balance_after"])
+	assert.NotContains(t, data, "from_balance_after")
+	assert.NotContains(t, data, "to_balance_after")
 }

@@ -51,6 +51,10 @@ func NewFakeTransactionRepo() *FakeTransactionRepo {
 	return &FakeTransactionRepo{Transactions: map[uuid.UUID]*models.Transaction{}, Keys: map[string]uuid.UUID{}}
 }
 
+func KeyFor(accountID uuid.UUID, key string) string {
+	return accountID.String() + ":" + key
+}
+
 func (f *FakeTransactionRepo) Put(tx *models.Transaction) {
 	copied := *tx
 	f.Transactions[tx.ID] = &copied
@@ -68,17 +72,18 @@ func (f *FakeTransactionRepo) Create(_ context.Context, tx *models.Transaction) 
 	return nil
 }
 
-func (f *FakeTransactionRepo) ReserveKey(_ context.Context, key string, id uuid.UUID) (uuid.UUID, error) {
+func (f *FakeTransactionRepo) ReserveKey(_ context.Context, accountID uuid.UUID, key string, id uuid.UUID) (uuid.UUID, error) {
 	if f.ReserveErr != nil {
 		return uuid.Nil, f.ReserveErr
 	}
 	if f.Err != nil {
 		return uuid.Nil, f.Err
 	}
-	if owner, taken := f.Keys[key]; taken {
+	mapKey := accountID.String() + ":" + key
+	if owner, taken := f.Keys[mapKey]; taken {
 		return owner, nil
 	}
-	f.Keys[key] = id
+	f.Keys[mapKey] = id
 	return id, nil
 }
 
