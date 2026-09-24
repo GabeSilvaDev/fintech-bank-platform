@@ -73,6 +73,7 @@ func TestLabels(t *testing.T) {
 	assert.Equal(t, "saldo insuficiente", services.ReasonText("insufficient_funds"))
 	assert.Equal(t, "conta inativa", services.ReasonText("account_not_active"))
 	assert.Equal(t, "conta não encontrada", services.ReasonText("account_not_found"))
+	assert.Equal(t, "limite de saldo excedido", services.ReasonText("balance_limit_exceeded"))
 	assert.Equal(t, "chave PIX não encontrada", services.ReasonText("pix_key_not_found"))
 	assert.Equal(t, "conta de destino inválida", services.ReasonText("invalid_destination"))
 	assert.Equal(t, "boleto não encontrado", services.ReasonText("boleto_not_found"))

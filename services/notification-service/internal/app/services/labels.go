@@ -1,13 +1,14 @@
 package services
 
 var reasons = map[string]string{
-	"insufficient_funds":   "saldo insuficiente",
-	"account_not_active":   "conta inativa",
-	"account_not_found":    "conta não encontrada",
-	"pix_key_not_found":    "chave PIX não encontrada",
-	"invalid_destination":  "conta de destino inválida",
-	"boleto_not_found":     "boleto não encontrado",
-	"rejected_by_provider": "recusado pela instituição",
+	"insufficient_funds":     "saldo insuficiente",
+	"account_not_active":     "conta inativa",
+	"account_not_found":      "conta não encontrada",
+	"balance_limit_exceeded": "limite de saldo excedido",
+	"pix_key_not_found":      "chave PIX não encontrada",
+	"invalid_destination":    "conta de destino inválida",
+	"boleto_not_found":       "boleto não encontrado",
+	"rejected_by_provider":   "recusado pela instituição",
 }
 
 func ReasonText(code string) string {
