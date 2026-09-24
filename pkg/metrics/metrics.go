@@ -53,6 +53,10 @@ func (m *Metrics) HistogramVec(name, help string, buckets []float64, labels ...s
 	return register(m, prometheus.NewHistogramVec(prometheus.HistogramOpts{Name: name, Help: help, Buckets: buckets}, labels))
 }
 
+func (m *Metrics) GaugeFunc(name, help string, fn func() float64) prometheus.GaugeFunc {
+	return register(m, prometheus.NewGaugeFunc(prometheus.GaugeOpts{Name: name, Help: help}, fn))
+}
+
 func register[T prometheus.Collector](m *Metrics, collector T) T {
 	if m == nil {
 		return collector

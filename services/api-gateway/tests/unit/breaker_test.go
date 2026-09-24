@@ -12,15 +12,23 @@ import (
 	apperrors "github.com/fintech-bank-platform/pkg/errors"
 	"github.com/fintech-bank-platform/pkg/events"
 	"github.com/fintech-bank-platform/pkg/metrics"
-	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/sony/gobreaker/v2"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func breakerStateValue(t *testing.T, m *metrics.Metrics) float64 {
 	t.Helper()
-	gauge := m.GaugeVec(messaging.CircuitBreakerStateName, messaging.CircuitBreakerStateHelp)
-	return testutil.ToFloat64(gauge.WithLabelValues())
+	families, err := m.Registry().Gather()
+	require.NoError(t, err)
+	for _, family := range families {
+		if family.GetName() == messaging.CircuitBreakerStateName {
+			require.Len(t, family.GetMetric(), 1)
+			return family.GetMetric()[0].GetGauge().GetValue()
+		}
+	}
+	t.Fatalf("%s not registered", messaging.CircuitBreakerStateName)
+	return 0
 }
 
 func breakerConfig(threshold uint32, timeout time.Duration) contracts.KafkaConfig {
@@ -133,6 +141,21 @@ func TestBreakerGaugeReflectsOpenAndRecoveredStates(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, float64(0), breakerStateValue(t, m))
+}
+
+func TestBreakerGaugeLeavesOpenAfterTimeoutWithoutTraffic(t *testing.T) {
+	m := metrics.New("test-breaker-idle")
+	pub := &tests.FakePublisher{Err: errors.New("down")}
+	b := messaging.NewBreaker(pub, breakerConfig(1, 20*time.Millisecond), m)
+	ev := events.NewAccountCommand(events.EventTypes.CreateAccount, nil)
+
+	_ = b.Publish(context.Background(), events.Topics.AccountCommands, "k", ev)
+	assert.Equal(t, float64(2), breakerStateValue(t, m))
+
+	time.Sleep(40 * time.Millisecond)
+
+	assert.Equal(t, float64(1), breakerStateValue(t, m))
+	assert.Len(t, pub.Published, 0)
 }
 
 func TestBreakerGaugeReportsHalfOpenWhileRecoveryAttemptIsInFlight(t *testing.T) {

@@ -22,9 +22,6 @@ type Breaker struct {
 }
 
 func NewBreaker(next contracts.Publisher, cfg contracts.KafkaConfig, m *metrics.Metrics) *Breaker {
-	state := m.GaugeVec(CircuitBreakerStateName, CircuitBreakerStateHelp)
-	state.WithLabelValues().Set(breakerStateValue(gobreaker.StateClosed))
-
 	settings := gobreaker.Settings{
 		Name:    "kafka-publisher",
 		Timeout: cfg.BreakerTimeout,
@@ -34,14 +31,16 @@ func NewBreaker(next contracts.Publisher, cfg contracts.KafkaConfig, m *metrics.
 		IsSuccessful: func(err error) bool {
 			return err == nil || errors.Is(err, context.Canceled)
 		},
-		OnStateChange: func(name string, from, to gobreaker.State) {
-			state.WithLabelValues().Set(breakerStateValue(to))
-		},
 	}
+
+	breaker := gobreaker.NewCircuitBreaker[struct{}](settings)
+	m.GaugeFunc(CircuitBreakerStateName, CircuitBreakerStateHelp, func() float64 {
+		return breakerStateValue(breaker.State())
+	})
 
 	return &Breaker{
 		next:    next,
-		breaker: gobreaker.NewCircuitBreaker[struct{}](settings),
+		breaker: breaker,
 	}
 }
 

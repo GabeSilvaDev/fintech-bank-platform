@@ -69,6 +69,39 @@ func TestHistogramVecFactoryIsIdempotent(t *testing.T) {
 	assert.Equal(t, uint64(2), histogramSampleCount(t, m.Registry(), "test_duration_seconds"))
 }
 
+func TestGaugeFuncReadsValueAtScrapeTime(t *testing.T) {
+	m := New("svc")
+	value := 1.0
+
+	gauge := m.GaugeFunc("test_state", "test help", func() float64 { return value })
+
+	assert.Equal(t, float64(1), testutil.ToFloat64(gauge))
+	value = 2
+	assert.Equal(t, float64(2), testutil.ToFloat64(gauge))
+
+	rec := httptest.NewRecorder()
+	m.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	assert.Contains(t, rec.Body.String(), `test_state{service="svc"} 2`)
+}
+
+func TestGaugeFuncFactoryIsIdempotent(t *testing.T) {
+	m := New("svc")
+
+	first := m.GaugeFunc("test_state", "test help", func() float64 { return 1 })
+	second := m.GaugeFunc("test_state", "test help", func() float64 { return 2 })
+
+	assert.Same(t, first, second)
+	assert.Equal(t, float64(1), testutil.ToFloat64(second))
+}
+
+func TestNilMetricsGaugeFuncReturnsUnregisteredGauge(t *testing.T) {
+	var m *Metrics
+
+	gauge := m.GaugeFunc("nil_state", "help", func() float64 { return 3 })
+
+	assert.Equal(t, float64(3), testutil.ToFloat64(gauge))
+}
+
 func TestFactoryPanicsWhenExistingCollectorHasADifferentType(t *testing.T) {
 	m := New("svc")
 	m.CounterVec("conflict_metric", "same help", "label")
