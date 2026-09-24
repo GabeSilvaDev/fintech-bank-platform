@@ -175,6 +175,85 @@ func TestSetupRouterRateLimitIgnoresTrueClientIPAndXRealIP(t *testing.T) {
 	assert.Equal(t, http.StatusTooManyRequests, rec2.Code)
 }
 
+func rateLimitedPair(t *testing.T, server contracts.ServerConfig, first, second func(*http.Request)) (int, int) {
+	t.Helper()
+	router := chi.NewRouter()
+	cfg := &config.Config{
+		Server:    server,
+		CORS:      contracts.CORSConfig{AllowedOrigins: []string{"*"}, AllowedMethods: []string{"GET"}},
+		RateLimit: contracts.RateLimitConfig{Requests: 1, Window: time.Minute},
+	}
+	appHttp.SetupRouter(router, cfg, testDependencies())
+
+	codes := make([]int, 0, 2)
+	for _, prepare := range []func(*http.Request){first, second} {
+		req := httptest.NewRequest(http.MethodGet, "/health", nil)
+		prepare(req)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, req)
+		codes = append(codes, rec.Code)
+	}
+	return codes[0], codes[1]
+}
+
+func fromRemoteAddr(addr string) func(*http.Request) {
+	return func(r *http.Request) { r.RemoteAddr = addr }
+}
+
+func fromForwardedFor(addr string) func(*http.Request) {
+	return func(r *http.Request) {
+		r.RemoteAddr = "203.0.113.20:1111"
+		r.Header.Set("X-Forwarded-For", addr)
+	}
+}
+
+func TestSetupRouterRateLimitSharesBucketAcrossIPv6NetworkWhenUntrusted(t *testing.T) {
+	first, second := rateLimitedPair(t, contracts.ServerConfig{},
+		fromRemoteAddr("[2001:db8:1:2::1]:1234"),
+		fromRemoteAddr("[2001:db8:1:2:ffff::9]:1234"))
+
+	assert.Equal(t, http.StatusOK, first)
+	assert.Equal(t, http.StatusTooManyRequests, second)
+}
+
+func TestSetupRouterRateLimitSeparatesIPv6NetworksWhenUntrusted(t *testing.T) {
+	first, second := rateLimitedPair(t, contracts.ServerConfig{},
+		fromRemoteAddr("[2001:db8:1:2::1]:1234"),
+		fromRemoteAddr("[2001:db8:1:3::1]:1234"))
+
+	assert.Equal(t, http.StatusOK, first)
+	assert.Equal(t, http.StatusOK, second)
+}
+
+func TestSetupRouterRateLimitSharesBucketAcrossIPv6NetworkWhenTrusted(t *testing.T) {
+	trusted := contracts.ServerConfig{TrustProxyHeaders: true, TrustedProxyHops: 1}
+	first, second := rateLimitedPair(t, trusted,
+		fromForwardedFor("2001:db8:5:6::1"),
+		fromForwardedFor("2001:db8:5:6:abcd::2"))
+
+	assert.Equal(t, http.StatusOK, first)
+	assert.Equal(t, http.StatusTooManyRequests, second)
+}
+
+func TestSetupRouterRateLimitSeparatesIPv6NetworksWhenTrusted(t *testing.T) {
+	trusted := contracts.ServerConfig{TrustProxyHeaders: true, TrustedProxyHops: 1}
+	first, second := rateLimitedPair(t, trusted,
+		fromForwardedFor("2001:db8:5:6::1"),
+		fromForwardedFor("2001:db8:5:7::1"))
+
+	assert.Equal(t, http.StatusOK, first)
+	assert.Equal(t, http.StatusOK, second)
+}
+
+func TestSetupRouterRateLimitKeepsIPv4AddressesApart(t *testing.T) {
+	first, second := rateLimitedPair(t, contracts.ServerConfig{},
+		fromRemoteAddr("198.51.100.1:1234"),
+		fromRemoteAddr("198.51.100.2:1234"))
+
+	assert.Equal(t, http.StatusOK, first)
+	assert.Equal(t, http.StatusOK, second)
+}
+
 func TestSetupRouterHealthEndpoint(t *testing.T) {
 	router := chi.NewRouter()
 	cfg := &config.Config{

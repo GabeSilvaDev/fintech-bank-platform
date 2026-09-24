@@ -9,10 +9,16 @@ import (
 )
 
 func keyByClientIP(r *http.Request) (string, error) {
-	if ip := chiMiddleware.GetClientIP(r.Context()); ip != "" {
-		return ip, nil
+	addr := chiMiddleware.GetClientIPAddr(r.Context())
+	if !addr.IsValid() {
+		return httprate.KeyByIP(r)
 	}
-	return httprate.KeyByIP(r)
+	addr = addr.Unmap()
+	if addr.Is4() {
+		return addr.String(), nil
+	}
+	network, _ := addr.Prefix(64)
+	return network.Addr().String(), nil
 }
 
 func RateLimit(cfg contracts.RateLimitConfig) func(next http.Handler) http.Handler {
